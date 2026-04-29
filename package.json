@@ -7,6 +7,7 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
+    "codegen": "TYPESCRIPT_GENERATE=1 prax-typegen --schema src-tauri/prax/schema.prax --output src/app/models/generated",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

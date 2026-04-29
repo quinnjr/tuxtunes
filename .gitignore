@@ -42,6 +42,9 @@ testem.log
 /typings
 __screenshots__/
 
+# Generated code from prax-typegen
+/src/app/models/generated
+
 # System files
 .DS_Store
 Thumbs.db
