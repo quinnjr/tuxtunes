@@ -1,0 +1,25 @@
+[package]
+name = "tuxtunes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+plist = "1"
+itl-rs = "0.1"
+lofty = "0.22"
+base64 = "0.22"
+percent-encoding = "2"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+byteorder = "1"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
