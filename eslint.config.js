@@ -24,11 +24,15 @@ export default tseslint.config(
     files: ['**/*.ts'],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
     extends: [
       eslint.configs.recommended,
-      ...tseslint.configs.recommended,
-      ...tseslint.configs.stylistic,
+      ...tseslint.configs.recommendedTypeChecked,
+      ...tseslint.configs.stylisticTypeChecked,
       ...angular.configs.tsRecommended,
       unicorn.configs.recommended,
       prettier,
