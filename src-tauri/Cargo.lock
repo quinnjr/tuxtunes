@@ -4775,6 +4775,7 @@ dependencies = [
  "prax-codegen",
  "prax-migrate",
  "prax-orm",
+ "prax-schema",
  "prax-sqlite",
  "serde",
  "serde_json",
