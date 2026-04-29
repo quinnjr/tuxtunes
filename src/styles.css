@@ -1,1 +1,29 @@
-/* You can add global styles to this file, and also import other style files */
+@import 'tailwindcss';
+
+@theme {
+  --color-bg-primary: #1a1a2e;
+  --color-bg-surface: #1e1e34;
+  --color-bg-transport: #15152a;
+  --color-bg-elevated: #232342;
+  --color-bg-tertiary: #0f3460;
+  --color-accent: #e94560;
+  --color-accent-hover: #ff6b81;
+  --color-text-primary: #eaeaea;
+  --color-text-secondary: #a0a0b0;
+  --color-text-muted: #6f6f80;
+  --color-border: #2a2a4a;
+  --color-border-strong: #3a3a5a;
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
