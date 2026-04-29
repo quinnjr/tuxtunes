@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.angular/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/src/db/generated/
+src-tauri/prax/migrations/
+src/app/models/generated/
+docs/plans/
+docs/superpowers/
+*.lock
