@@ -73,6 +73,7 @@ jobs:
             librsvg2-dev \
             libayatana-appindicator3-dev \
             libssl-dev \
+            libmpv-dev \
             pkg-config
 
       - name: cargo fmt
