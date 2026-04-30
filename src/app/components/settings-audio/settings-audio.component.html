@@ -1,0 +1,44 @@
+<section class="flex h-full flex-col gap-4 bg-[var(--color-bg-primary)] p-6">
+  <div>
+    <h2 class="mb-2 text-lg font-semibold text-[var(--color-text-primary)]">Audio Output</h2>
+    <p class="mb-4 text-xs text-[var(--color-text-muted)]">
+      Pick the device TuxTunes should play audio through. Exclusive mode takes sole ownership of the
+      device — other apps will fail to play audio while TuxTunes is active.
+    </p>
+  </div>
+
+  <div class="flex flex-col gap-2">
+    @for (dev of devices(); track dev.id) {
+      <button
+        type="button"
+        (click)="select(dev.id)"
+        [class]="
+          selectedId() === dev.id
+            ? 'flex items-center justify-between rounded border border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-4 py-2 text-left'
+            : 'flex items-center justify-between rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-2 text-left transition hover:border-[var(--color-border-strong)]'
+        "
+      >
+        <div>
+          <div class="text-sm font-semibold text-[var(--color-text-primary)]">
+            {{ dev.description }}
+          </div>
+          <div class="font-mono text-xs text-[var(--color-text-muted)]">{{ dev.id }}</div>
+        </div>
+        <div class="flex gap-1">
+          @if (dev.supports_exclusive) {
+            <span class="rounded bg-[var(--color-bg-tertiary)] px-2 py-0.5 font-mono text-xs">
+              exclusive
+            </span>
+          }
+        </div>
+      </button>
+    } @empty {
+      <div class="text-sm italic text-[var(--color-text-muted)]">No audio devices found.</div>
+    }
+  </div>
+
+  <label class="mt-4 flex cursor-pointer items-center gap-2 text-sm">
+    <input type="checkbox" [checked]="exclusive()" (change)="toggleExclusive()" />
+    <span class="text-[var(--color-text-primary)]">Use exclusive mode</span>
+  </label>
+</section>
