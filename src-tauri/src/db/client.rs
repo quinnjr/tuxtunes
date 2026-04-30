@@ -5,7 +5,8 @@
 //! idempotent for fresh databases and a no-op for already-migrated ones
 //! (the loader inspects sqlite_master before applying).
 
-use prax_sqlite::{SqliteConfig, SqliteEngine, SqlitePool};
+use prax_sqlite::raw::SqliteRawEngine;
+use prax_sqlite::{SqliteConfig, SqlitePool};
 use std::path::Path;
 
 const INITIAL_MIGRATION: &str = include_str!("../../prax/migrations/0001_initial/migration.sql");
@@ -28,7 +29,7 @@ pub enum DbError {
 
 pub struct Db {
     /// Exposed for query execution by Tauri commands; first used in Task 13.
-    pub engine: SqliteEngine,
+    pub engine: SqliteRawEngine,
 }
 
 impl Db {
@@ -42,7 +43,7 @@ impl Db {
             source: anyhow::Error::from(e),
         })?;
 
-        let engine = SqliteEngine::new(pool);
+        let engine = SqliteRawEngine::new(pool);
 
         apply_initial_migration(&engine).await?;
 
@@ -52,7 +53,7 @@ impl Db {
 
 /// Check whether the core schema has been applied by looking for the `tracks`
 /// table in sqlite_master. If absent, run the migration.
-async fn apply_initial_migration(engine: &SqliteEngine) -> Result<(), DbError> {
+async fn apply_initial_migration(engine: &SqliteRawEngine) -> Result<(), DbError> {
     let count: i64 = engine
         .raw_sql_scalar(
             "SELECT COUNT(*) FROM sqlite_master \

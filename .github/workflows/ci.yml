@@ -27,19 +27,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: ${{ runner.os }}-prax-typegen-fork-${{ github.sha }}
+          key: ${{ runner.os }}-prax-typegen-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-prax-typegen-fork-
+            ${{ runner.os }}-prax-typegen-
 
-      # TODO: switch to `cargo install prax-typegen --version '^0.8'` once the
-      # z.lazy annotation + duplicate-export fixes are published on crates.io.
-      # Tracked at: https://github.com/quinnjr/prax/tree/fix/sqlite-generator-correctness
-      - name: Install prax-typegen from fork
+      - name: Install prax-typegen
         run: |
           if ! command -v prax-typegen >/dev/null 2>&1; then
-            cargo install --git https://github.com/quinnjr/prax \
-              --branch fix/sqlite-generator-correctness \
-              prax-typegen
+            cargo install prax-typegen --version '^0.8.2'
           fi
 
       - name: Generate TypeScript models
