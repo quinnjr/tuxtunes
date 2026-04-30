@@ -1,0 +1,28 @@
+<section class="flex h-full flex-1 flex-col bg-[var(--color-bg-primary)]">
+  <header class="flex items-center gap-2 border-b border-[var(--color-border)] px-4 py-2">
+    @for (mode of modes; track mode) {
+      <button
+        type="button"
+        [class]="
+          viewMode() === mode
+            ? 'rounded bg-[var(--color-accent)] px-3 py-1 text-sm capitalize text-white transition'
+            : 'rounded px-3 py-1 text-sm capitalize text-[var(--color-text-secondary)] transition hover:text-[var(--color-accent)]'
+        "
+        (click)="setMode(mode)"
+      >
+        {{ mode }}
+      </button>
+    }
+    <div class="ml-auto text-xs text-[var(--color-text-muted)]">
+      @if (library.stats(); as s) {
+        {{ s.trackCount }} songs · {{ s.totalSizeBytes }} bytes
+      } @else {
+        Loading…
+      }
+    </div>
+  </header>
+
+  <div class="flex flex-1 items-center justify-center text-[var(--color-text-muted)]">
+    Library is empty. Use Settings → Sync Sources to import an iTunes library.
+  </div>
+</section>

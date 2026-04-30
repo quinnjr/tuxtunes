@@ -1,6 +1,7 @@
-<div
-  class="flex h-screen items-center justify-center bg-[var(--color-bg-primary)] text-[var(--color-accent)]"
->
-  <fa-icon [icon]="faMusic" class="mr-3 text-3xl"></fa-icon>
-  <h1 class="text-3xl font-bold">{{ title() }}</h1>
+<div class="flex h-screen flex-col">
+  <app-transport-bar />
+  <div class="flex flex-1 overflow-hidden">
+    <app-sidebar />
+    <app-main-content />
+  </div>
 </div>
