@@ -28,7 +28,6 @@ pub enum DbError {
 
 pub struct Db {
     /// Exposed for query execution by Tauri commands; first used in Task 13.
-    #[allow(dead_code)]
     pub engine: SqliteEngine,
 }
 

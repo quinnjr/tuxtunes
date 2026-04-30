@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 pub struct AppState {
     /// Database handle provided to Tauri commands via `tauri::State`; first used in Task 13.
-    #[allow(dead_code)]
     pub db: Arc<Db>,
 }
 

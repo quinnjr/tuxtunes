@@ -1,3 +1,4 @@
+mod commands;
 mod db;
 mod runtime;
 
@@ -16,6 +17,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::library::get_library_stats,
+        ])
         .setup(move |app| {
             let dir = data_dir(app);
             std::fs::create_dir_all(&dir).expect("create app data dir");
