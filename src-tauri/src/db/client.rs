@@ -10,7 +10,6 @@ use std::path::Path;
 
 const INITIAL_MIGRATION: &str = include_str!("../../prax/migrations/0001_initial/migration.sql");
 
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     #[error("failed to open database at {path}: {source}")]
@@ -27,15 +26,15 @@ pub enum DbError {
     Query(#[source] anyhow::Error),
 }
 
-#[allow(dead_code)]
 pub struct Db {
+    /// Exposed for query execution by Tauri commands; first used in Task 13.
+    #[allow(dead_code)]
     pub engine: SqliteEngine,
 }
 
 impl Db {
     /// Open the database at `db_path`, creating the file if necessary, and
     /// apply the initial migration if the core tables are not yet present.
-    #[allow(dead_code)]
     pub async fn open(db_path: &Path) -> Result<Self, DbError> {
         let config = SqliteConfig::file(db_path);
 
@@ -54,7 +53,6 @@ impl Db {
 
 /// Check whether the core schema has been applied by looking for the `tracks`
 /// table in sqlite_master. If absent, run the migration.
-#[allow(dead_code)]
 async fn apply_initial_migration(engine: &SqliteEngine) -> Result<(), DbError> {
     let count: i64 = engine
         .raw_sql_scalar(
