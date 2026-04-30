@@ -1926,9 +1926,9 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itl-rs"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a98827ecc21b96cf7d6cdb917918aa8a5a4c07e973a98546af33a54c140608ec"
+checksum = "06b64da8f509e5d64f43f73fc779f1969ef1f105dcce560704f74f564188b9a4"
 dependencies = [
  "aes",
  "flate2",
