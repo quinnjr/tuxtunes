@@ -29,3 +29,39 @@ fn loads_real_itl_if_available() {
     // At least one playlist should have a title.
     assert!(lib.playlists().iter().any(|p| p.title().is_some()));
 }
+
+#[tokio::test]
+async fn schema_has_all_sync_columns() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_path_buf();
+    tuxtunes::smoke_open_db(&db_path).await.unwrap();
+
+    use prax_sqlite::raw::SqliteRawEngine;
+    use prax_sqlite::{SqliteConfig, SqlitePool};
+
+    let config = SqliteConfig::file(&db_path);
+    let pool = SqlitePool::new(config).await.unwrap();
+    let engine = SqliteRawEngine::new(pool);
+
+    let row: String = engine
+        .raw_sql_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tracks'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(row.contains("import_status"));
+    assert!(row.contains("original_path"));
+
+    let row: String = engine
+        .raw_sql_scalar(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sync_sources'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(row.contains("path_mappings"));
+    assert!(row.contains("conflict_rules"));
+    assert!(row.contains("last_sync_at"));
+    assert!(row.contains("last_sync_hash"));
+}

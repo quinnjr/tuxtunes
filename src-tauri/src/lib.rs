@@ -12,6 +12,14 @@ fn data_dir(app: &tauri::App) -> PathBuf {
     app.path().app_data_dir().expect("app data dir resolves")
 }
 
+/// Public test hook: open a Db at the given path. Used only by
+/// integration tests that need to stand up the schema outside the
+/// normal Tauri setup() flow.
+#[doc(hidden)]
+pub async fn smoke_open_db(db_path: &std::path::Path) -> Result<(), db::DbError> {
+    db::Db::open(db_path).await.map(|_| ())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
