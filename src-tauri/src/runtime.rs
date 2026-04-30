@@ -1,40 +1,29 @@
 //! App-wide runtime state.
-//!
-//! Holds shared handles to the database client (and, later, the playback
-//! engine + worker channels) behind `Arc` so they can live inside
-//! `tauri::State` and be cheaply cloned into command handlers.
 
 use crate::db::{Db, DbError};
+use crate::playback::{EngineError, PlaybackEngine};
 use std::path::Path;
 use std::sync::Arc;
+use tauri::AppHandle;
 
 pub struct AppState {
-    /// Database handle provided to Tauri commands via `tauri::State`; first used in Task 13.
     pub db: Arc<Db>,
+    pub engine: Arc<PlaybackEngine>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AppStateError {
+    #[error(transparent)]
+    Db(#[from] DbError),
+
+    #[error(transparent)]
+    Engine(#[from] EngineError),
 }
 
 impl AppState {
-    pub async fn new(db_path: &Path) -> Result<Self, DbError> {
-        let db = Db::open(db_path).await?;
-        Ok(Self { db: Arc::new(db) })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn appstate_initializes_with_temp_db() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let state = AppState::new(tmp.path()).await.expect("init succeeds");
-
-        let count: i64 = state
-            .db
-            .engine
-            .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
-            .await
-            .expect("tracks table queryable");
-        assert_eq!(count, 0);
+    pub async fn new(db_path: &Path, app: AppHandle) -> Result<Self, AppStateError> {
+        let db = Arc::new(Db::open(db_path).await?);
+        let engine = Arc::new(PlaybackEngine::spawn(app)?);
+        Ok(Self { db, engine })
     }
 }

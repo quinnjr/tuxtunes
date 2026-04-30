@@ -1,5 +1,7 @@
 //! Library-scoped Tauri commands.
 
+use crate::db::tracks::{self, TrackRow};
+use crate::library::ingest;
 use crate::runtime::AppState;
 use serde::Serialize;
 
@@ -35,6 +37,50 @@ pub async fn get_library_stats(state: tauri::State<'_, AppState>) -> Result<Libr
         total_duration_ms,
         total_size_bytes,
     })
+}
+
+#[tauri::command]
+pub async fn list_tracks(
+    state: tauri::State<'_, AppState>,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<TrackRow>, String> {
+    tracks::list(&state.db.engine, limit, offset)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn pick_and_add_track(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<TrackRow>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let file_opt = app
+        .dialog()
+        .file()
+        .add_filter(
+            "Audio",
+            &[
+                "flac", "mp3", "m4a", "wav", "ogg", "opus", "aiff", "dsf", "dff",
+            ],
+        )
+        .blocking_pick_file();
+
+    let Some(path_resp) = file_opt else {
+        return Ok(None);
+    };
+    let path_buf = path_resp.into_path().map_err(|e| e.to_string())?;
+
+    let id = ingest::probe_and_add(&state.db.engine, &path_buf)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let row = tracks::get(&state.db.engine, id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Some(row))
 }
 
 #[cfg(test)]

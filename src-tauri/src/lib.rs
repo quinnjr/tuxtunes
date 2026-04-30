@@ -21,13 +21,24 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::library::get_library_stats,
+            commands::library::list_tracks,
+            commands::library::pick_and_add_track,
+            commands::playback::play_track,
+            commands::playback::pause,
+            commands::playback::resume,
+            commands::playback::stop,
+            commands::playback::seek,
+            commands::playback::set_volume,
+            commands::audio::list_audio_devices,
+            commands::audio::set_audio_device,
         ])
         .setup(move |app| {
             let dir = data_dir(app);
             std::fs::create_dir_all(&dir).expect("create app data dir");
             let db_path = dir.join("tuxtunes.db");
+            let handle = app.handle().clone();
             let state = runtime
-                .block_on(AppState::new(&db_path))
+                .block_on(AppState::new(&db_path, handle))
                 .expect("AppState init");
             app.manage(state);
             Ok(())
