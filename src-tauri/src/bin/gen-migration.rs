@@ -80,7 +80,8 @@ fn main() -> ExitCode {
     }
 
     println!("wrote {}", out_file.display());
-    let stmt_count = sql.up.matches("CREATE TABLE").count() + sql.up.matches("CREATE INDEX").count();
+    let stmt_count =
+        sql.up.matches("CREATE TABLE").count() + sql.up.matches("CREATE INDEX").count();
     println!("  {} DDL statements", stmt_count);
     if !sql.warnings.is_empty() {
         println!("  {} warnings", sql.warnings.len());
