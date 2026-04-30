@@ -1,4 +1,4 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { TauriService } from './tauri.service';
 import { mapTrack, TrackRow, TrackRowRaw } from './playback.service';
 
@@ -20,6 +20,19 @@ export class LibraryService {
 
   readonly stats = signal<LibraryStats | null>(null);
   readonly tracks = signal<TrackRow[]>([]);
+
+  /**
+   * O(1) id → track lookup, derived from `tracks`. Rebuilt once per
+   * `tracks` mutation and cached for every subsequent read, which keeps
+   * `currentTrack`-style computeds constant-time even at 100K+ tracks.
+   */
+  readonly tracksById = computed(this.#computeTracksById.bind(this));
+
+  #computeTracksById(): Map<number, TrackRow> {
+    const map = new Map<number, TrackRow>();
+    for (const t of this.tracks()) map.set(t.id, t);
+    return map;
+  }
 
   async refreshStats(): Promise<void> {
     const raw = await this.tauri.invoke<LibraryStatsRaw>('get_library_stats');

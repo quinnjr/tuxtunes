@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, inject } from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import {
   faBackwardStep,
@@ -32,18 +32,13 @@ export class TransportBarComponent {
   protected readonly faRepeat = faRepeat;
   protected readonly faVolumeUp = faVolumeUp;
 
-  protected readonly volume = signal<number>(100);
-
+  /** O(1) lookup via LibraryService.tracksById — constant-time at any library size. */
   protected readonly currentTrack = computed(this.#computeCurrentTrack.bind(this));
 
   #computeCurrentTrack() {
     const id = this.playback.currentTrackId();
     if (id === null) return null;
-    const tracks = this.library.tracks();
-    for (const track of tracks) {
-      if (track.id === id) return track;
-    }
-    return null;
+    return this.library.tracksById().get(id) ?? null;
   }
 
   protected async togglePlay(): Promise<void> {
@@ -68,9 +63,7 @@ export class TransportBarComponent {
 
   protected async onVolumeInput(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
-    const value = Number(input.value);
-    this.volume.set(value);
-    await this.playback.setVolume(value);
+    await this.playback.setVolume(Number(input.value));
   }
 
   protected async onSeek(event: Event): Promise<void> {

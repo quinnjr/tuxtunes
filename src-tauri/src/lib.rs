@@ -42,13 +42,35 @@ pub fn run() {
                 .expect("AppState init");
             app.manage(state);
 
-            // Spawn the play-count consumer: reads TrackEnded events from the
-            // engine thread and writes play/skip counts to the DB via stats::decide.
             let state_ref: tauri::State<'_, AppState> = app.state::<AppState>();
+
+            // Restore persisted volume. Sending SetVolume tells mpv to set
+            // the property; the property observer then fires a VolumeChanged
+            // event (idempotent — same value won't persist twice). If no
+            // preference exists, leave mpv at its boot default (100).
+            {
+                let db = std::sync::Arc::clone(&state_ref.db);
+                let engine = std::sync::Arc::clone(&state_ref.engine);
+                runtime.spawn(async move {
+                    use crate::db::preferences::{self, KEY_VOLUME};
+                    use crate::playback::EngineCommand;
+                    match preferences::get::<i64>(&db.engine, KEY_VOLUME).await {
+                        Ok(Some(v)) => {
+                            let clamped = v.clamp(0, 100) as u8;
+                            let _ = engine.send(EngineCommand::SetVolume { volume: clamped });
+                        }
+                        Ok(None) => {}
+                        Err(e) => log::warn!("read persisted volume failed: {e}"),
+                    }
+                });
+            }
+
+            // Tracking consumer: reads TrackEnded + VolumeChanged events
+            // from the engine thread and writes to the DB.
             if let Some(mut rx) = state_ref.engine.take_tracking_rx() {
                 let db = std::sync::Arc::clone(&state_ref.db);
                 runtime.spawn(async move {
-                    use crate::db::tracks;
+                    use crate::db::{preferences, tracks};
                     use crate::playback::stats::{decide, CountDecision};
                     use crate::playback::PlaybackTracking;
 
@@ -75,6 +97,17 @@ pub fn run() {
                                 }
                                 CountDecision::None => {}
                             },
+                            PlaybackTracking::VolumeChanged { volume } => {
+                                if let Err(e) = preferences::set(
+                                    &db.engine,
+                                    preferences::KEY_VOLUME,
+                                    &(volume as i64),
+                                )
+                                .await
+                                {
+                                    log::warn!("persist volume failed: {e}");
+                                }
+                            }
                         }
                     }
                 });

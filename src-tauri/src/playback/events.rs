@@ -9,6 +9,7 @@ use serde::Serialize;
 pub const TRACK_CHANGED: &str = "playback:track-changed";
 pub const POSITION_UPDATE: &str = "playback:position-update";
 pub const STATE_CHANGED: &str = "playback:state-changed";
+pub const VOLUME_CHANGED: &str = "playback:volume-changed";
 pub const DEVICE_CHANGED: &str = "playback:device-changed";
 pub const WARNING: &str = "playback:warning";
 
@@ -36,6 +37,11 @@ pub struct PositionUpdate {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StateChanged {
     pub state: PlaybackState,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct VolumeChanged {
+    pub volume: u8,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -127,8 +133,16 @@ mod tests {
         assert_eq!(TRACK_CHANGED, "playback:track-changed");
         assert_eq!(POSITION_UPDATE, "playback:position-update");
         assert_eq!(STATE_CHANGED, "playback:state-changed");
+        assert_eq!(VOLUME_CHANGED, "playback:volume-changed");
         assert_eq!(DEVICE_CHANGED, "playback:device-changed");
         assert_eq!(WARNING, "playback:warning");
+    }
+
+    #[test]
+    fn volume_changed_serializes_with_u8() {
+        let v = VolumeChanged { volume: 73 };
+        let json = serde_json::to_string(&v).unwrap();
+        assert_eq!(json, r#"{"volume":73}"#);
     }
 
     #[test]

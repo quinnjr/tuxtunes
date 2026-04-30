@@ -64,6 +64,9 @@ pub enum PlaybackTracking {
         position_ms: i64,
         duration_ms: i64,
     },
+    VolumeChanged {
+        volume: u8,
+    },
 }
 
 pub struct PlaybackEngine {
@@ -114,6 +117,7 @@ impl PlaybackEngine {
                 let _ = mpv.observe_property("time-pos", Format::Double, 1);
                 let _ = mpv.observe_property("duration", Format::Double, 2);
                 let _ = mpv.observe_property("pause", Format::Flag, 3);
+                let _ = mpv.observe_property("volume", Format::Int64, 4);
 
                 let mut state = EventLoopState::default();
 
@@ -258,6 +262,7 @@ struct EventLoopState {
     last_duration_ms: i64,
     last_emitted_position_ms: i64,
     last_emitted_state: Option<PlaybackState>,
+    last_emitted_volume: Option<u8>,
 }
 
 impl EventLoopState {
@@ -304,6 +309,17 @@ fn handle_event(
                         PlaybackState::Playing
                     },
                 );
+            }
+            ("volume", PropertyData::Int64(vol)) => {
+                let clamped = vol.clamp(0, 100) as u8;
+                if state.last_emitted_volume != Some(clamped) {
+                    state.last_emitted_volume = Some(clamped);
+                    let _ = app.emit(
+                        events::VOLUME_CHANGED,
+                        events::VolumeChanged { volume: clamped },
+                    );
+                    let _ = track_tx.send(PlaybackTracking::VolumeChanged { volume: clamped });
+                }
             }
             _ => {}
         },

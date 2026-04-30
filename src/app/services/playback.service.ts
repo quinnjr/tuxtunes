@@ -1,4 +1,5 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, inject, signal } from '@angular/core';
+import { type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriService } from './tauri.service';
 
 export interface TrackRow {
@@ -48,32 +49,45 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
 export type PlaybackState = 'playing' | 'paused' | 'stopped' | 'loading';
 
 @Injectable({ providedIn: 'root' })
-export class PlaybackService {
+export class PlaybackService implements OnDestroy {
   private readonly tauri = inject(TauriService);
 
   readonly currentTrackId = signal<number | null>(null);
   readonly state = signal<PlaybackState>('stopped');
   readonly positionMs = signal<number>(0);
   readonly durationMs = signal<number>(0);
+  readonly volume = signal<number>(100);
+
+  private readonly unlisteners: UnlistenFn[] = [];
 
   constructor() {
     void this.subscribeEvents();
   }
 
+  ngOnDestroy(): void {
+    for (const off of this.unlisteners) off();
+    this.unlisteners.length = 0;
+  }
+
   private async subscribeEvents(): Promise<void> {
-    await this.tauri.listen<{ track_id: number | null; prev_track_id: number | null }>(
-      'playback:track-changed',
-      (payload) => this.currentTrackId.set(payload.track_id),
-    );
-    await this.tauri.listen<{ state: PlaybackState }>('playback:state-changed', (payload) =>
-      this.state.set(payload.state),
-    );
-    await this.tauri.listen<{ position_ms: number; duration_ms: number }>(
-      'playback:position-update',
-      (payload) => {
-        this.positionMs.set(payload.position_ms);
-        if (payload.duration_ms > 0) this.durationMs.set(payload.duration_ms);
-      },
+    this.unlisteners.push(
+      await this.tauri.listen<{ track_id: number | null; prev_track_id: number | null }>(
+        'playback:track-changed',
+        (payload) => this.currentTrackId.set(payload.track_id),
+      ),
+      await this.tauri.listen<{ state: PlaybackState }>('playback:state-changed', (payload) =>
+        this.state.set(payload.state),
+      ),
+      await this.tauri.listen<{ position_ms: number; duration_ms: number }>(
+        'playback:position-update',
+        (payload) => {
+          this.positionMs.set(payload.position_ms);
+          if (payload.duration_ms > 0) this.durationMs.set(payload.duration_ms);
+        },
+      ),
+      await this.tauri.listen<{ volume: number }>('playback:volume-changed', (payload) =>
+        this.volume.set(payload.volume),
+      ),
     );
   }
 
