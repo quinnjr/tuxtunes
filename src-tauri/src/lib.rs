@@ -3,6 +3,7 @@ pub mod db;
 pub mod library;
 pub mod playback;
 mod runtime;
+pub mod sync;
 
 use runtime::AppState;
 use std::path::PathBuf;
