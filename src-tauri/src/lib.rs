@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+pub mod playback;
 mod runtime;
 
 use runtime::AppState;

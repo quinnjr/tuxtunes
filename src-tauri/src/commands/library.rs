@@ -12,9 +12,7 @@ pub struct LibraryStats {
 }
 
 #[tauri::command]
-pub async fn get_library_stats(
-    state: tauri::State<'_, AppState>,
-) -> Result<LibraryStats, String> {
+pub async fn get_library_stats(state: tauri::State<'_, AppState>) -> Result<LibraryStats, String> {
     let engine = &state.db.engine;
 
     let track_count: i64 = engine
@@ -23,18 +21,12 @@ pub async fn get_library_stats(
         .map_err(|e| e.to_string())?;
 
     let total_duration_ms: i64 = engine
-        .raw_sql_scalar(
-            "SELECT COALESCE(SUM(duration_ms), 0) FROM tracks",
-            &[],
-        )
+        .raw_sql_scalar("SELECT COALESCE(SUM(duration_ms), 0) FROM tracks", &[])
         .await
         .map_err(|e| e.to_string())?;
 
     let total_size_bytes: i64 = engine
-        .raw_sql_scalar(
-            "SELECT COALESCE(SUM(size_bytes), 0) FROM tracks",
-            &[],
-        )
+        .raw_sql_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM tracks", &[])
         .await
         .map_err(|e| e.to_string())?;
 
@@ -60,17 +52,11 @@ mod tests {
             .await
             .unwrap();
         let total_duration_ms: i64 = engine
-            .raw_sql_scalar(
-                "SELECT COALESCE(SUM(duration_ms), 0) FROM tracks",
-                &[],
-            )
+            .raw_sql_scalar("SELECT COALESCE(SUM(duration_ms), 0) FROM tracks", &[])
             .await
             .unwrap();
         let total_size_bytes: i64 = engine
-            .raw_sql_scalar(
-                "SELECT COALESCE(SUM(size_bytes), 0) FROM tracks",
-                &[],
-            )
+            .raw_sql_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM tracks", &[])
             .await
             .unwrap();
 
