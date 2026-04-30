@@ -10,7 +10,6 @@ use tauri::AppHandle;
 pub struct AppState {
     pub db: Arc<Db>,
     pub engine: Arc<PlaybackEngine>,
-    #[expect(dead_code)] // Wired in C12 (commands/sync.rs)
     pub sync: Arc<SyncCoordinator>,
 }
 

@@ -40,6 +40,9 @@ pub fn run() {
             commands::playback::set_volume,
             commands::audio::list_audio_devices,
             commands::audio::set_audio_device,
+            commands::sync::list_sync_sources,
+            commands::sync::add_sync_source,
+            commands::sync::run_sync_now,
         ])
         .setup(move |app| {
             let dir = data_dir(app);
