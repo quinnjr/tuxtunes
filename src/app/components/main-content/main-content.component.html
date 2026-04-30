@@ -21,8 +21,16 @@
       }
     </div>
   </header>
-
-  <div class="flex flex-1 items-center justify-center text-[var(--color-text-muted)]">
-    Library is empty. Use Settings → Sync Sources to import an iTunes library.
+  <div class="flex-1 overflow-hidden">
+    @switch (viewMode()) {
+      @case ('tracks') {
+        <app-track-list-view class="block h-full" />
+      }
+      @default {
+        <div class="flex h-full items-center justify-center text-[var(--color-text-muted)]">
+          {{ viewMode() }} view — Phase 6
+        </div>
+      }
+    }
   </div>
 </section>

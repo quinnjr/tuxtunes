@@ -4,9 +4,13 @@ import {
   faBackwardStep,
   faForwardStep,
   faMusic,
+  faPause,
   faPlay,
+  faPlus,
   faRepeat,
   faShuffle,
+  faStop,
+  faVolumeUp,
 } from '@fortawesome/free-solid-svg-icons';
 
 @Injectable({ providedIn: 'root' })
@@ -14,6 +18,17 @@ export class IconRegistry {
   private readonly library = inject(FaIconLibrary);
 
   constructor() {
-    this.library.addIcons(faBackwardStep, faForwardStep, faMusic, faPlay, faRepeat, faShuffle);
+    this.library.addIcons(
+      faBackwardStep,
+      faForwardStep,
+      faMusic,
+      faPause,
+      faPlay,
+      faPlus,
+      faRepeat,
+      faShuffle,
+      faStop,
+      faVolumeUp,
+    );
   }
 }
