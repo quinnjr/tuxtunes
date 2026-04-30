@@ -1,12 +1,13 @@
 import { Component, OnInit, inject } from '@angular/core';
-import { LibraryService } from './services/library.service';
-import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
-import { SidebarComponent } from './components/sidebar/sidebar.component';
+import { ImportWizardComponent } from './components/import-wizard/import-wizard.component';
 import { MainContentComponent } from './components/main-content/main-content.component';
+import { SidebarComponent } from './components/sidebar/sidebar.component';
+import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
+import { LibraryService } from './services/library.service';
 
 @Component({
   selector: 'app-root',
-  imports: [TransportBarComponent, SidebarComponent, MainContentComponent],
+  imports: [ImportWizardComponent, MainContentComponent, SidebarComponent, TransportBarComponent],
   templateUrl: './app.html',
   styleUrl: './app.css',
 })

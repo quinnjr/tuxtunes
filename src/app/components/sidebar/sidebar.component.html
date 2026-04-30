@@ -12,11 +12,21 @@
   <button class="px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]">Genres</button>
 
   <button
+    type="button"
     (click)="add()"
     class="mx-4 mt-4 flex items-center gap-2 rounded bg-[var(--color-bg-elevated)] px-3 py-2 text-left text-sm text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-tertiary)]"
   >
     <fa-icon [icon]="faPlus" />
     Add Files…
+  </button>
+
+  <button
+    type="button"
+    (click)="openImportWizard()"
+    class="mx-4 mt-2 flex items-center gap-2 rounded bg-[var(--color-bg-elevated)] px-3 py-2 text-left text-sm text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-tertiary)]"
+  >
+    <fa-icon [icon]="faFileImport" />
+    Import iTunes library…
   </button>
 
   <div

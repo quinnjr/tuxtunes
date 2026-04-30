@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { FaIconLibrary } from '@fortawesome/angular-fontawesome';
 import {
   faBackwardStep,
+  faFileImport,
   faForwardStep,
   faMusic,
   faPause,
@@ -20,6 +21,7 @@ export class IconRegistry {
   constructor() {
     this.library.addIcons(
       faBackwardStep,
+      faFileImport,
       faForwardStep,
       faMusic,
       faPause,
