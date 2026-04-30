@@ -1,5 +1,6 @@
 mod commands;
 pub mod db;
+pub mod library;
 pub mod playback;
 mod runtime;
 
