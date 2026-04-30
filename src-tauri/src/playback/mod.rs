@@ -6,4 +6,4 @@ pub mod engine;
 pub mod events;
 pub mod stats;
 
-pub use engine::{EngineCommand, EngineError, PlaybackEngine};
+pub use engine::{EngineCommand, EngineError, PlaybackEngine, PlaybackTracking};

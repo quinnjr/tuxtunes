@@ -56,10 +56,21 @@ pub enum EngineCommand {
     },
 }
 
+/// Events the engine thread hands off to an async consumer for DB writes.
+#[derive(Debug, Clone, Copy)]
+pub enum PlaybackTracking {
+    TrackEnded {
+        track_id: i64,
+        position_ms: i64,
+        duration_ms: i64,
+    },
+}
+
 pub struct PlaybackEngine {
     tx: mpsc::UnboundedSender<EngineCommand>,
     /// Device snapshot populated once at thread start.
     pub devices: Arc<Mutex<Vec<super::device::AudioDevice>>>,
+    tracking_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<PlaybackTracking>>>,
     _thread: JoinHandle<()>,
 }
 
@@ -67,6 +78,7 @@ impl PlaybackEngine {
     /// Spawn the engine thread and return a handle.
     pub fn spawn(app: AppHandle) -> Result<Self, EngineError> {
         let (tx, mut rx) = mpsc::unbounded_channel::<EngineCommand>();
+        let (track_tx, track_rx) = mpsc::unbounded_channel::<PlaybackTracking>();
         let devices = Arc::new(Mutex::new(Vec::new()));
         let devices_shared = Arc::clone(&devices);
 
@@ -117,6 +129,7 @@ impl PlaybackEngine {
                             &mut current_track,
                             &mut last_position_ms,
                             &mut last_duration_ms,
+                            &track_tx,
                         );
                     }
 
@@ -124,12 +137,6 @@ impl PlaybackEngine {
                         break;
                     }
                 }
-
-                // Silence unused-variable warnings without #[allow]; these
-                // are consumed by Task 16 when the tracking channel is
-                // added. The values are already updated above.
-                let _ = last_position_ms;
-                let _ = last_duration_ms;
             })
             .expect("spawn mpv-event-loop thread");
 
@@ -137,6 +144,7 @@ impl PlaybackEngine {
             Ok(Ok(())) => Ok(Self {
                 tx,
                 devices,
+                tracking_rx: std::sync::Mutex::new(Some(track_rx)),
                 _thread: thread,
             }),
             Ok(Err(msg)) => Err(EngineError::Init(msg)),
@@ -150,6 +158,10 @@ impl PlaybackEngine {
 
     pub fn devices_snapshot(&self) -> Vec<super::device::AudioDevice> {
         self.devices.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    pub fn take_tracking_rx(&self) -> Option<mpsc::UnboundedReceiver<PlaybackTracking>> {
+        self.tracking_rx.lock().ok().and_then(|mut g| g.take())
     }
 }
 
@@ -248,6 +260,7 @@ fn handle_event(
     current_track: &mut Option<i64>,
     last_position_ms: &mut i64,
     last_duration_ms: &mut i64,
+    track_tx: &mpsc::UnboundedSender<PlaybackTracking>,
 ) {
     match event {
         Event::PropertyChange { name, change, .. } => match (name, change) {
@@ -284,6 +297,13 @@ fn handle_event(
         }
         Event::EndFile(_) => {
             let prev = *current_track;
+            if let Some(id) = prev {
+                let _ = track_tx.send(PlaybackTracking::TrackEnded {
+                    track_id: id,
+                    position_ms: *last_position_ms,
+                    duration_ms: *last_duration_ms,
+                });
+            }
             *current_track = None;
             let _ = app.emit(
                 events::STATE_CHANGED,

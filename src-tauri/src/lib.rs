@@ -41,6 +41,45 @@ pub fn run() {
                 .block_on(AppState::new(&db_path, handle))
                 .expect("AppState init");
             app.manage(state);
+
+            // Spawn the play-count consumer: reads TrackEnded events from the
+            // engine thread and writes play/skip counts to the DB via stats::decide.
+            let state_ref: tauri::State<'_, AppState> = app.state::<AppState>();
+            if let Some(mut rx) = state_ref.engine.take_tracking_rx() {
+                let db = std::sync::Arc::clone(&state_ref.db);
+                runtime.spawn(async move {
+                    use crate::db::tracks;
+                    use crate::playback::stats::{decide, CountDecision};
+                    use crate::playback::PlaybackTracking;
+
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            PlaybackTracking::TrackEnded {
+                                track_id,
+                                position_ms,
+                                duration_ms,
+                            } => match decide(position_ms, duration_ms) {
+                                CountDecision::Play => {
+                                    if let Err(e) =
+                                        tracks::bump_play_count(&db.engine, track_id).await
+                                    {
+                                        log::warn!("bump play_count failed for {track_id}: {e}");
+                                    }
+                                }
+                                CountDecision::Skip => {
+                                    if let Err(e) =
+                                        tracks::bump_skip_count(&db.engine, track_id).await
+                                    {
+                                        log::warn!("bump skip_count failed for {track_id}: {e}");
+                                    }
+                                }
+                                CountDecision::None => {}
+                            },
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
