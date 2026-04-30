@@ -1,6 +1,6 @@
 import { Injectable, inject, signal } from '@angular/core';
 import { TauriService } from './tauri.service';
-import { mapTrack, TrackRow } from './playback.service';
+import { mapTrack, TrackRow, TrackRowRaw } from './playback.service';
 
 export interface LibraryStats {
   trackCount: number;
@@ -12,20 +12,6 @@ interface LibraryStatsRaw {
   track_count: number;
   total_duration_ms: number;
   total_size_bytes: number;
-}
-
-interface TrackRowRaw {
-  id: number;
-  title: string;
-  artist: string | null;
-  album: string | null;
-  duration_ms: number;
-  file_path: string;
-  sample_rate: number | null;
-  bit_depth: number | null;
-  kind: string | null;
-  play_count: number;
-  skip_count: number;
 }
 
 @Injectable({ providedIn: 'root' })

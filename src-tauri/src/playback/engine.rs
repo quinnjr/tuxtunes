@@ -68,8 +68,10 @@ pub enum PlaybackTracking {
 
 pub struct PlaybackEngine {
     tx: mpsc::UnboundedSender<EngineCommand>,
-    /// Device snapshot populated once at thread start.
-    pub devices: Arc<Mutex<Vec<super::device::AudioDevice>>>,
+    /// Device snapshot populated once at thread start. Read via
+    /// [`Self::devices_snapshot`] so callers get an owned clone rather
+    /// than sharing the lock.
+    devices: Arc<Mutex<Vec<super::device::AudioDevice>>>,
     tracking_rx: std::sync::Mutex<Option<mpsc::UnboundedReceiver<PlaybackTracking>>>,
     _thread: JoinHandle<()>,
 }
@@ -113,24 +115,15 @@ impl PlaybackEngine {
                 let _ = mpv.observe_property("duration", Format::Double, 2);
                 let _ = mpv.observe_property("pause", Format::Flag, 3);
 
-                let mut current_track: Option<i64> = None;
-                let mut last_position_ms: i64 = 0;
-                let mut last_duration_ms: i64 = 0;
+                let mut state = EventLoopState::default();
 
                 loop {
                     while let Ok(cmd) = rx.try_recv() {
-                        handle_command(&mpv, cmd, &mut current_track, &app);
+                        handle_command(&mpv, cmd, &mut state.current_track, &app);
                     }
 
                     if let Some(Ok(ev)) = mpv.wait_event(0.05) {
-                        handle_event(
-                            ev,
-                            &app,
-                            &mut current_track,
-                            &mut last_position_ms,
-                            &mut last_duration_ms,
-                            &track_tx,
-                        );
+                        handle_event(ev, &app, &mut state, &track_tx);
                     }
 
                     if rx.is_closed() {
@@ -254,63 +247,81 @@ fn handle_command(mpv: &Mpv, cmd: EngineCommand, current_track: &mut Option<i64>
     }
 }
 
+/// Minimum interval between `position-update` events emitted to the UI.
+/// mpv observes `time-pos` at ~10-60 Hz; the scrubber only needs ~4 Hz.
+const POSITION_EMIT_INTERVAL_MS: i64 = 250;
+
+#[derive(Default)]
+struct EventLoopState {
+    current_track: Option<i64>,
+    last_position_ms: i64,
+    last_duration_ms: i64,
+    last_emitted_position_ms: i64,
+    last_emitted_state: Option<PlaybackState>,
+}
+
+impl EventLoopState {
+    fn emit_state(&mut self, app: &AppHandle, state: PlaybackState) {
+        if self.last_emitted_state == Some(state) {
+            return;
+        }
+        self.last_emitted_state = Some(state);
+        let _ = app.emit(events::STATE_CHANGED, StateChanged { state });
+    }
+}
+
 fn handle_event(
     event: Event<'_>,
     app: &AppHandle,
-    current_track: &mut Option<i64>,
-    last_position_ms: &mut i64,
-    last_duration_ms: &mut i64,
+    state: &mut EventLoopState,
     track_tx: &mpsc::UnboundedSender<PlaybackTracking>,
 ) {
     match event {
         Event::PropertyChange { name, change, .. } => match (name, change) {
             ("time-pos", PropertyData::Double(pos)) => {
-                *last_position_ms = (pos * 1000.0) as i64;
-                let _ = app.emit(
-                    events::POSITION_UPDATE,
-                    PositionUpdate {
-                        position_ms: *last_position_ms,
-                        duration_ms: *last_duration_ms,
-                    },
-                );
+                state.last_position_ms = (pos * 1000.0) as i64;
+                let delta = (state.last_position_ms - state.last_emitted_position_ms).abs();
+                if delta >= POSITION_EMIT_INTERVAL_MS {
+                    state.last_emitted_position_ms = state.last_position_ms;
+                    let _ = app.emit(
+                        events::POSITION_UPDATE,
+                        PositionUpdate {
+                            position_ms: state.last_position_ms,
+                            duration_ms: state.last_duration_ms,
+                        },
+                    );
+                }
             }
             ("duration", PropertyData::Double(dur)) => {
-                *last_duration_ms = (dur * 1000.0) as i64;
+                state.last_duration_ms = (dur * 1000.0) as i64;
             }
             ("pause", PropertyData::Flag(paused)) => {
-                let state = if paused {
-                    PlaybackState::Paused
-                } else {
-                    PlaybackState::Playing
-                };
-                let _ = app.emit(events::STATE_CHANGED, StateChanged { state });
+                state.emit_state(
+                    app,
+                    if paused {
+                        PlaybackState::Paused
+                    } else {
+                        PlaybackState::Playing
+                    },
+                );
             }
             _ => {}
         },
         Event::FileLoaded => {
-            let _ = app.emit(
-                events::STATE_CHANGED,
-                StateChanged {
-                    state: PlaybackState::Playing,
-                },
-            );
+            state.emit_state(app, PlaybackState::Playing);
         }
         Event::EndFile(_) => {
-            let prev = *current_track;
+            let prev = state.current_track;
             if let Some(id) = prev {
                 let _ = track_tx.send(PlaybackTracking::TrackEnded {
                     track_id: id,
-                    position_ms: *last_position_ms,
-                    duration_ms: *last_duration_ms,
+                    position_ms: state.last_position_ms,
+                    duration_ms: state.last_duration_ms,
                 });
             }
-            *current_track = None;
-            let _ = app.emit(
-                events::STATE_CHANGED,
-                StateChanged {
-                    state: PlaybackState::Stopped,
-                },
-            );
+            state.current_track = None;
+            state.last_emitted_position_ms = 0;
+            state.emit_state(app, PlaybackState::Stopped);
             let _ = app.emit(
                 events::TRACK_CHANGED,
                 TrackChanged {

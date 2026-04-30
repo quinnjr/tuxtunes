@@ -1,7 +1,7 @@
 //! Probe an audio file with `lofty` and insert a minimal `Track` row.
 //!
-//! Phase 2 intentionally does NOT copy files into a managed library root —
-//! that's Phase 4. `file_path` points at the user-picked source file.
+//! Files are not copied into a managed library root; `file_path` points at
+//! the user-picked source file.
 
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
@@ -26,7 +26,19 @@ pub enum IngestError {
     Db(#[source] anyhow::Error),
 }
 
-pub async fn probe_and_add(engine: &SqliteRawEngine, path: &Path) -> Result<i64, IngestError> {
+struct ProbeResult {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    duration_ms: i64,
+    sample_rate: Option<i64>,
+    bit_depth: Option<i64>,
+    channels: Option<i64>,
+    bit_rate: Option<i64>,
+    size_bytes: i64,
+}
+
+fn probe_blocking(path: &Path) -> Result<ProbeResult, IngestError> {
     let tagged = Probe::open(path)
         .map_err(|e| IngestError::Probe {
             path: path.display().to_string(),
@@ -39,27 +51,42 @@ pub async fn probe_and_add(engine: &SqliteRawEngine, path: &Path) -> Result<i64,
         })?;
 
     let props = tagged.properties();
-    let duration_ms = props.duration().as_millis() as i64;
-    let sample_rate = props.sample_rate().map(|r| r as i64);
-    let bit_depth = props.bit_depth().map(|b| b as i64);
-    let channels = props.channels().map(|c| c as i64);
-    let bit_rate = props.audio_bitrate().map(|b| b as i64);
-
     let primary_tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
-    let title = primary_tag
-        .and_then(|t| t.title().map(|s| s.to_string()))
-        .or_else(|| {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_string())
-        })
-        .ok_or_else(|| IngestError::NoFileName(path.display().to_string()))?;
+    Ok(ProbeResult {
+        title: primary_tag.and_then(|t| t.title().map(|s| s.to_string())),
+        artist: primary_tag.and_then(|t| t.artist().map(|s| s.to_string())),
+        album: primary_tag.and_then(|t| t.album().map(|s| s.to_string())),
+        duration_ms: props.duration().as_millis() as i64,
+        sample_rate: props.sample_rate().map(|r| r as i64),
+        bit_depth: props.bit_depth().map(|b| b as i64),
+        channels: props.channels().map(|c| c as i64),
+        bit_rate: props.audio_bitrate().map(|b| b as i64),
+        size_bytes: std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0),
+    })
+}
 
-    let artist = primary_tag.and_then(|t| t.artist().map(|s| s.to_string()));
-    let album = primary_tag.and_then(|t| t.album().map(|s| s.to_string()));
+pub async fn probe_and_add(engine: &SqliteRawEngine, path: &Path) -> Result<i64, IngestError> {
+    let owned_path = path.to_path_buf();
+    let probed = tokio::task::spawn_blocking(move || probe_blocking(&owned_path))
+        .await
+        .map_err(|e| IngestError::Db(anyhow::Error::from(e)))??;
 
-    let size_bytes = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
+    let title = probed.title.clone().or_else(|| {
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    });
+    let title = title.ok_or_else(|| IngestError::NoFileName(path.display().to_string()))?;
+
+    let artist = probed.artist;
+    let album = probed.album;
+    let duration_ms = probed.duration_ms;
+    let sample_rate = probed.sample_rate;
+    let bit_depth = probed.bit_depth;
+    let channels = probed.channels;
+    let bit_rate = probed.bit_rate;
+    let size_bytes = probed.size_bytes;
 
     let sql = "INSERT INTO tracks (title, artist, album, duration_ms, size_bytes, \
                sample_rate, bit_depth, channels, bit_rate, file_path, playlist_ids) \

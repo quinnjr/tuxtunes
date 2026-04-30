@@ -15,7 +15,7 @@ export interface TrackRow {
   skipCount: number;
 }
 
-interface TrackRowRaw {
+export interface TrackRowRaw {
   id: number;
   title: string;
   artist: string | null;

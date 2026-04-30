@@ -16,9 +16,6 @@ pub async fn play_track(state: tauri::State<'_, AppState>, track_id: i64) -> Res
         .await
         .map_err(to_string_err)?;
 
-    // Phase 2: prefs come entirely from defaults. Device/exclusive/volume
-    // UI in Task 14/15 will persist choices to the `preferences` table
-    // and send ApplyDevice commands; this path uses PlaybackPrefs::default().
     let prefs = PlaybackPrefs::default();
 
     let fmt = TrackAudioFormat {

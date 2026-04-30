@@ -12,7 +12,7 @@ pub const STATE_CHANGED: &str = "playback:state-changed";
 pub const DEVICE_CHANGED: &str = "playback:device-changed";
 pub const WARNING: &str = "playback:warning";
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackState {
     Playing,

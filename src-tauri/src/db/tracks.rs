@@ -1,4 +1,4 @@
-//! Minimal query helpers for the `tracks` table, used by Phase 2 commands.
+//! Minimal query helpers for the `tracks` table.
 
 use prax_sqlite::raw::SqliteRawEngine;
 use serde::{Deserialize, Serialize};
@@ -63,24 +63,30 @@ pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksEr
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
-pub async fn bump_play_count(engine: &SqliteRawEngine, id: i64) -> Result<(), TracksError> {
-    let sql = "UPDATE tracks SET play_count = play_count + 1, last_played = CURRENT_TIMESTAMP WHERE id = ?";
+async fn bump_counter(
+    engine: &SqliteRawEngine,
+    id: i64,
+    counter_col: &str,
+    timestamp_col: &str,
+) -> Result<(), TracksError> {
+    let sql = format!(
+        "UPDATE tracks SET {counter_col} = {counter_col} + 1, \
+         {timestamp_col} = CURRENT_TIMESTAMP WHERE id = ?",
+    );
     let params = vec![prax_query::filter::FilterValue::Int(id)];
     engine
-        .raw_sql_execute(sql, &params)
+        .raw_sql_execute(&sql, &params)
         .await
         .map(|_| ())
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
+pub async fn bump_play_count(engine: &SqliteRawEngine, id: i64) -> Result<(), TracksError> {
+    bump_counter(engine, id, "play_count", "last_played").await
+}
+
 pub async fn bump_skip_count(engine: &SqliteRawEngine, id: i64) -> Result<(), TracksError> {
-    let sql = "UPDATE tracks SET skip_count = skip_count + 1, last_skipped = CURRENT_TIMESTAMP WHERE id = ?";
-    let params = vec![prax_query::filter::FilterValue::Int(id)];
-    engine
-        .raw_sql_execute(sql, &params)
-        .await
-        .map(|_| ())
-        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+    bump_counter(engine, id, "skip_count", "last_skipped").await
 }
 
 #[cfg(test)]
