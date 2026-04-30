@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install node deps
+        run: npm ci
+
+      - name: Install Rust toolchain (for prax-typegen)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo install
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-prax-typegen-fork-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-prax-typegen-fork-
+
+      # TODO: switch to `cargo install prax-typegen --version '^0.8'` once the
+      # z.lazy annotation + duplicate-export fixes are published on crates.io.
+      # Tracked at: https://github.com/quinnjr/prax/tree/fix/sqlite-generator-correctness
+      - name: Install prax-typegen from fork
+        run: |
+          if ! command -v prax-typegen >/dev/null 2>&1; then
+            cargo install --git https://github.com/quinnjr/prax \
+              --branch fix/sqlite-generator-correctness \
+              prax-typegen
+          fi
+
+      - name: Generate TypeScript models
+        run: npm run codegen
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Tauri system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: cargo fmt
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all
