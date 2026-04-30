@@ -1,0 +1,201 @@
+//! CRUD helpers for the `sync_sources` table.
+
+use crate::sync::conflict::ConflictRules;
+use crate::sync::path_map::PathMapping;
+use prax_query::filter::FilterValue;
+use prax_sqlite::raw::SqliteRawEngine;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SyncSourceRow {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub source_path: String,
+    pub last_sync_at: Option<String>,
+    pub last_sync_hash: Option<String>,
+    pub path_mappings: Vec<PathMapping>,
+    pub conflict_rules: ConflictRules,
+    pub auto_copy_files: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SyncSourcesError {
+    #[error("query failed: {0}")]
+    Query(#[source] anyhow::Error),
+}
+
+pub async fn list(engine: &SqliteRawEngine) -> Result<Vec<SyncSourceRow>, SyncSourcesError> {
+    let sql = "SELECT id, name, kind, source_path, last_sync_at, last_sync_hash, \
+               path_mappings, conflict_rules, auto_copy_files \
+               FROM sync_sources ORDER BY id";
+    let json_rows = engine
+        .raw_sql_query(sql, &[])
+        .await
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))?;
+    json_rows
+        .into_iter()
+        .map(|r| deserialize_row(r.into_json()))
+        .collect::<Result<_, _>>()
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))
+}
+
+pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<SyncSourceRow, SyncSourcesError> {
+    let sql = "SELECT id, name, kind, source_path, last_sync_at, last_sync_hash, \
+               path_mappings, conflict_rules, auto_copy_files \
+               FROM sync_sources WHERE id = ?";
+    let params = vec![FilterValue::Int(id)];
+    let json_row = engine
+        .raw_sql_first(sql, &params)
+        .await
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))?;
+    deserialize_row(json_row.into_json())
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))
+}
+
+pub async fn insert(
+    engine: &SqliteRawEngine,
+    name: &str,
+    source_path: &str,
+    path_mappings: &[PathMapping],
+    conflict_rules: &ConflictRules,
+    auto_copy_files: bool,
+) -> Result<i64, SyncSourcesError> {
+    let pm_json = serde_json::to_string(path_mappings)
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))?;
+    let cr_json = serde_json::to_string(conflict_rules)
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))?;
+    let sql = "INSERT INTO sync_sources (name, kind, source_path, path_mappings, \
+               conflict_rules, auto_copy_files) \
+               VALUES (?, 'itunes_itl', ?, ?, ?, ?) RETURNING id";
+    let params = vec![
+        FilterValue::String(name.to_string()),
+        FilterValue::String(source_path.to_string()),
+        FilterValue::String(pm_json),
+        FilterValue::String(cr_json),
+        FilterValue::Int(i64::from(auto_copy_files)),
+    ];
+    let json_row = engine
+        .raw_sql_first(sql, &params)
+        .await
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))?;
+    Ok(json_row
+        .into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1))
+}
+
+pub async fn finalize_sync(
+    engine: &SqliteRawEngine,
+    id: i64,
+    hash: &str,
+) -> Result<(), SyncSourcesError> {
+    let sql = "UPDATE sync_sources SET last_sync_at = CURRENT_TIMESTAMP, \
+               last_sync_hash = ? WHERE id = ?";
+    let params = vec![FilterValue::String(hash.to_string()), FilterValue::Int(id)];
+    engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map(|_| ())
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))
+}
+
+fn deserialize_row(v: serde_json::Value) -> serde_json::Result<SyncSourceRow> {
+    // The value column JSON fields come back as strings; unwrap them.
+    let obj = v.as_object().ok_or_else(|| {
+        serde::de::Error::custom::<serde_json::Error>(serde_json::Error::io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "row is not an object",
+        )))
+    })?;
+    let parse_json_string = |field: &str| -> serde_json::Result<serde_json::Value> {
+        match obj.get(field) {
+            Some(serde_json::Value::String(s)) => serde_json::from_str(s),
+            Some(serde_json::Value::Null) | None => Ok(serde_json::Value::Null),
+            Some(other) => Ok(other.clone()),
+        }
+    };
+    let path_mappings = parse_json_string("path_mappings")?;
+    let conflict_rules = parse_json_string("conflict_rules")?;
+
+    let mut patched = obj.clone();
+    patched.insert("path_mappings".into(), path_mappings);
+    patched.insert("conflict_rules".into(), conflict_rules);
+    patched.insert(
+        "auto_copy_files".into(),
+        match obj.get("auto_copy_files") {
+            Some(serde_json::Value::Number(n)) => {
+                serde_json::Value::Bool(n.as_i64().unwrap_or(0) != 0)
+            }
+            Some(other) => other.clone(),
+            None => serde_json::Value::Bool(false),
+        },
+    );
+    serde_json::from_value(serde_json::Value::Object(patched))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+
+    async fn tmp() -> Db {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        Db::open(tmp.path()).await.unwrap()
+    }
+
+    fn default_rules() -> ConflictRules {
+        ConflictRules::default()
+    }
+
+    #[tokio::test]
+    async fn insert_then_get_roundtrip() {
+        let db = tmp().await;
+        let id = insert(
+            &db.engine,
+            "My iTunes",
+            "/tmp/a.itl",
+            &[PathMapping {
+                from: "D:/".into(),
+                to: "/mnt/d/".into(),
+            }],
+            &default_rules(),
+            true,
+        )
+        .await
+        .unwrap();
+        let row = get(&db.engine, id).await.unwrap();
+        assert_eq!(row.name, "My iTunes");
+        assert_eq!(row.source_path, "/tmp/a.itl");
+        assert_eq!(row.path_mappings.len(), 1);
+        assert!(row.auto_copy_files);
+    }
+
+    #[tokio::test]
+    async fn finalize_sets_hash_and_timestamp() {
+        let db = tmp().await;
+        let id = insert(&db.engine, "x", "/tmp/b.itl", &[], &default_rules(), false)
+            .await
+            .unwrap();
+        finalize_sync(&db.engine, id, "deadbeef").await.unwrap();
+        let row = get(&db.engine, id).await.unwrap();
+        assert_eq!(row.last_sync_hash.as_deref(), Some("deadbeef"));
+        assert!(row.last_sync_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn list_returns_in_id_order() {
+        let db = tmp().await;
+        let a = insert(&db.engine, "A", "/a.itl", &[], &default_rules(), true)
+            .await
+            .unwrap();
+        let b = insert(&db.engine, "B", "/b.itl", &[], &default_rules(), true)
+            .await
+            .unwrap();
+        let rows = list(&db.engine).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, a);
+        assert_eq!(rows[1].id, b);
+    }
+}
