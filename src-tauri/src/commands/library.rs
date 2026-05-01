@@ -83,6 +83,18 @@ pub async fn pick_and_add_track(
     Ok(Some(row))
 }
 
+#[tauri::command]
+pub async fn verify_library(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let engine = std::sync::Arc::clone(&state.db.engine);
+    tokio::spawn(async move {
+        let _ = crate::fs::verify::verify_all(&engine, &app).await;
+    });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::db::Db;

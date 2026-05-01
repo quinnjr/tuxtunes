@@ -33,6 +33,7 @@ pub fn run() {
             commands::library::get_library_stats,
             commands::library::list_tracks,
             commands::library::pick_and_add_track,
+            commands::library::verify_library,
             commands::playback::play_track,
             commands::playback::pause,
             commands::playback::resume,

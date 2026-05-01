@@ -8,3 +8,4 @@ pub mod hash;
 pub mod ingest;
 pub mod organize;
 pub mod path;
+pub mod verify;

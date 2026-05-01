@@ -6,6 +6,8 @@ pub const INGEST_PROGRESS: &str = "fs:ingest-progress";
 pub const INGEST_COMPLETE: &str = "fs:ingest-complete";
 pub const INGEST_FAILED: &str = "fs:ingest-failed";
 pub const ORGANIZE_APPLIED: &str = "fs:organize-applied";
+pub const VERIFY_PROGRESS: &str = "fs:verify-progress";
+pub const VERIFY_COMPLETE: &str = "fs:verify-complete";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestProgress {
@@ -36,6 +38,20 @@ pub struct OrganizeApplied {
     pub new_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyProgress {
+    pub current: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyComplete {
+    pub total: u64,
+    pub verified: u64,
+    pub missing: u64,
+    pub mismatched: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,5 +62,7 @@ mod tests {
         assert_eq!(INGEST_COMPLETE, "fs:ingest-complete");
         assert_eq!(INGEST_FAILED, "fs:ingest-failed");
         assert_eq!(ORGANIZE_APPLIED, "fs:organize-applied");
+        assert_eq!(VERIFY_PROGRESS, "fs:verify-progress");
+        assert_eq!(VERIFY_COMPLETE, "fs:verify-complete");
     }
 }
