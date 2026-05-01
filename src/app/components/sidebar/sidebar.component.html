@@ -29,6 +29,15 @@
     Import iTunes library…
   </button>
 
+  <button
+    type="button"
+    (click)="openPreferences()"
+    class="mx-4 mt-2 flex items-center gap-2 rounded bg-[var(--color-bg-elevated)] px-3 py-2 text-left text-sm text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-tertiary)]"
+  >
+    <fa-icon [icon]="faGear" />
+    Preferences…
+  </button>
+
   <div
     class="mt-4 px-4 pb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]"
   >

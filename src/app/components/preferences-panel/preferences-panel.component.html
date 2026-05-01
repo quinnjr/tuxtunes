@@ -1,0 +1,70 @@
+@if (open()) {
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div
+      class="flex max-h-[90vh] w-[560px] flex-col gap-4 overflow-auto rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] p-6 shadow-xl"
+    >
+      <header class="flex items-center justify-between">
+        <h2 class="text-lg font-semibold text-[var(--color-text-primary)]">Preferences</h2>
+        <button
+          type="button"
+          class="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+          (click)="hide()"
+        >
+          Close
+        </button>
+      </header>
+
+      <div class="flex flex-col gap-1 text-sm">
+        <span class="text-[var(--color-text-secondary)]">Library root</span>
+        <div class="flex items-center gap-2">
+          <span
+            class="flex-1 truncate rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 font-mono text-xs text-[var(--color-text-primary)]"
+          >
+            {{ draftRoot() || '(not set)' }}
+          </span>
+          <button
+            type="button"
+            (click)="pickRoot()"
+            class="rounded bg-[var(--color-bg-elevated)] px-3 py-1 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"
+          >
+            Pick…
+          </button>
+        </div>
+      </div>
+
+      <label class="flex flex-col gap-1 text-sm">
+        <span class="text-[var(--color-text-secondary)]">Organize scheme</span>
+        <input
+          class="rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 font-mono text-xs text-[var(--color-text-primary)]"
+          [ngModel]="draftScheme()"
+          (ngModelChange)="draftScheme.set($event)"
+        />
+        <span class="text-[11px] text-[var(--color-text-muted)]">
+          Preview: <span class="font-mono">{{ preview() }}</span>
+        </span>
+      </label>
+
+      <label class="flex items-center gap-2 text-sm text-[var(--color-text-primary)]">
+        <input type="checkbox" [checked]="draftKeep()" (change)="toggleKeep()" />
+        Keep library organized (rename on metadata edit)
+      </label>
+
+      <footer class="mt-2 flex justify-end gap-2">
+        <button
+          type="button"
+          (click)="hide()"
+          class="rounded bg-[var(--color-bg-elevated)] px-4 py-1 text-sm text-[var(--color-text-primary)]"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          (click)="save()"
+          class="rounded bg-[var(--color-accent)] px-4 py-1 text-sm text-white"
+        >
+          Save
+        </button>
+      </footer>
+    </div>
+  </div>
+}
