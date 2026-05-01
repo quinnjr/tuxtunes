@@ -92,8 +92,9 @@ pub fn resolve_collision(candidate: &Path) -> PathBuf {
 }
 
 /// Sanitize a single path component: replace `/` with `-`, strip control
-/// chars, collapse whitespace runs, trim trailing dots/spaces. Preserves
-/// Unicode.
+/// chars, collapse whitespace runs, trim leading/trailing dots and
+/// spaces. Preserves Unicode and meaningful leading dashes (e.g., in
+/// titles like `"-Band Name-"`).
 fn sanitize_component(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut last_was_space = false;
@@ -110,8 +111,7 @@ fn sanitize_component(raw: &str) -> String {
         out.push(replaced);
         last_was_space = is_space;
     }
-    out.trim_start_matches('-')
-        .trim_matches(|c: char| c == '.' || c.is_whitespace())
+    out.trim_matches(|c: char| c == '.' || c.is_whitespace())
         .to_string()
 }
 
@@ -143,7 +143,19 @@ fn expand_tokens(template: &str, t: &TrackFields<'_>) -> Result<String, PathRend
             )));
         }
         let rendered = render_token(&token, t)?;
-        out.push_str(&rendered);
+        if rendered.is_empty() {
+            // Template-author-friendly: when a token renders to nothing
+            // (single-disc albums, missing year), also consume the
+            // immediately-following separator char so `{disc:02}-{track}`
+            // doesn't leave a dangling `-`.
+            if let Some(&next) = chars.peek() {
+                if matches!(next, '-' | '_' | ' ') {
+                    chars.next();
+                }
+            }
+        } else {
+            out.push_str(&rendered);
+        }
     }
     Ok(out)
 }
@@ -340,6 +352,24 @@ mod tests {
         std::fs::write(dir.path().join("foo (2).flac"), b"").unwrap();
         let next = resolve_collision(&f);
         assert_eq!(next, dir.path().join("foo (3).flac"));
+    }
+
+    #[test]
+    fn leading_dash_in_title_preserved() {
+        let mut tf = t("-Band Name-");
+        tf.disc_count = Some(1);
+        tf.disc_number = Some(1);
+        let p = render("{album}/{title}.{ext}", &tf).unwrap();
+        assert_eq!(p.to_str().unwrap(), "Abbey Road/-Band Name-.flac");
+    }
+
+    #[test]
+    fn omitted_disc_token_eats_following_dash() {
+        // Single-disc album: `{disc:02}` renders empty, and the literal
+        // '-' separator following it in the template should also vanish
+        // so the path doesn't start with a dangling "-03".
+        let p = render("{album}/{disc:02}-{track:02} - {title}.{ext}", &t("Song")).unwrap();
+        assert_eq!(p.to_str().unwrap(), "Abbey Road/03 - Song.flac");
     }
 
     #[test]
