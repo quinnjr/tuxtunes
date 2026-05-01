@@ -1,6 +1,7 @@
 //! Track-side reconciler. Reads every track from an `itl_rs::ItlFile`,
 //! remaps its path, applies conflict rules, and writes to SQLite.
 
+use crate::db::sync_util::pid_hex;
 use crate::db::tracks::{self, ItlTrackUpsert, LocalTrackForSync, TracksError};
 use crate::sync::conflict::{self, ConflictRules, Decision};
 use crate::sync::events::{SyncPhase, SyncProgress, SyncWarning, WarningKind};
@@ -30,6 +31,8 @@ pub async fn reconcile(
     let mut stats = TrackReconcileStats::default();
     let total = lib.tracks().len() as u64;
 
+    // One SELECT up-front replaces N per-track by_persistent_id SELECTs.
+    let local_map = tracks::load_local_state_map(engine, source_id).await?;
     let mut keep_ids: Vec<String> = Vec::with_capacity(lib.tracks().len());
 
     for (idx, t) in lib.tracks().iter().enumerate() {
@@ -51,9 +54,7 @@ pub async fn reconcile(
             stats.warnings += 1;
             continue;
         }
-        let pid_hex = format!("{:016x}", pid);
 
-        // Path remapping.
         let raw_path = t.local_path().unwrap_or("");
         let mapped = match path_map::remap(raw_path, mappings) {
             Ok(p) => p,
@@ -63,7 +64,7 @@ pub async fn reconcile(
                     SyncWarning {
                         source_id,
                         kind: WarningKind::UnmappablePath,
-                        detail: format!("track {:016x} ({:?}): {reason}", pid, t.title()),
+                        detail: format!("track {pid:016x} ({:?}): {reason}", t.title()),
                     },
                 );
                 stats.warnings += 1;
@@ -71,20 +72,8 @@ pub async fn reconcile(
             }
         };
 
-        keep_ids.push(pid_hex.clone());
-
-        // Check for missing source file.
-        if !std::path::Path::new(&mapped).exists() {
-            let _ = app.emit(
-                crate::sync::events::WARNING,
-                SyncWarning {
-                    source_id,
-                    kind: WarningKind::MissingSourceFile,
-                    detail: format!("{} (track {:016x})", mapped, pid),
-                },
-            );
-            stats.warnings += 1;
-        }
+        let hex = pid_hex(pid);
+        keep_ids.push(hex.clone());
 
         let upsert = ItlTrackUpsert {
             persistent_id: pid,
@@ -111,21 +100,20 @@ pub async fn reconcile(
             original_path: Some(raw_path),
         };
 
-        match tracks::by_persistent_id(engine, source_id, &pid_hex).await? {
+        match local_map.get(&hex) {
             None => {
                 tracks::insert_from_itl(engine, &upsert).await?;
                 stats.inserted += 1;
             }
             Some(local) => {
                 let (resolved_rating, resolved_play_count) =
-                    resolve_user_state(&upsert, &local, rules);
+                    resolve_user_state(&upsert, local, rules);
                 tracks::update_descriptive_fields(
                     engine,
                     local.id,
                     &upsert,
                     resolved_rating,
                     resolved_play_count,
-                    &mapped,
                 )
                 .await?;
                 stats.updated += 1;
@@ -133,7 +121,6 @@ pub async fn reconcile(
         }
     }
 
-    // Apply deletes.
     if rules.deletes == crate::sync::conflict::DeleteStrategy::Respect {
         let deleted = tracks::delete_missing(engine, source_id, &keep_ids).await?;
         stats.deleted = deleted;

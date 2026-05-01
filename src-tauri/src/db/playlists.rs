@@ -1,6 +1,7 @@
 //! CRUD for the `playlists` table — supports ITL-sync upserts for
 //! regular, smart, and folder playlists.
 
+use crate::db::sync_util;
 use prax_query::filter::FilterValue;
 use prax_sqlite::raw::SqliteRawEngine;
 use serde::{Deserialize, Serialize};
@@ -21,20 +22,6 @@ impl PlaylistKind {
             Self::Folder => "folder",
         }
     }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PlaylistRow {
-    pub id: i64,
-    pub name: String,
-    pub persistent_id: Option<String>,
-    pub kind: PlaylistKind,
-    pub parent_id: Option<i64>,
-    pub sort_order: i64,
-    pub track_ids: Vec<i64>,
-    pub smart_rule_json: Option<String>,
-    pub sync_source_id: Option<i64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,11 +64,16 @@ pub async fn upsert(
     engine: &SqliteRawEngine,
     p: &PlaylistUpsert<'_>,
 ) -> Result<i64, PlaylistsError> {
-    let pid_hex = format!("{:016x}", p.persistent_id);
+    let pid_hex = sync_util::pid_hex(p.persistent_id);
     let existing = by_persistent_id(engine, p.sync_source_id, &pid_hex).await?;
 
     let entries_json = serde_json::to_string(p.track_entries)
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    let smart_rule_fv = p
+        .smart_rule_json
+        .clone()
+        .map(FilterValue::String)
+        .unwrap_or(FilterValue::Null);
 
     match existing {
         Some(id) => {
@@ -93,10 +85,7 @@ pub async fn upsert(
                 FilterValue::String(p.kind.as_str().to_string()),
                 FilterValue::Int(p.sort_order),
                 FilterValue::String(entries_json),
-                p.smart_rule_json
-                    .clone()
-                    .map(FilterValue::String)
-                    .unwrap_or(FilterValue::Null),
+                smart_rule_fv,
                 FilterValue::Int(id),
             ];
             engine
@@ -116,20 +105,19 @@ pub async fn upsert(
                 FilterValue::String(p.kind.as_str().to_string()),
                 FilterValue::Int(p.sort_order),
                 FilterValue::String(entries_json),
-                p.smart_rule_json
-                    .clone()
-                    .map(FilterValue::String)
-                    .unwrap_or(FilterValue::Null),
+                smart_rule_fv,
             ];
             let json_row = engine
                 .raw_sql_first(sql, &params)
                 .await
                 .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-            Ok(json_row
+            json_row
                 .into_json()
                 .get("id")
                 .and_then(|v| v.as_i64())
-                .unwrap_or(-1))
+                .ok_or_else(|| {
+                    PlaylistsError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing"))
+                })
         }
     }
 }
@@ -157,41 +145,15 @@ pub async fn link_parent(
 }
 
 /// Delete playlists in `sync_source_id` whose `persistent_id` is not in
-/// `keep_hex`. Uses the same staging-table trick as tracks.
+/// `keep_hex`.
 pub async fn delete_missing(
     engine: &SqliteRawEngine,
     sync_source_id: i64,
     keep_hex: &[String],
 ) -> Result<u64, PlaylistsError> {
-    engine
-        .raw_sql_execute(
-            "CREATE TEMP TABLE IF NOT EXISTS _sync_keep_pl (persistent_id TEXT PRIMARY KEY) WITHOUT ROWID",
-            &[],
-        )
+    sync_util::delete_by_keep_set(engine, "playlists", sync_source_id, keep_hex)
         .await
-        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-    engine
-        .raw_sql_execute("DELETE FROM _sync_keep_pl", &[])
-        .await
-        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-    for hex in keep_hex {
-        engine
-            .raw_sql_execute(
-                "INSERT INTO _sync_keep_pl (persistent_id) VALUES (?)",
-                &[FilterValue::String(hex.clone())],
-            )
-            .await
-            .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-    }
-    let deleted = engine
-        .raw_sql_execute(
-            "DELETE FROM playlists WHERE sync_source_id = ? \
-             AND persistent_id NOT IN (SELECT persistent_id FROM _sync_keep_pl)",
-            &[FilterValue::Int(sync_source_id)],
-        )
-        .await
-        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-    Ok(deleted)
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
 }
 
 #[cfg(test)]

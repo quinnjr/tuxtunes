@@ -79,11 +79,11 @@ pub async fn insert(
         .raw_sql_first(sql, &params)
         .await
         .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))?;
-    Ok(json_row
+    json_row
         .into_json()
         .get("id")
         .and_then(|v| v.as_i64())
-        .unwrap_or(-1))
+        .ok_or_else(|| SyncSourcesError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
 }
 
 pub async fn finalize_sync(

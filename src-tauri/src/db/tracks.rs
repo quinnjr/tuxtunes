@@ -118,19 +118,62 @@ pub struct ItlTrackUpsert<'a> {
     pub original_path: Option<&'a str>,
 }
 
-/// Look up a track by `(sync_source_id, persistent_id)`. Returns the
-/// local row's internal id + every user-state field needed for conflict
-/// resolution.
-#[derive(Debug, Clone)]
+/// Local-side view of a track used for conflict resolution: id + every
+/// user-state field plus `persistent_id` (hex) for map lookups.
+#[derive(Debug, Clone, Deserialize)]
 pub struct LocalTrackForSync {
     pub id: i64,
+    pub persistent_id: String,
+    #[serde(default)]
     pub rating: i64,
+    #[serde(default)]
     pub play_count: i64,
+    #[serde(default)]
     pub skip_count: i64,
     pub last_played: Option<i64>,
     pub last_skipped: Option<i64>,
+    #[serde(deserialize_with = "deserialize_sqlite_bool", default)]
     pub loved: bool,
     pub original_path: Option<String>,
+}
+
+fn deserialize_sqlite_bool<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_i64().map(|n| n != 0).unwrap_or(false))
+}
+
+const SELECT_LOCAL_TRACK_FIELDS: &str =
+    "id, persistent_id, rating, play_count, skip_count, last_played, \
+     last_skipped, loved, original_path";
+
+/// Bulk-load every synced track's user-state into a `pid_hex →
+/// LocalTrackForSync` map. Replaces per-track `by_persistent_id`
+/// SELECTs during reconcile (O(n) round-trips → 1).
+pub async fn load_local_state_map(
+    engine: &SqliteRawEngine,
+    sync_source_id: i64,
+) -> Result<std::collections::HashMap<String, LocalTrackForSync>, TracksError> {
+    let sql = format!(
+        "SELECT {SELECT_LOCAL_TRACK_FIELDS} FROM tracks WHERE sync_source_id = ? \
+         AND persistent_id IS NOT NULL"
+    );
+    let rows = engine
+        .raw_sql_query(
+            &sql,
+            &[prax_query::filter::FilterValue::Int(sync_source_id)],
+        )
+        .await
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    let mut out = std::collections::HashMap::with_capacity(rows.len());
+    for r in rows {
+        let t: LocalTrackForSync = serde_json::from_value(r.into_json())
+            .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+        out.insert(t.persistent_id.clone(), t);
+    }
+    Ok(out)
 }
 
 pub async fn by_persistent_id(
@@ -138,32 +181,22 @@ pub async fn by_persistent_id(
     sync_source_id: i64,
     persistent_id_hex: &str,
 ) -> Result<Option<LocalTrackForSync>, TracksError> {
-    let sql = "SELECT id, rating, play_count, skip_count, last_played, \
-               last_skipped, loved, original_path \
-               FROM tracks WHERE sync_source_id = ? AND persistent_id = ?";
+    let sql = format!(
+        "SELECT {SELECT_LOCAL_TRACK_FIELDS} FROM tracks \
+         WHERE sync_source_id = ? AND persistent_id = ?"
+    );
     let params = vec![
         prax_query::filter::FilterValue::Int(sync_source_id),
         prax_query::filter::FilterValue::String(persistent_id_hex.to_string()),
     ];
-    let json_row = match engine.raw_sql_optional(sql, &params).await {
+    let json_row = match engine.raw_sql_optional(&sql, &params).await {
         Ok(Some(r)) => r,
         Ok(None) => return Ok(None),
         Err(e) => return Err(TracksError::Query(anyhow::Error::from(e))),
     };
-    let v: serde_json::Value = json_row.into_json();
-    Ok(Some(LocalTrackForSync {
-        id: v.get("id").and_then(|v| v.as_i64()).unwrap_or(0),
-        rating: v.get("rating").and_then(|v| v.as_i64()).unwrap_or(0),
-        play_count: v.get("play_count").and_then(|v| v.as_i64()).unwrap_or(0),
-        skip_count: v.get("skip_count").and_then(|v| v.as_i64()).unwrap_or(0),
-        last_played: v.get("last_played").and_then(|v| v.as_i64()),
-        last_skipped: v.get("last_skipped").and_then(|v| v.as_i64()),
-        loved: v.get("loved").and_then(|v| v.as_i64()).unwrap_or(0) != 0,
-        original_path: v
-            .get("original_path")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-    }))
+    let t: LocalTrackForSync = serde_json::from_value(json_row.into_json())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    Ok(Some(t))
 }
 
 /// Insert a new track from an ITL upsert record. Returns the local id.
@@ -171,7 +204,7 @@ pub async fn insert_from_itl(
     engine: &SqliteRawEngine,
     t: &ItlTrackUpsert<'_>,
 ) -> Result<i64, TracksError> {
-    let pid_hex = format!("{:016x}", t.persistent_id);
+    use prax_query::filter::FilterValue as FV;
     let sql = "INSERT INTO tracks ( \
         persistent_id, sync_source_id, title, artist, album, album_artist, \
         composer, genre, kind, duration_ms, size_bytes, bit_rate, sample_rate, \
@@ -179,86 +212,87 @@ pub async fn insert_from_itl(
         date_added, file_path, original_path, playlist_ids) \
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
                 datetime(?, 'unixepoch'), ?, ?, '[]') RETURNING id";
-    use prax_query::filter::FilterValue as FV;
     let params = vec![
-        FV::String(pid_hex),
+        FV::String(crate::db::sync_util::pid_hex(t.persistent_id)),
         FV::Int(t.sync_source_id),
         FV::String(t.title.to_string()),
-        t.artist.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.album.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.album_artist
-            .map(|s| FV::String(s.into()))
-            .unwrap_or(FV::Null),
-        t.composer.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.genre.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.kind.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
+        opt_str(t.artist),
+        opt_str(t.album),
+        opt_str(t.album_artist),
+        opt_str(t.composer),
+        opt_str(t.genre),
+        opt_str(t.kind),
         FV::Int(t.duration_ms),
         FV::Int(t.size_bytes),
-        t.bit_rate.map(FV::Int).unwrap_or(FV::Null),
-        t.sample_rate.map(FV::Int).unwrap_or(FV::Null),
-        t.track_number.map(FV::Int).unwrap_or(FV::Null),
-        t.disc_number.map(FV::Int).unwrap_or(FV::Null),
-        t.year.map(FV::Int).unwrap_or(FV::Null),
-        t.bpm.map(FV::Int).unwrap_or(FV::Null),
+        opt_int(t.bit_rate),
+        opt_int(t.sample_rate),
+        opt_int(t.track_number),
+        opt_int(t.disc_number),
+        opt_int(t.year),
+        opt_int(t.bpm),
         FV::Int(t.rating),
         FV::Int(t.play_count),
         FV::Int(t.date_added_unix),
         FV::String(t.file_path.to_string()),
-        t.original_path
-            .map(|s| FV::String(s.into()))
-            .unwrap_or(FV::Null),
+        opt_str(t.original_path),
     ];
     let json_row = engine
         .raw_sql_first(sql, &params)
         .await
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
-    Ok(json_row
+    json_row
         .into_json()
         .get("id")
         .and_then(|v| v.as_i64())
-        .unwrap_or(-1))
+        .ok_or_else(|| TracksError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
 }
 
-/// Update an existing track's descriptive fields (called on sync when
-/// persistent_id already exists locally). User-state fields (rating,
-/// play_count, etc.) should have already been resolved by the caller
-/// through `sync::conflict::resolve_*`.
+fn opt_str(v: Option<&str>) -> prax_query::filter::FilterValue {
+    v.map(|s| prax_query::filter::FilterValue::String(s.to_string()))
+        .unwrap_or(prax_query::filter::FilterValue::Null)
+}
+
+fn opt_int(v: Option<i64>) -> prax_query::filter::FilterValue {
+    v.map(prax_query::filter::FilterValue::Int)
+        .unwrap_or(prax_query::filter::FilterValue::Null)
+}
+
+/// Update an existing track's descriptive fields plus the two
+/// already-resolved user-state fields. User-state not listed here
+/// (skip_count, last_played, last_skipped, loved) is preserved as-is.
 pub async fn update_descriptive_fields(
     engine: &SqliteRawEngine,
     local_id: i64,
     t: &ItlTrackUpsert<'_>,
     resolved_rating: i64,
     resolved_play_count: i64,
-    file_path: &str,
 ) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
     let sql = "UPDATE tracks SET \
         title = ?, artist = ?, album = ?, album_artist = ?, composer = ?, \
         genre = ?, kind = ?, duration_ms = ?, size_bytes = ?, bit_rate = ?, \
         sample_rate = ?, track_number = ?, disc_number = ?, year = ?, bpm = ?, \
         rating = ?, play_count = ?, file_path = ? \
         WHERE id = ?";
-    use prax_query::filter::FilterValue as FV;
     let params = vec![
         FV::String(t.title.to_string()),
-        t.artist.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.album.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.album_artist
-            .map(|s| FV::String(s.into()))
-            .unwrap_or(FV::Null),
-        t.composer.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.genre.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
-        t.kind.map(|s| FV::String(s.into())).unwrap_or(FV::Null),
+        opt_str(t.artist),
+        opt_str(t.album),
+        opt_str(t.album_artist),
+        opt_str(t.composer),
+        opt_str(t.genre),
+        opt_str(t.kind),
         FV::Int(t.duration_ms),
         FV::Int(t.size_bytes),
-        t.bit_rate.map(FV::Int).unwrap_or(FV::Null),
-        t.sample_rate.map(FV::Int).unwrap_or(FV::Null),
-        t.track_number.map(FV::Int).unwrap_or(FV::Null),
-        t.disc_number.map(FV::Int).unwrap_or(FV::Null),
-        t.year.map(FV::Int).unwrap_or(FV::Null),
-        t.bpm.map(FV::Int).unwrap_or(FV::Null),
+        opt_int(t.bit_rate),
+        opt_int(t.sample_rate),
+        opt_int(t.track_number),
+        opt_int(t.disc_number),
+        opt_int(t.year),
+        opt_int(t.bpm),
         FV::Int(resolved_rating),
         FV::Int(resolved_play_count),
-        FV::String(file_path.to_string()),
+        FV::String(t.file_path.to_string()),
         FV::Int(local_id),
     ];
     engine
@@ -274,45 +308,7 @@ pub async fn delete_missing(
     sync_source_id: i64,
     keep_hex: &[String],
 ) -> Result<u64, TracksError> {
-    if keep_hex.is_empty() {
-        let sql = "DELETE FROM tracks WHERE sync_source_id = ?";
-        let params = vec![prax_query::filter::FilterValue::Int(sync_source_id)];
-        return engine
-            .raw_sql_execute(sql, &params)
-            .await
-            .map_err(|e| TracksError::Query(anyhow::Error::from(e)));
-    }
-
-    // Stage the keep set in a temp table, then DELETE by anti-join. This
-    // avoids SQLite's per-statement parameter/length limits when the keep
-    // set is large (40K+ tracks is typical for iTunes libraries).
-    engine
-        .raw_sql_execute(
-            "CREATE TEMP TABLE IF NOT EXISTS _sync_keep \
-             (persistent_id TEXT PRIMARY KEY) WITHOUT ROWID",
-            &[],
-        )
-        .await
-        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
-    engine
-        .raw_sql_execute("DELETE FROM _sync_keep", &[])
-        .await
-        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
-    for hex in keep_hex {
-        engine
-            .raw_sql_execute(
-                "INSERT INTO _sync_keep (persistent_id) VALUES (?)",
-                &[prax_query::filter::FilterValue::String(hex.clone())],
-            )
-            .await
-            .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
-    }
-    engine
-        .raw_sql_execute(
-            "DELETE FROM tracks WHERE sync_source_id = ? \
-             AND persistent_id NOT IN (SELECT persistent_id FROM _sync_keep)",
-            &[prax_query::filter::FilterValue::Int(sync_source_id)],
-        )
+    crate::db::sync_util::delete_by_keep_set(engine, "tracks", sync_source_id, keep_hex)
         .await
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }

@@ -1,12 +1,13 @@
 //! Playlist-side reconciler. Handles regular playlists, smart playlists
-//! (decoding SmartRule via itl-rs), and folder hierarchies (two-pass
+//! (imported as track-ID snapshots — iTunes 12+ doesn't expose smart
+//! rules at the documented subtype), and folder hierarchies (two-pass
 //! parent linking).
 
 use crate::db::playlists::{self, PlaylistKind, PlaylistUpsert, PlaylistsError};
+use crate::db::sync_util::{self, pid_hex};
 use crate::db::tracks::TracksError;
 use crate::sync::events::{SyncPhase, SyncProgress};
 use itl_rs::ItlFile;
-use prax_query::filter::FilterValue;
 use prax_sqlite::raw::SqliteRawEngine;
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
@@ -28,17 +29,16 @@ pub async fn reconcile(
     let mut stats = PlaylistReconcileStats::default();
     let total = lib.playlists().len() as u64;
 
-    // Build a lookup from ITL track id (u32) → local track id (i64).
-    // We look up by (sync_source_id, persistent_id) — but the in-memory
-    // ITL track persistent_id is the u64 returned by Track::persistent_id().
-    // So the map here is ITL track.id (u32, the internal id) → persistent_id (u64).
+    // ITL internal track id (u32) → persistent_id (u64) — entirely
+    // derived from `lib` without touching SQLite.
     let mut itl_to_pid: HashMap<u32, u64> = HashMap::with_capacity(lib.tracks().len());
     for t in lib.tracks() {
         itl_to_pid.insert(t.id(), t.persistent_id());
     }
 
-    // Now build pid_hex → local i64 lookup from the DB.
-    let pid_to_local = load_track_id_map(engine, source_id).await?;
+    let track_pid_to_local = sync_util::load_pid_to_local_id_map(engine, "tracks", source_id)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
 
     let mut keep: Vec<String> = Vec::with_capacity(lib.playlists().len());
     let mut pending_parent_links: Vec<(i64, u64)> = Vec::new();
@@ -62,20 +62,19 @@ pub async fn reconcile(
             stats.warnings += 1;
             continue;
         }
-        keep.push(format!("{:016x}", pid));
+        let hex = pid_hex(pid);
+        keep.push(hex.clone());
 
         let (kind, smart_rule_json) = classify(p);
 
-        // Translate ITL u32 track ids to local i64 ids, skipping ones
-        // we didn't import (because their persistent_id was zero or
-        // their path didn't remap).
+        // Translate ITL track IDs to local row IDs; skip any track we
+        // didn't import (zero pid, unmappable path, etc.).
         let track_entries: Vec<i64> = p
             .track_ids()
             .iter()
             .filter_map(|itl_id| {
-                let pid = itl_to_pid.get(itl_id)?;
-                let hex = format!("{:016x}", pid);
-                pid_to_local.get(&hex).copied()
+                let track_pid = itl_to_pid.get(itl_id)?;
+                track_pid_to_local.get(&pid_hex(*track_pid)).copied()
             })
             .collect();
 
@@ -90,7 +89,7 @@ pub async fn reconcile(
             smart_rule_json,
         };
 
-        let existed = playlists::by_persistent_id(engine, source_id, &format!("{:016x}", pid))
+        let existed = playlists::by_persistent_id(engine, source_id, &hex)
             .await?
             .is_some();
         let local_id = playlists::upsert(engine, &upsert).await?;
@@ -105,13 +104,11 @@ pub async fn reconcile(
         }
     }
 
-    // Second pass: link parents. Load pid → local id for playlists now
-    // that everything is inserted.
-    let pid_to_local_pl = load_playlist_id_map(engine, source_id).await?;
+    let playlist_pid_to_local = sync_util::load_pid_to_local_id_map(engine, "playlists", source_id)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
     for (child_id, parent_pid) in pending_parent_links {
-        let parent_local = pid_to_local_pl
-            .get(&format!("{:016x}", parent_pid))
-            .copied();
+        let parent_local = playlist_pid_to_local.get(&pid_hex(parent_pid)).copied();
         playlists::link_parent(engine, child_id, parent_local).await?;
     }
 
@@ -129,54 +126,6 @@ fn classify(p: &itl_rs::Playlist) -> (PlaylistKind, Option<String>) {
     } else {
         (PlaylistKind::Regular, None)
     }
-}
-
-async fn load_track_id_map(
-    engine: &SqliteRawEngine,
-    source_id: i64,
-) -> Result<HashMap<String, i64>, PlaylistsError> {
-    let sql = "SELECT id, persistent_id FROM tracks WHERE sync_source_id = ?";
-    let rows = engine
-        .raw_sql_query(sql, &[FilterValue::Int(source_id)])
-        .await
-        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-    let mut out = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let v = r.into_json();
-        let id = v.get("id").and_then(|v| v.as_i64());
-        let pid = v
-            .get("persistent_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        if let (Some(id), Some(pid)) = (id, pid) {
-            out.insert(pid, id);
-        }
-    }
-    Ok(out)
-}
-
-async fn load_playlist_id_map(
-    engine: &SqliteRawEngine,
-    source_id: i64,
-) -> Result<HashMap<String, i64>, PlaylistsError> {
-    let sql = "SELECT id, persistent_id FROM playlists WHERE sync_source_id = ?";
-    let rows = engine
-        .raw_sql_query(sql, &[FilterValue::Int(source_id)])
-        .await
-        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-    let mut out = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let v = r.into_json();
-        let id = v.get("id").and_then(|v| v.as_i64());
-        let pid = v
-            .get("persistent_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        if let (Some(id), Some(pid)) = (id, pid) {
-            out.insert(pid, id);
-        }
-    }
-    Ok(out)
 }
 
 impl From<TracksError> for PlaylistsError {
