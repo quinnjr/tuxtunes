@@ -23,6 +23,22 @@ pub enum PreferencesError {
 }
 
 pub const KEY_VOLUME: &str = "volume";
+pub const KEY_LIBRARY_ROOT: &str = "library_root";
+pub const KEY_ORGANIZE_SCHEME: &str = "organize_scheme";
+pub const KEY_KEEP_ORGANIZED: &str = "keep_organized";
+
+const DEFAULT_LIBRARY_ROOT_SUFFIX: &str = "Music/TuxTunes";
+pub const DEFAULT_ORGANIZE_SCHEME: &str =
+    "{album_artist}/{album}/{disc:02}-{track:02} - {title}.{ext}";
+
+/// Default managed library root: `$HOME/Music/TuxTunes`. Falls back to
+/// `./Music/TuxTunes` when `$HOME` is unset (tests, unusual environments).
+pub fn default_library_root() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(DEFAULT_LIBRARY_ROOT_SUFFIX)
+}
 
 /// Read a preference, returning `Ok(None)` if the key is absent.
 pub async fn get<T: DeserializeOwned>(
@@ -84,6 +100,53 @@ pub async fn set<T: Serialize>(
         .map_err(|e| PreferencesError::Query(anyhow::Error::from(e)))
 }
 
+/// Managed library root — absolute path where TuxTunes owns the file
+/// layout. Returns `default_library_root()` when the key is absent.
+pub async fn get_library_root(
+    engine: &SqliteRawEngine,
+) -> Result<std::path::PathBuf, PreferencesError> {
+    let stored: Option<String> = get(engine, KEY_LIBRARY_ROOT).await?;
+    Ok(stored
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(default_library_root))
+}
+
+pub async fn set_library_root(
+    engine: &SqliteRawEngine,
+    path: &std::path::Path,
+) -> Result<(), PreferencesError> {
+    let s = path.display().to_string();
+    set(engine, KEY_LIBRARY_ROOT, &s).await
+}
+
+/// `organize_scheme` template string used by the organize + ingest
+/// workers. Returns `DEFAULT_ORGANIZE_SCHEME` when the key is absent.
+pub async fn get_organize_scheme(engine: &SqliteRawEngine) -> Result<String, PreferencesError> {
+    let stored: Option<String> = get(engine, KEY_ORGANIZE_SCHEME).await?;
+    Ok(stored.unwrap_or_else(|| DEFAULT_ORGANIZE_SCHEME.to_string()))
+}
+
+pub async fn set_organize_scheme(
+    engine: &SqliteRawEngine,
+    scheme: &str,
+) -> Result<(), PreferencesError> {
+    set(engine, KEY_ORGANIZE_SCHEME, &scheme.to_string()).await
+}
+
+/// Whether the `organize` worker runs on metadata edits. Defaults to
+/// `true` when absent.
+pub async fn get_keep_organized(engine: &SqliteRawEngine) -> Result<bool, PreferencesError> {
+    let stored: Option<bool> = get(engine, KEY_KEEP_ORGANIZED).await?;
+    Ok(stored.unwrap_or(true))
+}
+
+pub async fn set_keep_organized(
+    engine: &SqliteRawEngine,
+    keep: bool,
+) -> Result<(), PreferencesError> {
+    set(engine, KEY_KEEP_ORGANIZED, &keep).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +198,41 @@ mod tests {
             source: serde_json::from_str::<i64>("not-json").unwrap_err(),
         };
         assert!(e2.to_string().contains("volume"));
+    }
+
+    #[tokio::test]
+    async fn library_root_defaults_and_roundtrips() {
+        let db = tmp_db().await;
+        // With no stored value, returns the default (ends with Music/TuxTunes).
+        let def = get_library_root(&db.engine).await.unwrap();
+        assert!(def.ends_with("Music/TuxTunes"));
+
+        let custom = std::path::PathBuf::from("/tmp/tuxtunes-test");
+        set_library_root(&db.engine, &custom).await.unwrap();
+        assert_eq!(get_library_root(&db.engine).await.unwrap(), custom);
+    }
+
+    #[tokio::test]
+    async fn organize_scheme_defaults_and_roundtrips() {
+        let db = tmp_db().await;
+        assert_eq!(
+            get_organize_scheme(&db.engine).await.unwrap(),
+            DEFAULT_ORGANIZE_SCHEME
+        );
+        set_organize_scheme(&db.engine, "{title}.{ext}")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_organize_scheme(&db.engine).await.unwrap(),
+            "{title}.{ext}"
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_organized_defaults_true_and_roundtrips() {
+        let db = tmp_db().await;
+        assert!(get_keep_organized(&db.engine).await.unwrap());
+        set_keep_organized(&db.engine, false).await.unwrap();
+        assert!(!get_keep_organized(&db.engine).await.unwrap());
     }
 }
