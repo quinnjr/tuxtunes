@@ -303,6 +303,73 @@ pub async fn delete_missing(
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
+/// Update the path-related columns after a successful ingest. Sets
+/// `file_path`, `original_path`, `file_hash`, `artwork_path`; marks
+/// `import_status = 'ok'` and refreshes `verified_at`.
+pub async fn set_file_paths(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+    managed_file_path: &str,
+    original_path: Option<&str>,
+    file_hash_hex: &str,
+    artwork_path: Option<&str>,
+) -> Result<(), TracksError> {
+    use crate::db::sync_util::opt_str;
+    use prax_query::filter::FilterValue as FV;
+    let sql = "UPDATE tracks SET \
+        file_path = ?, original_path = ?, file_hash = ?, artwork_path = ?, \
+        import_status = 'ok', verified_at = CURRENT_TIMESTAMP \
+        WHERE id = ?";
+    let params = vec![
+        FV::String(managed_file_path.to_string()),
+        opt_str(original_path),
+        FV::String(file_hash_hex.to_string()),
+        opt_str(artwork_path),
+        FV::Int(local_id),
+    ];
+    engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
+/// Mark a track as `missing_source` (file not reachable). Preserves
+/// `file_path` so the user can diagnose the mapping.
+pub async fn mark_missing_source(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    let sql = "UPDATE tracks SET import_status = 'missing_source', \
+               verified_at = CURRENT_TIMESTAMP WHERE id = ?";
+    engine
+        .raw_sql_execute(sql, &[FV::Int(local_id)])
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
+/// Record a freshly-computed file hash (plus bump `verified_at`) — used
+/// by the "Verify Library" walk when content confirms a file is intact.
+pub async fn set_file_hash(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+    file_hash_hex: &str,
+) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    let sql = "UPDATE tracks SET file_hash = ?, \
+               verified_at = CURRENT_TIMESTAMP WHERE id = ?";
+    engine
+        .raw_sql_execute(
+            sql,
+            &[FV::String(file_hash_hex.to_string()), FV::Int(local_id)],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +574,85 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 2);
+    }
+
+    #[tokio::test]
+    async fn set_file_paths_writes_columns_and_marks_ok() {
+        let db = tmp_db().await;
+        let id = insert_fixture(&db.engine, "title", "/tmp/a.flac").await;
+        set_file_paths(
+            &db.engine,
+            id,
+            "/home/joe/Music/TuxTunes/a/b.flac",
+            Some("D:\\a\\b.flac"),
+            "deadbeefdeadbeef",
+            Some("/home/joe/Music/TuxTunes/a/cover.jpg"),
+        )
+        .await
+        .unwrap();
+
+        let got = get(&db.engine, id).await.unwrap();
+        assert_eq!(got.file_path, "/home/joe/Music/TuxTunes/a/b.flac");
+
+        let status: String = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT import_status FROM tracks WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, "ok");
+    }
+
+    #[tokio::test]
+    async fn mark_missing_source_sets_status() {
+        let db = tmp_db().await;
+        let id = insert_fixture(&db.engine, "missing", "/tmp/m.flac").await;
+        mark_missing_source(&db.engine, id).await.unwrap();
+        let status: String = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT import_status FROM tracks WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(status, "missing_source");
+    }
+
+    #[tokio::test]
+    async fn set_file_hash_updates_hash_and_verified_at() {
+        let db = tmp_db().await;
+        let id = insert_fixture(&db.engine, "hashed", "/tmp/h.flac").await;
+        set_file_hash(&db.engine, id, "0123456789abcdef")
+            .await
+            .unwrap();
+
+        let hash: String = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT file_hash FROM tracks WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(hash, "0123456789abcdef");
+
+        // verified_at should be populated (non-null).
+        let verified: Option<String> = db
+            .engine
+            .raw_sql_optional(
+                "SELECT verified_at FROM tracks WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap()
+            .and_then(|r| {
+                r.into_json()
+                    .get("verified_at")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+            });
+        assert!(verified.is_some(), "verified_at should be set");
     }
 }
