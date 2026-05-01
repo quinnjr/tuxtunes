@@ -44,6 +44,13 @@ pub fn run() {
             commands::sync::list_sync_sources,
             commands::sync::add_sync_source,
             commands::sync::run_sync_now,
+            commands::preferences::get_library_root,
+            commands::preferences::set_library_root,
+            commands::preferences::get_organize_scheme,
+            commands::preferences::set_organize_scheme,
+            commands::preferences::get_keep_organized,
+            commands::preferences::set_keep_organized,
+            commands::preferences::reorganize_track,
         ])
         .setup(move |app| {
             let dir = data_dir(app);

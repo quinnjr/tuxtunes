@@ -12,8 +12,6 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub engine: Arc<PlaybackEngine>,
     pub sync: Arc<SyncCoordinator>,
-    /// Wired into sync in T7, exposed via Tauri commands in T10
-    #[allow(dead_code)]
     pub fs: Arc<FsCoordinator>,
 }
 
