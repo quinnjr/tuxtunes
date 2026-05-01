@@ -12,7 +12,7 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub engine: Arc<PlaybackEngine>,
     pub sync: Arc<SyncCoordinator>,
-    /// Wired in T7 (auto_copy_files) and T10 (Tauri commands)
+    /// Wired into sync in T7, exposed via Tauri commands in T10
     #[allow(dead_code)]
     pub fs: Arc<FsCoordinator>,
 }
@@ -30,8 +30,8 @@ impl AppState {
     pub async fn new(db_path: &Path, app: AppHandle) -> Result<Self, AppStateError> {
         let db = Arc::new(Db::open(db_path).await?);
         let engine = Arc::new(PlaybackEngine::spawn(app.clone())?);
-        let sync = Arc::new(SyncCoordinator::new(Arc::clone(&db), app.clone()));
-        let fs = Arc::new(FsCoordinator::new(Arc::clone(&db.engine), app));
+        let fs = Arc::new(FsCoordinator::new(Arc::clone(&db.engine), app.clone()));
+        let sync = Arc::new(SyncCoordinator::new(Arc::clone(&db), Arc::clone(&fs), app));
         Ok(Self {
             db,
             engine,

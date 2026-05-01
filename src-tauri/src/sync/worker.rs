@@ -2,6 +2,7 @@
 //! channel, runs one reconcile at a time.
 
 use crate::db::{sync_sources, Db};
+use crate::fs::coordinator::FsCoordinator;
 use crate::sync::events::{SyncComplete, SyncFailed, SyncPhase, SyncProgress};
 use crate::sync::{reconcile_playlists, reconcile_tracks};
 use itl_rs::ItlFile;
@@ -20,13 +21,15 @@ pub struct SyncWorker {
 }
 
 impl SyncWorker {
-    pub fn spawn(db: Arc<Db>, app: AppHandle) -> Self {
+    pub fn spawn(db: Arc<Db>, fs: Arc<FsCoordinator>, app: AppHandle) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<SyncCommand>();
+        let db_clone = Arc::clone(&db);
+        let fs_clone = Arc::clone(&fs);
         let task = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     SyncCommand::RunNow { source_id } => {
-                        if let Err(e) = run_one(&db, &app, source_id).await {
+                        if let Err(e) = run_one(&db_clone, &fs_clone, &app, source_id).await {
                             let _ = app.emit(
                                 crate::sync::events::FAILED,
                                 SyncFailed {
@@ -43,7 +46,12 @@ impl SyncWorker {
     }
 }
 
-async fn run_one(db: &Arc<Db>, app: &AppHandle, source_id: i64) -> Result<(), anyhow::Error> {
+async fn run_one(
+    db: &Arc<Db>,
+    fs: &Arc<FsCoordinator>,
+    app: &AppHandle,
+    source_id: i64,
+) -> Result<(), anyhow::Error> {
     let source = sync_sources::get(&db.engine, source_id).await?;
 
     let _ = app.emit(
@@ -82,7 +90,7 @@ async fn run_one(db: &Arc<Db>, app: &AppHandle, source_id: i64) -> Result<(), an
         },
     );
 
-    let track_stats = reconcile_tracks::reconcile(
+    let (track_stats, ingest_candidates) = reconcile_tracks::reconcile(
         &db.engine,
         app,
         source_id,
@@ -91,6 +99,12 @@ async fn run_one(db: &Arc<Db>, app: &AppHandle, source_id: i64) -> Result<(), an
         &source.conflict_rules,
     )
     .await?;
+
+    if source.auto_copy_files {
+        for cand in ingest_candidates {
+            let _ = fs.copy_for_track(cand.track_id, cand.source_path);
+        }
+    }
 
     let _ = app.emit(
         crate::sync::events::PROGRESS,

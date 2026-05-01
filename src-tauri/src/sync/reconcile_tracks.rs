@@ -7,6 +7,7 @@ use crate::sync::events::{SyncPhase, SyncProgress, SyncWarning, WarningKind};
 use crate::sync::path_map::{self, PathMapError, PathMapping};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
+use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -17,8 +18,16 @@ pub struct TrackReconcileStats {
     pub warnings: u64,
 }
 
+/// `(track_id, source_path)` for a track that should be handed off to
+/// the ingest worker when `SyncSource.auto_copy_files` is true.
+#[derive(Debug, Clone)]
+pub struct IngestCandidate {
+    pub track_id: i64,
+    pub source_path: PathBuf,
+}
+
 /// Reconcile every track in `lib` into `engine`. Emits progress + warning
-/// events via `app`. Returns aggregate counts.
+/// events via `app`. Returns aggregate counts and ingest candidates.
 pub async fn reconcile(
     engine: &SqliteRawEngine,
     app: &AppHandle,
@@ -26,8 +35,9 @@ pub async fn reconcile(
     lib: &ItlFile,
     mappings: &[PathMapping],
     rules: &ConflictRules,
-) -> Result<TrackReconcileStats, TracksError> {
+) -> Result<(TrackReconcileStats, Vec<IngestCandidate>), TracksError> {
     let mut stats = TrackReconcileStats::default();
+    let mut ingest_candidates = Vec::new();
     let total = lib.tracks().len() as u64;
 
     // One SELECT up-front replaces N per-track by_persistent_id SELECTs.
@@ -100,8 +110,12 @@ pub async fn reconcile(
 
         match local_map.get(&pid) {
             None => {
-                tracks::insert_from_itl(engine, &upsert).await?;
+                let track_id = tracks::insert_from_itl(engine, &upsert).await?;
                 stats.inserted += 1;
+                ingest_candidates.push(IngestCandidate {
+                    track_id,
+                    source_path: PathBuf::from(raw_path),
+                });
             }
             Some(local) => {
                 let (resolved_rating, resolved_play_count) =
@@ -115,6 +129,10 @@ pub async fn reconcile(
                 )
                 .await?;
                 stats.updated += 1;
+                ingest_candidates.push(IngestCandidate {
+                    track_id: local.id,
+                    source_path: PathBuf::from(raw_path),
+                });
             }
         }
     }
@@ -124,7 +142,7 @@ pub async fn reconcile(
         stats.deleted = deleted;
     }
 
-    Ok(stats)
+    Ok((stats, ingest_candidates))
 }
 
 fn nz(v: i64) -> Option<i64> {
