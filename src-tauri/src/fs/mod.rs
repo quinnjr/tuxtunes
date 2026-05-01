@@ -2,5 +2,8 @@
 //! organize-on-edit.
 
 pub mod artwork;
+pub mod coordinator;
+pub mod events;
 pub mod hash;
+pub mod ingest;
 pub mod path;

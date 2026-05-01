@@ -1,6 +1,7 @@
 //! App-wide runtime state.
 
 use crate::db::{Db, DbError};
+use crate::fs::coordinator::FsCoordinator;
 use crate::playback::{EngineError, PlaybackEngine};
 use crate::sync::coordinator::SyncCoordinator;
 use std::path::Path;
@@ -11,6 +12,9 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub engine: Arc<PlaybackEngine>,
     pub sync: Arc<SyncCoordinator>,
+    /// Wired in T7 (auto_copy_files) and T10 (Tauri commands)
+    #[allow(dead_code)]
+    pub fs: Arc<FsCoordinator>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -26,7 +30,13 @@ impl AppState {
     pub async fn new(db_path: &Path, app: AppHandle) -> Result<Self, AppStateError> {
         let db = Arc::new(Db::open(db_path).await?);
         let engine = Arc::new(PlaybackEngine::spawn(app.clone())?);
-        let sync = Arc::new(SyncCoordinator::new(Arc::clone(&db), app));
-        Ok(Self { db, engine, sync })
+        let sync = Arc::new(SyncCoordinator::new(Arc::clone(&db), app.clone()));
+        let fs = Arc::new(FsCoordinator::new(Arc::clone(&db.engine), app));
+        Ok(Self {
+            db,
+            engine,
+            sync,
+            fs,
+        })
     }
 }

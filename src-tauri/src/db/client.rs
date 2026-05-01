@@ -8,6 +8,7 @@
 use prax_sqlite::raw::SqliteRawEngine;
 use prax_sqlite::{SqliteConfig, SqlitePool};
 use std::path::Path;
+use std::sync::Arc;
 
 const INITIAL_MIGRATION: &str = include_str!("../../prax/migrations/0001_initial/migration.sql");
 
@@ -29,7 +30,7 @@ pub enum DbError {
 
 pub struct Db {
     /// Exposed for query execution by Tauri commands; first used in Task 13.
-    pub engine: SqliteRawEngine,
+    pub engine: Arc<SqliteRawEngine>,
 }
 
 impl Db {
@@ -43,7 +44,7 @@ impl Db {
             source: anyhow::Error::from(e),
         })?;
 
-        let engine = SqliteRawEngine::new(pool);
+        let engine = Arc::new(SqliteRawEngine::new(pool));
 
         apply_initial_migration(&engine).await?;
 
