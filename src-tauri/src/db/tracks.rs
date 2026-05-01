@@ -118,47 +118,34 @@ pub struct ItlTrackUpsert<'a> {
     pub original_path: Option<&'a str>,
 }
 
-/// Local-side view of a track used for conflict resolution: id + every
-/// user-state field plus `persistent_id` (hex) for map lookups.
+/// Local-side view of a track used for conflict resolution: row id +
+/// every user-state field needed by `sync::conflict::resolve_*`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct LocalTrackForSync {
     pub id: i64,
-    pub persistent_id: String,
-    #[serde(default)]
     pub rating: i64,
-    #[serde(default)]
     pub play_count: i64,
-    #[serde(default)]
     pub skip_count: i64,
     pub last_played: Option<i64>,
     pub last_skipped: Option<i64>,
-    #[serde(deserialize_with = "deserialize_sqlite_bool", default)]
+    #[serde(deserialize_with = "crate::db::sync_util::sqlite_bool")]
     pub loved: bool,
     pub original_path: Option<String>,
 }
 
-fn deserialize_sqlite_bool<'de, D>(d: D) -> Result<bool, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let v = serde_json::Value::deserialize(d)?;
-    Ok(v.as_i64().map(|n| n != 0).unwrap_or(false))
-}
-
-const SELECT_LOCAL_TRACK_FIELDS: &str =
-    "id, persistent_id, rating, play_count, skip_count, last_played, \
+const SELECT_LOCAL_TRACK_FIELDS: &str = "id, rating, play_count, skip_count, last_played, \
      last_skipped, loved, original_path";
 
-/// Bulk-load every synced track's user-state into a `pid_hex →
-/// LocalTrackForSync` map. Replaces per-track `by_persistent_id`
-/// SELECTs during reconcile (O(n) round-trips → 1).
+/// Bulk-load every synced track's user-state into a `persistent_id
+/// (u64) → LocalTrackForSync` map. Replaces per-track
+/// `by_persistent_id` SELECTs during reconcile (O(n) round-trips → 1).
 pub async fn load_local_state_map(
     engine: &SqliteRawEngine,
     sync_source_id: i64,
-) -> Result<std::collections::HashMap<String, LocalTrackForSync>, TracksError> {
+) -> Result<std::collections::HashMap<u64, LocalTrackForSync>, TracksError> {
     let sql = format!(
-        "SELECT {SELECT_LOCAL_TRACK_FIELDS} FROM tracks WHERE sync_source_id = ? \
-         AND persistent_id IS NOT NULL"
+        "SELECT {SELECT_LOCAL_TRACK_FIELDS}, persistent_id FROM tracks \
+         WHERE sync_source_id = ? AND persistent_id IS NOT NULL"
     );
     let rows = engine
         .raw_sql_query(
@@ -169,9 +156,20 @@ pub async fn load_local_state_map(
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
     let mut out = std::collections::HashMap::with_capacity(rows.len());
     for r in rows {
-        let t: LocalTrackForSync = serde_json::from_value(r.into_json())
-            .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
-        out.insert(t.persistent_id.clone(), t);
+        let mut v = r.into_json();
+        let Some(pid_str) = v
+            .as_object_mut()
+            .and_then(|o| o.remove("persistent_id"))
+            .and_then(|v| v.as_str().map(str::to_string))
+        else {
+            continue;
+        };
+        let Ok(pid) = u64::from_str_radix(&pid_str, 16) else {
+            continue;
+        };
+        let t: LocalTrackForSync =
+            serde_json::from_value(v).map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+        out.insert(pid, t);
     }
     Ok(out)
 }
@@ -204,6 +202,7 @@ pub async fn insert_from_itl(
     engine: &SqliteRawEngine,
     t: &ItlTrackUpsert<'_>,
 ) -> Result<i64, TracksError> {
+    use crate::db::sync_util::{opt_int, opt_str, pid_hex};
     use prax_query::filter::FilterValue as FV;
     let sql = "INSERT INTO tracks ( \
         persistent_id, sync_source_id, title, artist, album, album_artist, \
@@ -213,7 +212,7 @@ pub async fn insert_from_itl(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
                 datetime(?, 'unixepoch'), ?, ?, '[]') RETURNING id";
     let params = vec![
-        FV::String(crate::db::sync_util::pid_hex(t.persistent_id)),
+        FV::String(pid_hex(t.persistent_id)),
         FV::Int(t.sync_source_id),
         FV::String(t.title.to_string()),
         opt_str(t.artist),
@@ -247,16 +246,6 @@ pub async fn insert_from_itl(
         .ok_or_else(|| TracksError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
 }
 
-fn opt_str(v: Option<&str>) -> prax_query::filter::FilterValue {
-    v.map(|s| prax_query::filter::FilterValue::String(s.to_string()))
-        .unwrap_or(prax_query::filter::FilterValue::Null)
-}
-
-fn opt_int(v: Option<i64>) -> prax_query::filter::FilterValue {
-    v.map(prax_query::filter::FilterValue::Int)
-        .unwrap_or(prax_query::filter::FilterValue::Null)
-}
-
 /// Update an existing track's descriptive fields plus the two
 /// already-resolved user-state fields. User-state not listed here
 /// (skip_count, last_played, last_skipped, loved) is preserved as-is.
@@ -267,6 +256,7 @@ pub async fn update_descriptive_fields(
     resolved_rating: i64,
     resolved_play_count: i64,
 ) -> Result<(), TracksError> {
+    use crate::db::sync_util::{opt_int, opt_str};
     use prax_query::filter::FilterValue as FV;
     let sql = "UPDATE tracks SET \
         title = ?, artist = ?, album = ?, album_artist = ?, composer = ?, \
@@ -306,9 +296,9 @@ pub async fn update_descriptive_fields(
 pub async fn delete_missing(
     engine: &SqliteRawEngine,
     sync_source_id: i64,
-    keep_hex: &[String],
+    keep: &[u64],
 ) -> Result<u64, TracksError> {
-    crate::db::sync_util::delete_by_keep_set(engine, "tracks", sync_source_id, keep_hex)
+    crate::db::sync_util::delete_by_keep_set(engine, "tracks", sync_source_id, keep)
         .await
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
@@ -447,7 +437,7 @@ mod tests {
         let id = insert_from_itl(&db.engine, &upsert).await.unwrap();
         assert!(id > 0);
 
-        let hex = format!("{:016x}", upsert.persistent_id);
+        let hex = crate::db::sync_util::pid_hex(upsert.persistent_id);
         let found = by_persistent_id(&db.engine, source_id, &hex)
             .await
             .unwrap()
@@ -507,7 +497,7 @@ mod tests {
             .await
             .unwrap();
 
-        let keep = vec![format!("{:016x}", 1u64), format!("{:016x}", 3u64)];
+        let keep = vec![1u64, 3u64];
         let deleted = delete_missing(&db.engine, 1, &keep).await.unwrap();
         assert_eq!(deleted, 1);
 

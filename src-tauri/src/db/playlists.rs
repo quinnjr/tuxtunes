@@ -69,11 +69,7 @@ pub async fn upsert(
 
     let entries_json = serde_json::to_string(p.track_entries)
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
-    let smart_rule_fv = p
-        .smart_rule_json
-        .clone()
-        .map(FilterValue::String)
-        .unwrap_or(FilterValue::Null);
+    let smart_rule_fv = sync_util::opt_str(p.smart_rule_json.as_deref());
 
     match existing {
         Some(id) => {
@@ -145,13 +141,13 @@ pub async fn link_parent(
 }
 
 /// Delete playlists in `sync_source_id` whose `persistent_id` is not in
-/// `keep_hex`.
+/// `keep`.
 pub async fn delete_missing(
     engine: &SqliteRawEngine,
     sync_source_id: i64,
-    keep_hex: &[String],
+    keep: &[u64],
 ) -> Result<u64, PlaylistsError> {
-    sync_util::delete_by_keep_set(engine, "playlists", sync_source_id, keep_hex)
+    sync_util::delete_by_keep_set(engine, "playlists", sync_source_id, keep)
         .await
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
 }
@@ -265,7 +261,7 @@ mod tests {
             .await
             .unwrap();
         }
-        let keep = vec![format!("{:016x}", 2u64)];
+        let keep = vec![2u64];
         let d = delete_missing(&db.engine, 1, &keep).await.unwrap();
         assert_eq!(d, 2);
     }

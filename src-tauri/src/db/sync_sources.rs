@@ -16,6 +16,7 @@ pub struct SyncSourceRow {
     pub last_sync_hash: Option<String>,
     pub path_mappings: Vec<PathMapping>,
     pub conflict_rules: ConflictRules,
+    #[serde(deserialize_with = "crate::db::sync_util::sqlite_bool")]
     pub auto_copy_files: bool,
 }
 
@@ -102,37 +103,26 @@ pub async fn finalize_sync(
 }
 
 fn deserialize_row(v: serde_json::Value) -> serde_json::Result<SyncSourceRow> {
-    // The value column JSON fields come back as strings; unwrap them.
-    let obj = v.as_object().ok_or_else(|| {
-        serde::de::Error::custom::<serde_json::Error>(serde_json::Error::io(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "row is not an object",
-        )))
-    })?;
-    let parse_json_string = |field: &str| -> serde_json::Result<serde_json::Value> {
-        match obj.get(field) {
-            Some(serde_json::Value::String(s)) => serde_json::from_str(s),
-            Some(serde_json::Value::Null) | None => Ok(serde_json::Value::Null),
-            Some(other) => Ok(other.clone()),
+    // The `path_mappings` and `conflict_rules` columns store JSON as TEXT
+    // in SQLite. Prax hands them back as `Value::String`; unwrap those
+    // into nested objects before feeding serde.
+    let mut obj = match v {
+        serde_json::Value::Object(m) => m,
+        _ => {
+            return Err(<serde_json::Error as serde::de::Error>::custom(
+                "row is not an object",
+            ));
         }
     };
-    let path_mappings = parse_json_string("path_mappings")?;
-    let conflict_rules = parse_json_string("conflict_rules")?;
-
-    let mut patched = obj.clone();
-    patched.insert("path_mappings".into(), path_mappings);
-    patched.insert("conflict_rules".into(), conflict_rules);
-    patched.insert(
-        "auto_copy_files".into(),
-        match obj.get("auto_copy_files") {
-            Some(serde_json::Value::Number(n)) => {
-                serde_json::Value::Bool(n.as_i64().unwrap_or(0) != 0)
-            }
-            Some(other) => other.clone(),
-            None => serde_json::Value::Bool(false),
-        },
-    );
-    serde_json::from_value(serde_json::Value::Object(patched))
+    for field in ["path_mappings", "conflict_rules"] {
+        let parsed = match obj.remove(field) {
+            Some(serde_json::Value::String(s)) => serde_json::from_str(&s)?,
+            Some(other) => other,
+            None => serde_json::Value::Null,
+        };
+        obj.insert(field.into(), parsed);
+    }
+    serde_json::from_value(serde_json::Value::Object(obj))
 }
 
 #[cfg(test)]

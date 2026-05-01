@@ -1,7 +1,6 @@
 //! Track-side reconciler. Reads every track from an `itl_rs::ItlFile`,
 //! remaps its path, applies conflict rules, and writes to SQLite.
 
-use crate::db::sync_util::pid_hex;
 use crate::db::tracks::{self, ItlTrackUpsert, LocalTrackForSync, TracksError};
 use crate::sync::conflict::{self, ConflictRules, Decision};
 use crate::sync::events::{SyncPhase, SyncProgress, SyncWarning, WarningKind};
@@ -33,7 +32,7 @@ pub async fn reconcile(
 
     // One SELECT up-front replaces N per-track by_persistent_id SELECTs.
     let local_map = tracks::load_local_state_map(engine, source_id).await?;
-    let mut keep_ids: Vec<String> = Vec::with_capacity(lib.tracks().len());
+    let mut keep: Vec<u64> = Vec::with_capacity(lib.tracks().len());
 
     for (idx, t) in lib.tracks().iter().enumerate() {
         if idx % 250 == 0 {
@@ -72,8 +71,7 @@ pub async fn reconcile(
             }
         };
 
-        let hex = pid_hex(pid);
-        keep_ids.push(hex.clone());
+        keep.push(pid);
 
         let upsert = ItlTrackUpsert {
             persistent_id: pid,
@@ -100,7 +98,7 @@ pub async fn reconcile(
             original_path: Some(raw_path),
         };
 
-        match local_map.get(&hex) {
+        match local_map.get(&pid) {
             None => {
                 tracks::insert_from_itl(engine, &upsert).await?;
                 stats.inserted += 1;
@@ -122,7 +120,7 @@ pub async fn reconcile(
     }
 
     if rules.deletes == crate::sync::conflict::DeleteStrategy::Respect {
-        let deleted = tracks::delete_missing(engine, source_id, &keep_ids).await?;
+        let deleted = tracks::delete_missing(engine, source_id, &keep).await?;
         stats.deleted = deleted;
     }
 

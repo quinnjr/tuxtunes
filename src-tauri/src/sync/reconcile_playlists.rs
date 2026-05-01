@@ -9,7 +9,6 @@ use crate::db::tracks::TracksError;
 use crate::sync::events::{SyncPhase, SyncProgress};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
-use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -31,7 +30,8 @@ pub async fn reconcile(
 
     // ITL internal track id (u32) → persistent_id (u64) — entirely
     // derived from `lib` without touching SQLite.
-    let mut itl_to_pid: HashMap<u32, u64> = HashMap::with_capacity(lib.tracks().len());
+    let mut itl_to_pid: std::collections::HashMap<u32, u64> =
+        std::collections::HashMap::with_capacity(lib.tracks().len());
     for t in lib.tracks() {
         itl_to_pid.insert(t.id(), t.persistent_id());
     }
@@ -40,7 +40,7 @@ pub async fn reconcile(
         .await
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
 
-    let mut keep: Vec<String> = Vec::with_capacity(lib.playlists().len());
+    let mut keep: Vec<u64> = Vec::with_capacity(lib.playlists().len());
     let mut pending_parent_links: Vec<(i64, u64)> = Vec::new();
 
     for (idx, p) in lib.playlists().iter().enumerate() {
@@ -62,8 +62,7 @@ pub async fn reconcile(
             stats.warnings += 1;
             continue;
         }
-        let hex = pid_hex(pid);
-        keep.push(hex.clone());
+        keep.push(pid);
 
         let (kind, smart_rule_json) = classify(p);
 
@@ -74,7 +73,7 @@ pub async fn reconcile(
             .iter()
             .filter_map(|itl_id| {
                 let track_pid = itl_to_pid.get(itl_id)?;
-                track_pid_to_local.get(&pid_hex(*track_pid)).copied()
+                track_pid_to_local.get(track_pid).copied()
             })
             .collect();
 
@@ -89,7 +88,7 @@ pub async fn reconcile(
             smart_rule_json,
         };
 
-        let existed = playlists::by_persistent_id(engine, source_id, &hex)
+        let existed = playlists::by_persistent_id(engine, source_id, &pid_hex(pid))
             .await?
             .is_some();
         let local_id = playlists::upsert(engine, &upsert).await?;
@@ -108,7 +107,7 @@ pub async fn reconcile(
         .await
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
     for (child_id, parent_pid) in pending_parent_links {
-        let parent_local = playlist_pid_to_local.get(&pid_hex(parent_pid)).copied();
+        let parent_local = playlist_pid_to_local.get(&parent_pid).copied();
         playlists::link_parent(engine, child_id, parent_local).await?;
     }
 
