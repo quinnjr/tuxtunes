@@ -7,7 +7,7 @@ use crate::sync::events::{SyncComplete, SyncFailed, SyncPhase, SyncProgress};
 use crate::sync::{reconcile_playlists, reconcile_tracks};
 use itl_rs::ItlFile;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub struct SyncWorker {
 }
 
 impl SyncWorker {
-    pub fn spawn(db: Arc<Db>, fs: Arc<FsCoordinator>, app: AppHandle) -> Self {
+    pub fn spawn<R: Runtime>(db: Arc<Db>, fs: Arc<FsCoordinator>, app: AppHandle<R>) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<SyncCommand>();
         let db_clone = Arc::clone(&db);
         let fs_clone = Arc::clone(&fs);
@@ -46,10 +46,10 @@ impl SyncWorker {
     }
 }
 
-async fn run_one(
+async fn run_one<R: Runtime>(
     db: &Arc<Db>,
     fs: &Arc<FsCoordinator>,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     source_id: i64,
 ) -> Result<(), anyhow::Error> {
     let source = sync_sources::get(&db.engine, source_id).await?;

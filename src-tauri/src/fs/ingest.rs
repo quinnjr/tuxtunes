@@ -24,7 +24,7 @@ use crate::fs::path::{render, resolve_collision, TrackFields};
 use prax_sqlite::raw::SqliteRawEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
@@ -38,7 +38,7 @@ pub struct IngestWorker {
 }
 
 impl IngestWorker {
-    pub fn spawn(engine: Arc<SqliteRawEngine>, app: AppHandle) -> Self {
+    pub fn spawn<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<IngestCommand>();
         let task = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
@@ -66,9 +66,9 @@ impl IngestWorker {
     }
 }
 
-async fn ingest_one(
+async fn ingest_one<R: Runtime>(
     engine: &SqliteRawEngine,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     track_id: i64,
     source_path: &std::path::Path,
 ) -> anyhow::Result<()> {

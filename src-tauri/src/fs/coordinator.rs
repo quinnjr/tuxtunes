@@ -4,14 +4,14 @@ use crate::fs::ingest::{IngestCommand, IngestWorker};
 use prax_sqlite::raw::SqliteRawEngine;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 pub struct FsCoordinator {
     ingest: IngestWorker,
 }
 
 impl FsCoordinator {
-    pub fn new(engine: Arc<SqliteRawEngine>, app: AppHandle) -> Self {
+    pub fn new<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
         Self {
             ingest: IngestWorker::spawn(engine, app),
         }

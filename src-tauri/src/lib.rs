@@ -55,7 +55,7 @@ pub fn run() {
                 .expect("AppState init");
             app.manage(state);
 
-            let state_ref: tauri::State<'_, AppState> = app.state::<AppState>();
+            let state_ref = app.state::<AppState>();
 
             // Restore persisted volume. Sending SetVolume tells mpv to set
             // the property; the property observer then fires a VolumeChanged

@@ -9,7 +9,7 @@ use crate::db::tracks::TracksError;
 use crate::sync::events::{SyncPhase, SyncProgress};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlaylistReconcileStats {
@@ -19,9 +19,9 @@ pub struct PlaylistReconcileStats {
     pub warnings: u64,
 }
 
-pub async fn reconcile(
+pub async fn reconcile<R: Runtime>(
     engine: &SqliteRawEngine,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     source_id: i64,
     lib: &ItlFile,
 ) -> Result<PlaylistReconcileStats, PlaylistsError> {

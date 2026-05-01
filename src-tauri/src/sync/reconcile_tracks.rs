@@ -8,7 +8,7 @@ use crate::sync::path_map::{self, PathMapError, PathMapping};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TrackReconcileStats {
@@ -28,9 +28,9 @@ pub struct IngestCandidate {
 
 /// Reconcile every track in `lib` into `engine`. Emits progress + warning
 /// events via `app`. Returns aggregate counts and ingest candidates.
-pub async fn reconcile(
+pub async fn reconcile<R: Runtime>(
     engine: &SqliteRawEngine,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     source_id: i64,
     lib: &ItlFile,
     mappings: &[PathMapping],
