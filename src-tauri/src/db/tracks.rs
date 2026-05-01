@@ -11,6 +11,7 @@ pub struct TrackRow {
     pub album: Option<String>,
     pub duration_ms: i64,
     pub file_path: String,
+    pub file_hash: Option<String>,
     pub sample_rate: Option<i64>,
     pub bit_depth: Option<i64>,
     pub kind: Option<String>,
@@ -29,7 +30,7 @@ pub async fn list(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<TrackRow>, TracksError> {
-    let sql = "SELECT id, title, artist, album, duration_ms, file_path, \
+    let sql = "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
                sample_rate, bit_depth, kind, play_count, skip_count \
                FROM tracks \
                ORDER BY date_added DESC, id DESC \
@@ -51,7 +52,7 @@ pub async fn list(
 }
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
-    let sql = "SELECT id, title, artist, album, duration_ms, file_path, \
+    let sql = "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
                sample_rate, bit_depth, kind, play_count, skip_count \
                FROM tracks WHERE id = ?";
     let params = vec![prax_query::filter::FilterValue::Int(id)];
@@ -451,6 +452,7 @@ mod tests {
             album: Some("Test Album".into()),
             duration_ms: 180_000,
             file_path: "/test/path.flac".into(),
+            file_hash: Some("deadbeefdeadbeef".into()),
             sample_rate: Some(44_100),
             bit_depth: Some(16),
             kind: Some("flac".into()),

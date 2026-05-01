@@ -21,6 +21,30 @@ pub struct TrackFields<'a> {
     pub fallback_stem: &'a str,
 }
 
+impl<'a> TrackFields<'a> {
+    /// Build from the columns `TrackRow` currently carries + a file
+    /// path to derive the extension and fallback stem from. All
+    /// extended metadata fields (album_artist, genre, track/disc
+    /// number + count, year) are `None` because `TrackRow` doesn't
+    /// surface them yet — the renderer falls back per spec.
+    pub fn from_track_row(row: &'a crate::db::tracks::TrackRow, source: &'a Path) -> Self {
+        Self {
+            title: &row.title,
+            artist: row.artist.as_deref(),
+            album_artist: None,
+            album: row.album.as_deref(),
+            genre: None,
+            track_number: None,
+            track_count: None,
+            disc_number: None,
+            disc_count: None,
+            year: None,
+            ext: source.extension().and_then(|s| s.to_str()).unwrap_or(""),
+            fallback_stem: source.file_stem().and_then(|s| s.to_str()).unwrap_or(""),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PathRenderError {
     #[error("unknown token: {0}")]

@@ -91,33 +91,19 @@ async fn verify_one(
     };
     let fresh_hex = hash::hash_hex(fresh);
 
-    // `TrackRow` in this project doesn't expose file_hash directly; pull
-    // it with a scalar query.
-    let stored: Option<String> = engine
-        .raw_sql_optional(
-            "SELECT file_hash FROM tracks WHERE id = ?",
-            &[prax_query::filter::FilterValue::Int(row.id)],
-        )
-        .await?
-        .and_then(|r| {
-            r.into_json()
-                .get("file_hash")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-        });
-
-    match stored {
-        Some(h) if h == fresh_hex => {
-            tracks::set_file_hash(engine, row.id, &fresh_hex).await?;
-            stats.verified += 1;
-        }
-        Some(_) => {
-            tracks::mark_missing_source(engine, row.id).await?;
-            stats.mismatched += 1;
-        }
-        None => {
-            tracks::set_file_hash(engine, row.id, &fresh_hex).await?;
-            stats.verified += 1;
-        }
+    // A stored hash that doesn't match fresh content = file was modified
+    // out-of-band. Every other case (matching hash, no prior hash) is a
+    // successful verify.
+    let mismatch = row
+        .file_hash
+        .as_deref()
+        .is_some_and(|stored| stored != fresh_hex);
+    if mismatch {
+        tracks::mark_missing_source(engine, row.id).await?;
+        stats.mismatched += 1;
+    } else {
+        tracks::set_file_hash(engine, row.id, &fresh_hex).await?;
+        stats.verified += 1;
     }
     Ok(())
 }

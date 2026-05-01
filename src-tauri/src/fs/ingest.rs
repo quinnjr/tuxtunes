@@ -16,9 +16,7 @@
 use crate::db::preferences;
 use crate::db::tracks::{self, TrackRow};
 use crate::fs::artwork;
-use crate::fs::events::{
-    IngestComplete, IngestFailed, IngestProgress, INGEST_COMPLETE, INGEST_FAILED, INGEST_PROGRESS,
-};
+use crate::fs::events::{IngestComplete, IngestFailed, INGEST_COMPLETE, INGEST_FAILED};
 use crate::fs::hash;
 use crate::fs::path::{render, resolve_collision, TrackFields};
 use prax_sqlite::raw::SqliteRawEngine;
@@ -72,15 +70,10 @@ async fn ingest_one<R: Runtime>(
     track_id: i64,
     source_path: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let _ = app.emit(
-        INGEST_PROGRESS,
-        IngestProgress {
-            track_id,
-            current: 0,
-            total: 0,
-            message: "hashing source".into(),
-        },
-    );
+    // Per-track progress emits are intentionally omitted — the
+    // fs:ingest-complete event fires once per track and carries the
+    // managed path, so the UI can track progress without the IPC
+    // overhead of per-stage chatter (~150K events on a 51K-track sync).
     let source_hash = tokio::task::spawn_blocking({
         let p = source_path.to_path_buf();
         move || hash::hash_file(&p)
@@ -91,49 +84,13 @@ async fn ingest_one<R: Runtime>(
     let root = preferences::get_library_root(engine).await?;
     let scheme = preferences::get_organize_scheme(engine).await?;
 
-    let ext = source_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-    let fallback_stem = source_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-
-    let rel = render(
-        &scheme,
-        &TrackFields {
-            title: &row.title,
-            artist: row.artist.as_deref(),
-            album_artist: None,
-            album: row.album.as_deref(),
-            genre: None,
-            track_number: None,
-            track_count: None,
-            disc_number: None,
-            disc_count: None,
-            year: None,
-            ext: &ext,
-            fallback_stem: &fallback_stem,
-        },
-    )?;
+    let rel = render(&scheme, &TrackFields::from_track_row(&row, source_path))?;
 
     let target_abs = resolve_collision(&root.join(&rel));
     if let Some(parent) = target_abs.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let _ = app.emit(
-        INGEST_PROGRESS,
-        IngestProgress {
-            track_id,
-            current: 0,
-            total: 0,
-            message: format!("copying to {}", target_abs.display()),
-        },
-    );
     tokio::task::spawn_blocking({
         let src = source_path.to_path_buf();
         let dst = target_abs.clone();

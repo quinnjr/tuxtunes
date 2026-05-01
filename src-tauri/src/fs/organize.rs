@@ -4,7 +4,7 @@
 
 use crate::db::preferences;
 use crate::db::tracks::{self, TrackRow};
-use crate::fs::events::{OrganizeApplied, ORGANIZE_APPLIED};
+use crate::fs::events::{OrganizeApplied, OrganizeFailed, ORGANIZE_APPLIED, ORGANIZE_FAILED};
 use crate::fs::path::{render, resolve_collision, TrackFields};
 use prax_sqlite::raw::SqliteRawEngine;
 use std::path::PathBuf;
@@ -30,7 +30,13 @@ impl OrganizeWorker {
                 match cmd {
                     OrganizeCommand::ReorganizeTrack { track_id } => {
                         if let Err(e) = organize_one(&engine, &app, track_id).await {
-                            eprintln!("organize failed for track {track_id}: {e}");
+                            let _ = app.emit(
+                                ORGANIZE_FAILED,
+                                OrganizeFailed {
+                                    track_id,
+                                    error: e.to_string(),
+                                },
+                            );
                         }
                     }
                 }
@@ -53,34 +59,8 @@ async fn organize_one<R: Runtime>(
     if !old_path.exists() {
         anyhow::bail!("source file missing at {}", old_path.display());
     }
-    let ext = old_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-    let fallback_stem = old_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
 
-    let rel = render(
-        &scheme,
-        &TrackFields {
-            title: &row.title,
-            artist: row.artist.as_deref(),
-            album_artist: None,
-            album: row.album.as_deref(),
-            genre: None,
-            track_number: None,
-            track_count: None,
-            disc_number: None,
-            disc_count: None,
-            year: None,
-            ext: &ext,
-            fallback_stem: &fallback_stem,
-        },
-    )?;
+    let rel = render(&scheme, &TrackFields::from_track_row(&row, &old_path))?;
     let new_abs = root.join(&rel);
     if new_abs == old_path {
         return Ok(());
