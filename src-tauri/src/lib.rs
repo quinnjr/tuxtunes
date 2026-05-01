@@ -34,6 +34,8 @@ pub fn run() {
             commands::library::list_tracks,
             commands::library::pick_and_add_track,
             commands::library::verify_library,
+            commands::library::remove_track,
+            commands::library::trash_track,
             commands::playback::play_track,
             commands::playback::pause,
             commands::playback::resume,

@@ -3,6 +3,7 @@
 use crate::db::tracks::{self, TrackRow};
 use crate::library::ingest;
 use crate::runtime::AppState;
+use prax_query::filter::FilterValue;
 use serde::Serialize;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -93,6 +94,31 @@ pub async fn verify_library(
         let _ = crate::fs::verify::verify_all(&engine, &app).await;
     });
     Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
+    let sql = "DELETE FROM tracks WHERE id = ?";
+    state
+        .db
+        .engine
+        .raw_sql_execute(sql, &[FilterValue::Int(track_id)])
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn trash_track(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
+    let row = crate::db::tracks::get(&state.db.engine, track_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Best-effort: send to trash. Already-missing files shouldn't block
+    // the DB cleanup.
+    if std::path::Path::new(&row.file_path).exists() {
+        trash::delete(&row.file_path).map_err(|e| e.to_string())?;
+    }
+    remove_track(state, track_id).await
 }
 
 #[cfg(test)]
