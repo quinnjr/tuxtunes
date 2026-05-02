@@ -45,8 +45,9 @@ pub async fn list_tracks(
     state: tauri::State<'_, AppState>,
     limit: i64,
     offset: i64,
+    search: Option<String>,
 ) -> Result<Vec<TrackRow>, String> {
-    tracks::list(&state.db.engine, limit, offset)
+    tracks::list(&state.db.engine, limit, offset, search.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
