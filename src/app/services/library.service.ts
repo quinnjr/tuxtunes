@@ -43,8 +43,20 @@ export class LibraryService {
     });
   }
 
+  /**
+   * Currently-applied text search. The empty string means "show all";
+   * components that mutate this should call `refreshTracks()` to
+   * propagate the new filter into `tracks`.
+   */
+  readonly search = signal<string>('');
+
   async refreshTracks(limit = 500, offset = 0): Promise<void> {
-    const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', { limit, offset });
+    const search = this.search().trim() || null;
+    const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', {
+      limit,
+      offset,
+      search,
+    });
     this.tracks.set(raws.map((raw) => mapTrack(raw)));
   }
 

@@ -13,6 +13,29 @@
         {{ mode }}
       </button>
     }
+    <div class="ml-auto flex items-center gap-2">
+      <div
+        class="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 py-1 text-sm focus-within:border-[var(--color-accent)]"
+      >
+        <input
+          type="search"
+          placeholder="Search title, artist, album…"
+          [value]="library.search()"
+          (input)="onSearchInput($event)"
+          class="w-56 bg-transparent text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)]"
+        />
+        @if (library.search().length > 0) {
+          <button
+            type="button"
+            (click)="clearSearch()"
+            aria-label="Clear search"
+            class="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+          >
+            ✕
+          </button>
+        }
+      </div>
+    </div>
   </header>
   <div class="flex-1 overflow-hidden">
     @switch (viewMode()) {
