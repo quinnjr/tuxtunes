@@ -214,10 +214,9 @@ mod tests {
         Db::open(tmp.path()).await.unwrap()
     }
 
-    async fn seed(
-        engine: &SqliteRawEngine,
-        rows: &[(&str, Option<&str>, Option<&str>, Option<&str>)],
-    ) {
+    type SeedRow<'a> = (&'a str, Option<&'a str>, Option<&'a str>, Option<&'a str>);
+
+    async fn seed(engine: &SqliteRawEngine, rows: &[SeedRow<'_>]) {
         for (i, (title, artist, album, genre)) in rows.iter().enumerate() {
             let sql = "INSERT INTO tracks (title, album_artist, album, genre, \
                        duration_ms, size_bytes, file_path, playlist_ids) \
