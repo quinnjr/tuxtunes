@@ -12,4 +12,7 @@ export class UiService {
 
   /** Whether the column browser strip is shown above the active view. */
   readonly columnBrowserOpen = signal(false);
+
+  /** Whether the Now Playing slide-out is visible. */
+  readonly nowPlayingOpen = signal(false);
 }

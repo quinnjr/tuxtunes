@@ -58,6 +58,13 @@ export class PlaybackService implements OnDestroy {
   readonly durationMs = signal<number>(0);
   readonly volume = signal<number>(100);
 
+  /**
+   * Up-next queue. Plain TrackRow[] so the Now Playing panel can render
+   * full metadata without re-fetching. Owned by the frontend; the
+   * engine plays whatever play() is invoked with.
+   */
+  readonly queue = signal<TrackRow[]>([]);
+
   private readonly unlisteners: UnlistenFn[] = [];
 
   constructor() {
@@ -113,5 +120,40 @@ export class PlaybackService implements OnDestroy {
 
   async setVolume(volume: number): Promise<void> {
     await this.tauri.invoke<void>('set_volume', { volume });
+  }
+
+  enqueue(track: TrackRow): void {
+    this.queue.update((q) => [...q, track]);
+  }
+
+  playNext(track: TrackRow): void {
+    this.queue.update((q) => [track, ...q]);
+  }
+
+  removeFromQueue(index: number): void {
+    this.queue.update((q) => q.filter((_, i) => i !== index));
+  }
+
+  reorderQueue(fromIndex: number, toIndex: number): void {
+    this.queue.update((q) => {
+      const next = [...q];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }
+
+  /** Pop the head of the queue and start playing it. */
+  async advanceFromQueue(): Promise<TrackRow | null> {
+    const q = this.queue();
+    if (q.length === 0) return null;
+    const [head, ...rest] = q;
+    this.queue.set(rest);
+    await this.play(head.id);
+    return head;
+  }
+
+  clearQueue(): void {
+    this.queue.set([]);
   }
 }

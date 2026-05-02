@@ -19,13 +19,17 @@
     >
       <fa-icon [icon]="faStop" />
     </button>
-    <button class="text-2xl transition hover:text-[var(--color-accent)]" aria-label="Next">
+    <button
+      class="text-2xl transition hover:text-[var(--color-accent)]"
+      (click)="next()"
+      aria-label="Next"
+    >
       <fa-icon [icon]="faNext" />
     </button>
   </div>
 
   <div
-    class="mx-4 flex h-16 items-center rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 shadow-inner"
+    class="group mx-4 flex h-16 items-center rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 shadow-inner transition hover:border-[var(--color-accent)]"
   >
     <div class="h-12 w-12 flex-shrink-0 rounded bg-[var(--color-bg-tertiary)]"></div>
     <div class="ml-3 flex min-w-0 flex-1 flex-col">
@@ -54,6 +58,15 @@
         <span class="text-xs text-[var(--color-text-muted)]">—</span>
       }
     </div>
+    <button
+      type="button"
+      (click)="toggleNowPlaying()"
+      title="Open Now Playing (Q)"
+      class="ml-2 text-xs text-[var(--color-text-muted)] opacity-0 transition group-hover:opacity-100 hover:text-[var(--color-accent)]"
+      aria-label="Open Now Playing"
+    >
+      ⤢
+    </button>
   </div>
 
   <div class="flex items-center justify-end gap-3 text-[var(--color-text-secondary)]">

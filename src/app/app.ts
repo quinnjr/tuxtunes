@@ -1,6 +1,7 @@
 import { Component, OnInit, inject } from '@angular/core';
 import { ImportWizardComponent } from './components/import-wizard/import-wizard.component';
 import { MainContentComponent } from './components/main-content/main-content.component';
+import { NowPlayingPanelComponent } from './components/now-playing-panel/now-playing-panel.component';
 import { PreferencesPanelComponent } from './components/preferences-panel/preferences-panel.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
 import { StatusBarComponent } from './components/status-bar/status-bar.component';
@@ -12,6 +13,7 @@ import { LibraryService } from './services/library.service';
   imports: [
     ImportWizardComponent,
     MainContentComponent,
+    NowPlayingPanelComponent,
     PreferencesPanelComponent,
     SidebarComponent,
     StatusBarComponent,

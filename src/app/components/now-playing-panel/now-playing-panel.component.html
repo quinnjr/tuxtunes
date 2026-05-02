@@ -1,0 +1,106 @@
+@if (ui.nowPlayingOpen()) {
+  <aside
+    class="fixed right-0 top-0 z-40 flex h-full w-96 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+  >
+    <header
+      class="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2"
+    >
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+        Now Playing
+      </h2>
+      <button
+        type="button"
+        (click)="close()"
+        aria-label="Close"
+        class="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+      >
+        ✕
+      </button>
+    </header>
+    <div class="flex flex-col items-center gap-3 border-b border-[var(--color-border)] p-4">
+      @if (currentTrack(); as t) {
+        <div
+          class="flex aspect-square w-full max-w-[300px] items-center justify-center overflow-hidden rounded bg-[var(--color-bg-elevated)] shadow"
+        >
+          @if (coverUrl(t); as src) {
+            <img
+              [src]="src"
+              alt=""
+              class="h-full w-full object-cover"
+              onerror="this.style.display = 'none'"
+            />
+          }
+        </div>
+        <div class="flex flex-col text-center">
+          <span class="text-base text-[var(--color-text-primary)]">{{ t.title }}</span>
+          <span class="text-sm text-[var(--color-text-secondary)]">
+            {{ t.artist ?? 'Unknown Artist' }} · {{ t.album ?? 'Unknown Album' }}
+          </span>
+          <span class="text-[11px] text-[var(--color-text-muted)]">
+            {{ formatTime(playback.positionMs()) }} /
+            {{ formatTime(playback.durationMs()) }}
+          </span>
+        </div>
+      } @else {
+        <div class="py-8 text-sm text-[var(--color-text-muted)]">Nothing playing</div>
+      }
+    </div>
+    <div class="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2">
+      <h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+        Up next ({{ playback.queue().length }})
+      </h3>
+      <div class="flex items-center gap-2">
+        @if (playback.queue().length > 0) {
+          <button
+            type="button"
+            (click)="advance()"
+            class="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
+          >
+            Play next
+          </button>
+          <button
+            type="button"
+            (click)="clear()"
+            class="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+          >
+            Clear
+          </button>
+        }
+      </div>
+    </div>
+    <ul cdkDropList (cdkDropListDropped)="drop($event)" class="flex-1 overflow-y-auto">
+      @if (playback.queue().length === 0) {
+        <li class="px-4 py-3 text-xs italic text-[var(--color-text-muted)]">Queue is empty</li>
+      } @else {
+        @for (t of playback.queue(); track t.id; let i = $index) {
+          <li
+            cdkDrag
+            class="flex cursor-grab items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 text-sm hover:bg-[var(--color-bg-elevated)]"
+          >
+            <button
+              type="button"
+              (dblclick)="playFromQueue(i)"
+              class="flex flex-1 flex-col items-start text-left"
+            >
+              <span class="truncate text-[var(--color-text-primary)]">{{ t.title }}</span>
+              <span class="truncate text-xs text-[var(--color-text-muted)]">
+                {{ t.artist ?? '' }}
+              </span>
+            </button>
+            <span class="text-xs text-[var(--color-text-muted)]">
+              {{ formatTime(t.durationMs) }}
+            </span>
+            <button
+              type="button"
+              (click)="remove(i)"
+              aria-label="Remove from queue"
+              class="text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+            >
+              ✕
+            </button>
+          </li>
+        }
+      }
+    </ul>
+  </aside>
+}

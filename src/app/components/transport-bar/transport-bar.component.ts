@@ -12,6 +12,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
 import { PlaybackService } from '../../services/playback.service';
+import { UiService } from '../../services/ui.service';
 import { formatMmSs } from '../../utils/time';
 
 @Component({
@@ -22,6 +23,7 @@ import { formatMmSs } from '../../utils/time';
 export class TransportBarComponent {
   protected readonly playback = inject(PlaybackService);
   private readonly library = inject(LibraryService);
+  private readonly ui = inject(UiService);
 
   protected readonly faPlay = faPlay;
   protected readonly faPause = faPause;
@@ -73,5 +75,15 @@ export class TransportBarComponent {
 
   protected formatTime(ms: number): string {
     return formatMmSs(ms);
+  }
+
+  protected toggleNowPlaying(): void {
+    this.ui.nowPlayingOpen.update((v) => !v);
+  }
+
+  protected async next(): Promise<void> {
+    // For v1, "Next" pulls from the user-built queue. Auto-advance on
+    // natural track end is wired separately via PlaybackService.
+    await this.playback.advanceFromQueue();
   }
 }
