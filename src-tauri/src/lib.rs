@@ -40,6 +40,7 @@ pub fn run() {
             commands::library::verify_library,
             commands::library::remove_track,
             commands::library::trash_track,
+            commands::library::show_in_files,
             commands::playback::play_track,
             commands::playback::pause,
             commands::playback::resume,

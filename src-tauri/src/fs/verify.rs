@@ -33,7 +33,7 @@ pub async fn verify_all<R: Runtime>(
     };
     let mut offset = 0i64;
     loop {
-        let batch = tracks::list(engine, PAGE, offset, &Default::default()).await?;
+        let batch = tracks::list(engine, PAGE, offset, &Default::default(), None).await?;
         if batch.is_empty() {
             break;
         }

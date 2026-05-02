@@ -1,0 +1,36 @@
+@if (ctx.open(); as state) {
+  <div
+    class="fixed inset-0 z-50"
+    (click)="ctx.hide()"
+    (keydown.escape)="ctx.hide()"
+    role="presentation"
+  >
+    <ul
+      data-context-menu
+      class="absolute min-w-[200px] rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] py-1 text-sm shadow-xl"
+      [style.left.px]="state.x"
+      [style.top.px]="state.y"
+    >
+      @for (item of state.items; track $index) {
+        @if (isDivider(item)) {
+          <li class="my-1 h-px bg-[var(--color-border)]" role="separator"></li>
+        } @else {
+          <li>
+            <button
+              type="button"
+              [disabled]="item.disabled"
+              (click)="onItemClick(item); $event.stopPropagation()"
+              [class]="
+                item.destructive
+                  ? 'flex w-full items-center px-3 py-1 text-left text-[var(--color-accent)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50'
+                  : 'flex w-full items-center px-3 py-1 text-left text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-50'
+              "
+            >
+              {{ item.label }}
+            </button>
+          </li>
+        }
+      }
+    </ul>
+  </div>
+}

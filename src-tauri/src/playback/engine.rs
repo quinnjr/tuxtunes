@@ -326,7 +326,7 @@ fn handle_event(
         Event::FileLoaded => {
             state.emit_state(app, PlaybackState::Playing);
         }
-        Event::EndFile(_) => {
+        Event::EndFile(reason) => {
             let prev = state.current_track;
             if let Some(id) = prev {
                 let _ = track_tx.send(PlaybackTracking::TrackEnded {
@@ -334,6 +334,15 @@ fn handle_event(
                     position_ms: state.last_position_ms,
                     duration_ms: state.last_duration_ms,
                 });
+                // Distinguish a natural EOF (advance the queue) from a
+                // user-initiated stop or shutdown (don't). libmpv2's
+                // EndFileReason is a `c_uint` alias from libmpv2_sys —
+                // 0=EOF, 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT — and only
+                // EOF means the track played through to its end.
+                const REASON_EOF: libmpv2::EndFileReason = 0;
+                if reason == REASON_EOF {
+                    let _ = app.emit(events::TRACK_ENDED, events::TrackEnded { track_id: id });
+                }
             }
             state.current_track = None;
             state.last_emitted_position_ms = 0;

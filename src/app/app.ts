@@ -1,4 +1,5 @@
 import { Component, OnInit, inject } from '@angular/core';
+import { ContextMenuComponent } from './components/context-menu/context-menu.component';
 import { ImportWizardComponent } from './components/import-wizard/import-wizard.component';
 import { MainContentComponent } from './components/main-content/main-content.component';
 import { NowPlayingPanelComponent } from './components/now-playing-panel/now-playing-panel.component';
@@ -11,6 +12,7 @@ import { LibraryService } from './services/library.service';
 @Component({
   selector: 'app-root',
   imports: [
+    ContextMenuComponent,
     ImportWizardComponent,
     MainContentComponent,
     NowPlayingPanelComponent,

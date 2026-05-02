@@ -25,21 +25,77 @@ pub enum TracksError {
     Query(#[source] anyhow::Error),
 }
 
+/// Sort spec for the track-list view. The `column` field is validated
+/// against an allowlist below so user-supplied input never reaches SQL.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrackSort {
+    pub column: String,
+    #[serde(default)]
+    pub descending: bool,
+}
+
+impl Default for TrackSort {
+    fn default() -> Self {
+        Self {
+            column: "date_added".into(),
+            descending: true,
+        }
+    }
+}
+
+/// Map a logical sort column to its SQL ORDER BY expression. Unknown
+/// columns return None so the caller can fall back to the default.
+/// User input is validated against this allowlist — no string-built SQL.
+fn sort_expr_for(column: &str, descending: bool) -> Option<String> {
+    let (expr, nocase): (&str, bool) = match column {
+        "title" => ("title", true),
+        "artist" => ("COALESCE(NULLIF(album_artist, ''), NULLIF(artist, ''))", true),
+        "album" => ("album", true),
+        "genre" => ("genre", true),
+        "year" => ("year", false),
+        "duration_ms" => ("duration_ms", false),
+        "rating" => ("rating", false),
+        "play_count" => ("play_count", false),
+        "last_played" => ("last_played", false),
+        "date_added" => ("date_added", false),
+        "bit_rate" => ("bit_rate", false),
+        "sample_rate" => ("sample_rate", false),
+        "kind" => ("kind", true),
+        "size_bytes" => ("size_bytes", false),
+        _ => return None,
+    };
+    let dir = if descending { "DESC" } else { "ASC" };
+    let nulls = if descending { "FIRST" } else { "LAST" };
+    Some(if nocase {
+        format!("{expr} COLLATE NOCASE {dir} NULLS {nulls}")
+    } else {
+        format!("{expr} {dir} NULLS {nulls}")
+    })
+}
+
 pub async fn list(
     engine: &SqliteRawEngine,
     limit: i64,
     offset: i64,
     filters: &crate::db::distinct::TrackFilters,
+    sort: Option<&TrackSort>,
 ) -> Result<Vec<TrackRow>, TracksError> {
     use prax_query::filter::FilterValue as FV;
 
     let (where_clause, mut params) = crate::db::distinct::build_where(filters);
 
+    // Resolve the requested sort; unknown columns fall back to the
+    // default rather than erroring — the UI's column picker is the
+    // primary entry point and a typo there shouldn't break the view.
+    let order_expr = sort
+        .and_then(|s| sort_expr_for(&s.column, s.descending))
+        .unwrap_or_else(|| "date_added DESC, id DESC".to_string());
+
     let sql = format!(
         "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
          sample_rate, bit_depth, kind, play_count, skip_count \
          FROM tracks {where_clause} \
-         ORDER BY date_added DESC, id DESC \
+         ORDER BY {order_expr} \
          LIMIT ? OFFSET ?"
     );
     params.push(FV::Int(limit));
@@ -404,7 +460,7 @@ mod tests {
         let db = tmp_db().await;
         let a = insert_fixture(&db.engine, "Alpha", "/tmp/a.flac").await;
         let b = insert_fixture(&db.engine, "Bravo", "/tmp/b.flac").await;
-        let rows = list(&db.engine, 10, 0, &Default::default()).await.unwrap();
+        let rows = list(&db.engine, 10, 0, &Default::default(), None).await.unwrap();
         assert_eq!(rows.len(), 2);
         // newest first — Bravo was inserted second → has the higher id
         assert_eq!(rows[0].id, b);
@@ -421,7 +477,7 @@ mod tests {
             search: Some("brav".into()),
             ..Default::default()
         };
-        let rows = list(&db.engine, 10, 0, &f).await.unwrap();
+        let rows = list(&db.engine, 10, 0, &f, None).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Bravo");
     }
@@ -436,9 +492,42 @@ mod tests {
             search: Some("%".into()),
             ..Default::default()
         };
-        let rows = list(&db.engine, 10, 0, &f).await.unwrap();
+        let rows = list(&db.engine, 10, 0, &f, None).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "100% pure");
+    }
+
+    #[tokio::test]
+    async fn list_sort_by_title_ascending() {
+        let db = tmp_db().await;
+        insert_fixture(&db.engine, "Charlie", "/tmp/c.flac").await;
+        insert_fixture(&db.engine, "Alpha", "/tmp/a.flac").await;
+        insert_fixture(&db.engine, "Bravo", "/tmp/b.flac").await;
+        let sort = TrackSort {
+            column: "title".into(),
+            descending: false,
+        };
+        let rows = list(&db.engine, 10, 0, &Default::default(), Some(&sort))
+            .await
+            .unwrap();
+        let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, vec!["Alpha", "Bravo", "Charlie"]);
+    }
+
+    #[tokio::test]
+    async fn list_sort_unknown_column_falls_back_to_default() {
+        let db = tmp_db().await;
+        // Default order is date_added DESC, id DESC — last inserted first.
+        let _a = insert_fixture(&db.engine, "Alpha", "/tmp/a.flac").await;
+        let b = insert_fixture(&db.engine, "Bravo", "/tmp/b.flac").await;
+        let sort = TrackSort {
+            column: "bogus".into(),
+            descending: false,
+        };
+        let rows = list(&db.engine, 10, 0, &Default::default(), Some(&sort))
+            .await
+            .unwrap();
+        assert_eq!(rows[0].id, b);
     }
 
     #[tokio::test]

@@ -2,7 +2,7 @@
 
 use crate::db::albums::{self, AlbumSummary, ArtistSummary};
 use crate::db::distinct::{self, DistinctValue, TrackFilters};
-use crate::db::tracks::{self, TrackRow};
+use crate::db::tracks::{self, TrackRow, TrackSort};
 use crate::library::ingest;
 use crate::runtime::AppState;
 use prax_query::filter::FilterValue;
@@ -48,9 +48,10 @@ pub async fn list_tracks(
     limit: i64,
     offset: i64,
     filters: Option<TrackFilters>,
+    sort: Option<TrackSort>,
 ) -> Result<Vec<TrackRow>, String> {
     let f = filters.unwrap_or_default();
-    tracks::list(&state.db.engine, limit, offset, &f)
+    tracks::list(&state.db.engine, limit, offset, &f, sort.as_ref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -145,6 +146,29 @@ pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> R
         .engine
         .raw_sql_execute(sql, &[FilterValue::Int(track_id)])
         .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Reveal the track's containing folder in the user's file manager
+/// via `xdg-open`. The crate is Linux-only (see CLAUDE.md / design doc
+/// non-goals), so xdg-open is the standard cross-DE entry point —
+/// `tauri-plugin-shell::Shell::open` is deprecated.
+#[tauri::command]
+pub async fn show_in_files(
+    state: tauri::State<'_, AppState>,
+    track_id: i64,
+) -> Result<(), String> {
+    let row = tracks::get(&state.db.engine, track_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let parent = std::path::Path::new(&row.file_path)
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| "no parent directory".to_string())?;
+    std::process::Command::new("xdg-open")
+        .arg(parent)
+        .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
 }

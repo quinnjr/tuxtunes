@@ -7,6 +7,7 @@
 use serde::Serialize;
 
 pub const TRACK_CHANGED: &str = "playback:track-changed";
+pub const TRACK_ENDED: &str = "playback:track-ended";
 pub const POSITION_UPDATE: &str = "playback:position-update";
 pub const STATE_CHANGED: &str = "playback:state-changed";
 pub const VOLUME_CHANGED: &str = "playback:volume-changed";
@@ -26,6 +27,14 @@ pub enum PlaybackState {
 pub struct TrackChanged {
     pub track_id: Option<i64>,
     pub prev_track_id: Option<i64>,
+}
+
+/// Emitted when a track reaches its natural end (mpv `EndFileReason::Eof`).
+/// Distinct from `track-changed` so the UI can treat user-initiated stops
+/// and natural completion differently — only the latter advances a queue.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct TrackEnded {
+    pub track_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -131,11 +140,19 @@ mod tests {
         // PlaybackService listens on. Changing any of these is a
         // protocol break.
         assert_eq!(TRACK_CHANGED, "playback:track-changed");
+        assert_eq!(TRACK_ENDED, "playback:track-ended");
         assert_eq!(POSITION_UPDATE, "playback:position-update");
         assert_eq!(STATE_CHANGED, "playback:state-changed");
         assert_eq!(VOLUME_CHANGED, "playback:volume-changed");
         assert_eq!(DEVICE_CHANGED, "playback:device-changed");
         assert_eq!(WARNING, "playback:warning");
+    }
+
+    #[test]
+    fn track_ended_serializes_with_track_id() {
+        let t = TrackEnded { track_id: 42 };
+        let json = serde_json::to_string(&t).unwrap();
+        assert_eq!(json, r#"{"track_id":42}"#);
     }
 
     #[test]
