@@ -1,3 +1,4 @@
+pub mod albums;
 pub mod client;
 pub mod playlists;
 pub mod preferences;

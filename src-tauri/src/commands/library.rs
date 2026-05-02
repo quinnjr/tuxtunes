@@ -1,5 +1,6 @@
 //! Library-scoped Tauri commands.
 
+use crate::db::albums::{self, AlbumSummary, ArtistSummary};
 use crate::db::tracks::{self, TrackRow};
 use crate::library::ingest;
 use crate::runtime::AppState;
@@ -48,6 +49,31 @@ pub async fn list_tracks(
     search: Option<String>,
 ) -> Result<Vec<TrackRow>, String> {
     tracks::list(&state.db.engine, limit, offset, search.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_albums(state: tauri::State<'_, AppState>) -> Result<Vec<AlbumSummary>, String> {
+    albums::list_albums(&state.db.engine)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_artists(state: tauri::State<'_, AppState>) -> Result<Vec<ArtistSummary>, String> {
+    albums::list_artists(&state.db.engine)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn tracks_for_album(
+    state: tauri::State<'_, AppState>,
+    album_artist: String,
+    album: String,
+) -> Result<Vec<TrackRow>, String> {
+    albums::tracks_for_album(&state.db.engine, &album_artist, &album)
         .await
         .map_err(|e| e.to_string())
 }

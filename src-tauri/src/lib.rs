@@ -32,6 +32,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::library::get_library_stats,
             commands::library::list_tracks,
+            commands::library::list_albums,
+            commands::library::list_artists,
+            commands::library::tracks_for_album,
             commands::library::pick_and_add_track,
             commands::library::verify_library,
             commands::library::remove_track,
