@@ -1,4 +1,4 @@
-import { Injectable, OnDestroy, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriService } from './tauri.service';
 import {
@@ -32,6 +32,19 @@ export class SyncService implements OnDestroy {
   readonly warnings = signal<SyncWarning[]>([]);
   readonly lastComplete = signal<SyncComplete | null>(null);
   readonly lastError = signal<SyncFailed | null>(null);
+
+  /**
+   * Coarse run state derived from the event signals. `running` while a
+   * progress event is the latest signal, `error` if a failure outranks
+   * the most recent completion, otherwise `idle`.
+   */
+  readonly runState = computed<'idle' | 'running' | 'error'>(this.#computeRunState.bind(this));
+
+  #computeRunState(): 'idle' | 'running' | 'error' {
+    if (this.progress() && !this.lastComplete() && !this.lastError()) return 'running';
+    if (this.lastError()) return 'error';
+    return 'idle';
+  }
 
   private readonly unlisteners: UnlistenFn[] = [];
 

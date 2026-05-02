@@ -1,0 +1,16 @@
+<footer
+  class="flex h-7 items-center gap-3 border-t border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 text-[11px] text-[var(--color-text-muted)]"
+>
+  @if (summary(); as s) {
+    <span>{{ s.songs }}</span>
+    <span class="text-[var(--color-border-strong)]">·</span>
+    <span>{{ s.duration }}</span>
+    <span class="text-[var(--color-border-strong)]">·</span>
+    <span>{{ s.size }}</span>
+  } @else {
+    <span class="italic">Loading library…</span>
+  }
+  @if (syncLabel(); as label) {
+    <span class="ml-auto text-[var(--color-text-secondary)]">{{ label }}</span>
+  }
+</footer>

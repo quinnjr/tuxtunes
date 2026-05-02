@@ -13,13 +13,6 @@
         {{ mode }}
       </button>
     }
-    <div class="ml-auto text-xs text-[var(--color-text-muted)]">
-      @if (library.stats(); as s) {
-        {{ s.trackCount }} songs · {{ s.totalSizeBytes }} bytes
-      } @else {
-        Loading…
-      }
-    </div>
   </header>
   <div class="flex-1 overflow-hidden">
     @switch (viewMode()) {
