@@ -1,12 +1,19 @@
 import { Component, inject } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
 import { LibraryView, UiService } from '../../services/ui.service';
+import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
+import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
 import { SettingsAudioComponent } from '../settings-audio/settings-audio.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
 
 @Component({
   selector: 'app-main-content',
-  imports: [TrackListViewComponent, SettingsAudioComponent],
+  imports: [
+    AlbumGridViewComponent,
+    ArtistSplitViewComponent,
+    SettingsAudioComponent,
+    TrackListViewComponent,
+  ],
   templateUrl: './main-content.component.html',
 })
 export class MainContentComponent {

@@ -1,0 +1,66 @@
+<div class="flex h-full">
+  <aside
+    class="flex w-64 flex-col overflow-y-auto border-r border-[var(--color-border)] bg-[var(--color-bg-surface)]"
+  >
+    @if (library.artists().length === 0) {
+      <div class="p-4 text-sm text-[var(--color-text-muted)]">No artists in library</div>
+    } @else {
+      @for (a of library.artists(); track trackByArtist($index, a)) {
+        <button
+          type="button"
+          (click)="select(a)"
+          [class]="
+            selected() === a.artist
+              ? 'flex items-baseline justify-between border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-4 py-2 text-left text-sm text-[var(--color-text-primary)]'
+              : 'flex items-baseline justify-between border-l-2 border-transparent px-4 py-2 text-left text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
+          "
+        >
+          <span class="truncate">{{ a.artist }}</span>
+          <span class="ml-2 text-[10px] text-[var(--color-text-muted)]">
+            {{ a.trackCount }}
+          </span>
+        </button>
+      }
+    }
+  </aside>
+  <div class="flex flex-1 flex-col overflow-y-auto p-4">
+    @if (selected(); as artist) {
+      <h2 class="mb-2 text-lg text-[var(--color-text-primary)]">{{ artist }}</h2>
+      <div class="mb-3 text-xs text-[var(--color-text-muted)]">
+        {{ albumsForSelected().length }}
+        {{ albumsForSelected().length === 1 ? 'album' : 'albums' }} · {{ tracks().length }} tracks
+      </div>
+      @for (al of albumsForSelected(); track trackByAlbum($index, al)) {
+        <section class="mb-4">
+          <header class="mb-1 text-sm text-[var(--color-text-secondary)]">
+            {{ al.album }}
+            @if (al.year) {
+              <span class="text-[var(--color-text-muted)]"> · {{ al.year }}</span>
+            }
+          </header>
+          <ul
+            class="divide-y divide-[var(--color-border)] rounded bg-[var(--color-bg-surface)] text-sm"
+          >
+            @for (t of tracks(); track trackByTrack($index, t)) {
+              @if (t.album === al.album) {
+                <li
+                  (dblclick)="play(t)"
+                  class="flex cursor-pointer items-center gap-3 px-3 py-1 hover:bg-[var(--color-bg-elevated)]"
+                >
+                  <span class="flex-1 truncate">{{ t.title }}</span>
+                  <span class="text-[var(--color-text-muted)]">
+                    {{ formatDuration(t.durationMs) }}
+                  </span>
+                </li>
+              }
+            }
+          </ul>
+        </section>
+      }
+    } @else {
+      <div class="flex h-full items-center justify-center text-[var(--color-text-muted)]">
+        Select an artist
+      </div>
+    }
+  </div>
+</div>

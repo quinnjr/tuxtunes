@@ -42,6 +42,12 @@
       @case ('tracks') {
         <app-track-list-view class="block h-full" />
       }
+      @case ('albums') {
+        <app-album-grid-view class="block h-full" />
+      }
+      @case ('artists') {
+        <app-artist-split-view class="block h-full" />
+      }
       @case ('settings') {
         <app-settings-audio class="block h-full" />
       }

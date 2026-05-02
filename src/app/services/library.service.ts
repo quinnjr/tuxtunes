@@ -14,12 +14,44 @@ interface LibraryStatsRaw {
   total_size_bytes: number;
 }
 
+export interface AlbumSummary {
+  album: string;
+  albumArtist: string;
+  year: number | null;
+  trackCount: number;
+  totalDurationMs: number;
+  artworkPath: string | null;
+}
+
+interface AlbumSummaryRaw {
+  album: string;
+  album_artist: string;
+  year: number | null;
+  track_count: number;
+  total_duration_ms: number;
+  artwork_path: string | null;
+}
+
+export interface ArtistSummary {
+  artist: string;
+  albumCount: number;
+  trackCount: number;
+}
+
+interface ArtistSummaryRaw {
+  artist: string;
+  album_count: number;
+  track_count: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class LibraryService {
   private readonly tauri = inject(TauriService);
 
   readonly stats = signal<LibraryStats | null>(null);
   readonly tracks = signal<TrackRow[]>([]);
+  readonly albums = signal<AlbumSummary[]>([]);
+  readonly artists = signal<ArtistSummary[]>([]);
 
   /**
    * O(1) id → track lookup, derived from `tracks`. Rebuilt once per
@@ -67,5 +99,38 @@ export class LibraryService {
     this.tracks.update((cur) => [mapped, ...cur]);
     await this.refreshStats();
     return mapped;
+  }
+
+  async refreshAlbums(): Promise<void> {
+    const raws = await this.tauri.invoke<AlbumSummaryRaw[]>('list_albums');
+    this.albums.set(
+      raws.map((r) => ({
+        album: r.album,
+        albumArtist: r.album_artist,
+        year: r.year,
+        trackCount: r.track_count,
+        totalDurationMs: r.total_duration_ms,
+        artworkPath: r.artwork_path,
+      })),
+    );
+  }
+
+  async refreshArtists(): Promise<void> {
+    const raws = await this.tauri.invoke<ArtistSummaryRaw[]>('list_artists');
+    this.artists.set(
+      raws.map((r) => ({
+        artist: r.artist,
+        albumCount: r.album_count,
+        trackCount: r.track_count,
+      })),
+    );
+  }
+
+  async tracksForAlbum(albumArtist: string, album: string): Promise<TrackRow[]> {
+    const raws = await this.tauri.invoke<TrackRowRaw[]>('tracks_for_album', {
+      albumArtist,
+      album,
+    });
+    return raws.map((raw) => mapTrack(raw));
   }
 }
