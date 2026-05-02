@@ -1,6 +1,7 @@
 //! Library-scoped Tauri commands.
 
 use crate::db::albums::{self, AlbumSummary, ArtistSummary};
+use crate::db::distinct::{self, DistinctValue, TrackFilters};
 use crate::db::tracks::{self, TrackRow};
 use crate::library::ingest;
 use crate::runtime::AppState;
@@ -46,9 +47,22 @@ pub async fn list_tracks(
     state: tauri::State<'_, AppState>,
     limit: i64,
     offset: i64,
-    search: Option<String>,
+    filters: Option<TrackFilters>,
 ) -> Result<Vec<TrackRow>, String> {
-    tracks::list(&state.db.engine, limit, offset, search.as_deref())
+    let f = filters.unwrap_or_default();
+    tracks::list(&state.db.engine, limit, offset, &f)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_distinct(
+    state: tauri::State<'_, AppState>,
+    column: String,
+    filters: Option<TrackFilters>,
+) -> Result<Vec<DistinctValue>, String> {
+    let f = filters.unwrap_or_default();
+    distinct::get_distinct(&state.db.engine, &column, &f)
         .await
         .map_err(|e| e.to_string())
 }

@@ -44,6 +44,32 @@ interface ArtistSummaryRaw {
   track_count: number;
 }
 
+export type DistinctColumn = 'genre' | 'artist' | 'album';
+
+export interface DistinctValue {
+  value: string;
+  count: number;
+}
+
+/**
+ * Filters that compose with the track list and distinct queries.
+ * `genres`/`artists`/`albums` slots OR within a slot, AND across slots
+ * — same shape as the Rust side's TrackFilters.
+ */
+export interface TrackFilters {
+  genres: string[];
+  artists: string[];
+  albums: string[];
+  search: string | null;
+}
+
+export const EMPTY_FILTERS: TrackFilters = {
+  genres: [],
+  artists: [],
+  albums: [],
+  search: null,
+};
+
 @Injectable({ providedIn: 'root' })
 export class LibraryService {
   private readonly tauri = inject(TauriService);
@@ -52,6 +78,9 @@ export class LibraryService {
   readonly tracks = signal<TrackRow[]>([]);
   readonly albums = signal<AlbumSummary[]>([]);
   readonly artists = signal<ArtistSummary[]>([]);
+
+  /** Active column-browser + search filters. Drives refreshTracks(). */
+  readonly filters = signal<TrackFilters>({ ...EMPTY_FILTERS });
 
   /**
    * O(1) id → track lookup, derived from `tracks`. Rebuilt once per
@@ -76,20 +105,33 @@ export class LibraryService {
   }
 
   /**
-   * Currently-applied text search. The empty string means "show all";
-   * components that mutate this should call `refreshTracks()` to
-   * propagate the new filter into `tracks`.
+   * Convenience: the search slot of `filters`, surfaced as a writable
+   * signal so the search input doesn't need to know about the rest of
+   * the filter shape. Setting this updates `filters` immutably.
    */
   readonly search = signal<string>('');
 
+  setSearch(value: string): void {
+    this.search.set(value);
+    const trimmed = value.trim();
+    this.filters.update((f) => ({ ...f, search: trimmed === '' ? null : trimmed }));
+  }
+
   async refreshTracks(limit = 500, offset = 0): Promise<void> {
-    const search = this.search().trim() || null;
     const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', {
       limit,
       offset,
-      search,
+      filters: this.filters(),
     });
     this.tracks.set(raws.map((raw) => mapTrack(raw)));
+  }
+
+  async getDistinct(column: DistinctColumn): Promise<DistinctValue[]> {
+    const raws = await this.tauri.invoke<DistinctValue[]>('get_distinct', {
+      column,
+      filters: this.filters(),
+    });
+    return raws;
   }
 
   async addTrackFromPicker(): Promise<TrackRow | null> {

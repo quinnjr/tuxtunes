@@ -29,30 +29,11 @@ pub async fn list(
     engine: &SqliteRawEngine,
     limit: i64,
     offset: i64,
-    search: Option<&str>,
+    filters: &crate::db::distinct::TrackFilters,
 ) -> Result<Vec<TrackRow>, TracksError> {
     use prax_query::filter::FilterValue as FV;
 
-    let trimmed = search.map(str::trim).filter(|s| !s.is_empty());
-
-    let (where_clause, mut params) = match trimmed {
-        Some(q) => {
-            let pattern = format!("%{}%", escape_like(q));
-            (
-                "WHERE (title LIKE ? ESCAPE '\\' \
-                  OR artist LIKE ? ESCAPE '\\' \
-                  OR album LIKE ? ESCAPE '\\' \
-                  OR album_artist LIKE ? ESCAPE '\\')",
-                vec![
-                    FV::String(pattern.clone()),
-                    FV::String(pattern.clone()),
-                    FV::String(pattern.clone()),
-                    FV::String(pattern),
-                ],
-            )
-        }
-        None => ("", Vec::new()),
-    };
+    let (where_clause, mut params) = crate::db::distinct::build_where(filters);
 
     let sql = format!(
         "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
@@ -74,19 +55,6 @@ pub async fn list(
         .collect::<Result<Vec<TrackRow>, _>>()
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
     Ok(rows)
-}
-
-/// Escape SQL LIKE wildcards so a user-typed `%` or `_` doesn't expand
-/// into a wildcard match. Pairs with `ESCAPE '\\'` in the LIKE clause.
-fn escape_like(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        if matches!(ch, '\\' | '%' | '_') {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
@@ -436,7 +404,7 @@ mod tests {
         let db = tmp_db().await;
         let a = insert_fixture(&db.engine, "Alpha", "/tmp/a.flac").await;
         let b = insert_fixture(&db.engine, "Bravo", "/tmp/b.flac").await;
-        let rows = list(&db.engine, 10, 0, None).await.unwrap();
+        let rows = list(&db.engine, 10, 0, &Default::default()).await.unwrap();
         assert_eq!(rows.len(), 2);
         // newest first — Bravo was inserted second → has the higher id
         assert_eq!(rows[0].id, b);
@@ -445,22 +413,30 @@ mod tests {
 
     #[tokio::test]
     async fn list_filters_by_search_substring_case_insensitive() {
+        use crate::db::distinct::TrackFilters;
         let db = tmp_db().await;
         insert_fixture(&db.engine, "Alpha", "/tmp/a.flac").await;
         insert_fixture(&db.engine, "Bravo", "/tmp/b.flac").await;
-        // SQLite LIKE is case-insensitive for ASCII by default.
-        let rows = list(&db.engine, 10, 0, Some("brav")).await.unwrap();
+        let f = TrackFilters {
+            search: Some("brav".into()),
+            ..Default::default()
+        };
+        let rows = list(&db.engine, 10, 0, &f).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "Bravo");
     }
 
     #[tokio::test]
     async fn list_search_escapes_like_wildcards() {
+        use crate::db::distinct::TrackFilters;
         let db = tmp_db().await;
         insert_fixture(&db.engine, "Alpha", "/tmp/a.flac").await;
         insert_fixture(&db.engine, "100% pure", "/tmp/p.flac").await;
-        // A literal `%` must not act as a wildcard.
-        let rows = list(&db.engine, 10, 0, Some("%")).await.unwrap();
+        let f = TrackFilters {
+            search: Some("%".into()),
+            ..Default::default()
+        };
+        let rows = list(&db.engine, 10, 0, &f).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "100% pure");
     }

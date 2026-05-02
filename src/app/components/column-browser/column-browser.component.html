@@ -1,0 +1,53 @@
+<div
+  class="grid h-full grid-cols-3 divide-x divide-[var(--color-border)] bg-[var(--color-bg-surface)]"
+>
+  @for (pane of visiblePanes(); track pane.column; let i = $index) {
+    <div class="flex h-full min-h-0 flex-col">
+      <header
+        class="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-1 text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]"
+      >
+        <span class="flex-1">{{ paneTitle(pane.column) }}</span>
+        @if (activeValuesFor(pane.column).length > 0) {
+          <button
+            type="button"
+            (click)="clearPane(pane.column)"
+            class="text-[10px] normal-case text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
+          >
+            Clear
+          </button>
+        }
+      </header>
+      <div class="border-b border-[var(--color-border)] px-2 py-1">
+        <input
+          type="search"
+          placeholder="Filter…"
+          [value]="paneSearchValue(i)"
+          (input)="onPaneSearchInput(i, $event)"
+          class="w-full rounded bg-[var(--color-bg-primary)] px-2 py-0.5 text-xs text-[var(--color-text-primary)] outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+        />
+      </div>
+      <ul class="min-h-0 flex-1 overflow-y-auto text-xs">
+        @if (pane.values.length === 0) {
+          <li class="px-3 py-1 text-[var(--color-text-muted)] italic">No matches</li>
+        } @else {
+          @for (v of pane.values; track trackByValue($index, v)) {
+            <li>
+              <button
+                type="button"
+                (click)="onValueClick(pane.column, v.value, $event)"
+                [class]="
+                  isSelected(pane.column, v.value)
+                    ? 'flex w-full items-baseline justify-between bg-[var(--color-accent)] px-3 py-0.5 text-left text-white'
+                    : 'flex w-full items-baseline justify-between px-3 py-0.5 text-left hover:bg-[var(--color-bg-elevated)]'
+                "
+              >
+                <span class="truncate">{{ v.value }}</span>
+                <span class="ml-2 text-[10px] opacity-70">({{ v.count }})</span>
+              </button>
+            </li>
+          }
+        }
+      </ul>
+    </div>
+  }
+</div>

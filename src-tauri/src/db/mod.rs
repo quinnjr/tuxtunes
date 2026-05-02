@@ -1,5 +1,6 @@
 pub mod albums;
 pub mod client;
+pub mod distinct;
 pub mod playlists;
 pub mod preferences;
 pub mod sync_sources;

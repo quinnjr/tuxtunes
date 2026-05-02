@@ -35,6 +35,7 @@ pub fn run() {
             commands::library::list_albums,
             commands::library::list_artists,
             commands::library::tracks_for_album,
+            commands::library::get_distinct,
             commands::library::pick_and_add_track,
             commands::library::verify_library,
             commands::library::remove_track,

@@ -35,27 +35,46 @@
           </button>
         }
       </div>
+      <button
+        type="button"
+        (click)="toggleBrowser()"
+        [class]="
+          ui.columnBrowserOpen()
+            ? 'rounded bg-[var(--color-accent)] px-3 py-1 text-sm text-white'
+            : 'rounded border border-[var(--color-border)] px-3 py-1 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]'
+        "
+        title="Toggle Column Browser"
+      >
+        Browse
+      </button>
     </div>
   </header>
-  <div class="flex-1 overflow-hidden">
-    @switch (viewMode()) {
-      @case ('tracks') {
-        <app-track-list-view class="block h-full" />
-      }
-      @case ('albums') {
-        <app-album-grid-view class="block h-full" />
-      }
-      @case ('artists') {
-        <app-artist-split-view class="block h-full" />
-      }
-      @case ('settings') {
-        <app-settings-audio class="block h-full" />
-      }
-      @default {
-        <div class="flex h-full items-center justify-center text-[var(--color-text-muted)]">
-          {{ viewMode() }} view — coming soon
-        </div>
-      }
+  <div class="flex flex-1 flex-col overflow-hidden">
+    @if (ui.columnBrowserOpen() && viewMode() !== 'settings') {
+      <div class="h-56 shrink-0 border-b border-[var(--color-border)]">
+        <app-column-browser class="block h-full" />
+      </div>
     }
+    <div class="flex-1 overflow-hidden">
+      @switch (viewMode()) {
+        @case ('tracks') {
+          <app-track-list-view class="block h-full" />
+        }
+        @case ('albums') {
+          <app-album-grid-view class="block h-full" />
+        }
+        @case ('artists') {
+          <app-artist-split-view class="block h-full" />
+        }
+        @case ('settings') {
+          <app-settings-audio class="block h-full" />
+        }
+        @default {
+          <div class="flex h-full items-center justify-center text-[var(--color-text-muted)]">
+            {{ viewMode() }} view — coming soon
+          </div>
+        }
+      }
+    </div>
   </div>
 </section>
