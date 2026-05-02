@@ -1,0 +1,136 @@
+<div class="flex h-full flex-col">
+  <nav class="flex border-b border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+    @for (t of tabs; track t.id) {
+      <button
+        type="button"
+        (click)="setTab(t.id)"
+        [class]="
+          tab() === t.id
+            ? 'border-b-2 border-[var(--color-accent)] px-4 py-2 text-sm text-[var(--color-text-primary)]'
+            : 'border-b-2 border-transparent px-4 py-2 text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-accent)]'
+        "
+      >
+        {{ t.label }}
+      </button>
+    }
+  </nav>
+  <div class="flex-1 overflow-y-auto p-4">
+    @switch (tab()) {
+      @case ('playback') {
+        <app-settings-audio class="block" />
+      }
+      @case ('sync') {
+        <section class="flex flex-col gap-3">
+          <header class="flex items-center justify-between">
+            <h2 class="text-base text-[var(--color-text-primary)]">Sync Sources</h2>
+            <button
+              type="button"
+              (click)="openImportWizard()"
+              class="rounded bg-[var(--color-accent)] px-3 py-1 text-sm text-white"
+            >
+              Add iTunes library…
+            </button>
+          </header>
+          @if (sync.sources().length === 0) {
+            <p class="text-sm text-[var(--color-text-muted)]">
+              No sync sources yet. Use the wizard above to import an iTunes library.
+            </p>
+          } @else {
+            <ul
+              class="divide-y divide-[var(--color-border)] rounded border border-[var(--color-border)]"
+            >
+              @for (s of sync.sources(); track s.id) {
+                <li class="flex items-center gap-3 p-3">
+                  <div class="flex flex-1 flex-col">
+                    <span class="text-sm text-[var(--color-text-primary)]">{{ s.name }}</span>
+                    <span class="truncate text-xs text-[var(--color-text-muted)]">
+                      {{ s.sourcePath }}
+                    </span>
+                    <span class="text-[10px] text-[var(--color-text-muted)]">
+                      Last sync: {{ formatLastSync(s.lastSyncAt) }}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    (click)="runSync(s.id)"
+                    class="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-primary)] hover:border-[var(--color-accent)]"
+                  >
+                    Sync now
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+          @if (sync.runState() === 'running' && sync.progress(); as p) {
+            <div
+              class="mt-2 rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3 text-xs text-[var(--color-text-secondary)]"
+            >
+              <div class="mb-1 flex items-center justify-between">
+                <span class="capitalize">{{ p.phase.replaceAll('_', ' ') }}</span>
+                <span>{{ p.current }} / {{ p.total }}</span>
+              </div>
+              @if (p.message) {
+                <div class="text-[var(--color-text-muted)]">{{ p.message }}</div>
+              }
+            </div>
+          }
+          @if (sync.lastError(); as e) {
+            <p class="text-xs text-[var(--color-accent)]">{{ e.error }}</p>
+          }
+        </section>
+      }
+      @case ('maintenance') {
+        <section class="flex flex-col gap-4">
+          <h2 class="text-base text-[var(--color-text-primary)]">Library Maintenance</h2>
+          <div class="rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
+            <h3 class="mb-1 text-sm text-[var(--color-text-primary)]">Library preferences</h3>
+            <p class="mb-2 text-xs text-[var(--color-text-muted)]">
+              Library root, organize scheme, and the keep-organized toggle live in the Preferences
+              dialog.
+            </p>
+            <button
+              type="button"
+              (click)="openLibraryPrefs()"
+              class="rounded bg-[var(--color-bg-elevated)] px-3 py-1 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"
+            >
+              Open Preferences…
+            </button>
+          </div>
+          <div class="rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] p-3">
+            <h3 class="mb-1 text-sm text-[var(--color-text-primary)]">Verify library</h3>
+            <p class="mb-2 text-xs text-[var(--color-text-muted)]">
+              Re-hashes every track file and flags mismatches. Long-running on large libraries.
+            </p>
+            <div class="flex items-center gap-3">
+              <button
+                type="button"
+                (click)="verify()"
+                [disabled]="verifyState() === 'running'"
+                class="rounded bg-[var(--color-bg-elevated)] px-3 py-1 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] disabled:opacity-50"
+              >
+                Verify library
+              </button>
+              @if (verifyState() === 'running') {
+                <span class="text-xs text-[var(--color-text-muted)]">Verifying…</span>
+              }
+              @if (verifyState() === 'done') {
+                <span class="text-xs text-[var(--color-accent)]">Done</span>
+              }
+            </div>
+          </div>
+        </section>
+      }
+      @case ('about') {
+        <section class="flex flex-col gap-2">
+          <h2 class="text-base text-[var(--color-text-primary)]">About TuxTunes</h2>
+          <p class="text-sm text-[var(--color-text-secondary)]">
+            Linux-native iTunes-style music player.
+          </p>
+          <p class="text-xs text-[var(--color-text-muted)]">
+            Tauri 2 · Angular · libmpv · prax-orm
+          </p>
+        </section>
+      }
+    }
+  </div>
+</div>

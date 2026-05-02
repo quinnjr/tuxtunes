@@ -4,7 +4,7 @@ import { LibraryView, UiService } from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
 import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
 import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
-import { SettingsAudioComponent } from '../settings-audio/settings-audio.component';
+import { SettingsRouteComponent } from '../settings-route/settings-route.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
 
 @Component({
@@ -13,7 +13,7 @@ import { TrackListViewComponent } from '../track-list-view/track-list-view.compo
     AlbumGridViewComponent,
     ArtistSplitViewComponent,
     ColumnBrowserComponent,
-    SettingsAudioComponent,
+    SettingsRouteComponent,
     TrackListViewComponent,
   ],
   templateUrl: './main-content.component.html',
