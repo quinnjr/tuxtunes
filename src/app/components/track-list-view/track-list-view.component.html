@@ -1,15 +1,97 @@
-<cdk-virtual-scroll-viewport itemSize="36" class="h-full">
-  <div
-    *cdkVirtualFor="let track of library.tracks(); trackBy: trackById"
-    class="flex h-9 cursor-pointer items-center border-b border-[var(--color-border)] px-4 text-sm hover:bg-[var(--color-bg-elevated)]"
-    [class.bg-\[var\(--color-bg-elevated\)\]]="playback.currentTrackId() === track.id"
-    (dblclick)="play(track)"
+<div class="flex h-full flex-col">
+  <header
+    class="relative flex h-7 shrink-0 items-center border-b border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] px-4 text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]"
   >
-    <span class="flex-1 truncate">{{ track.title }}</span>
-    <span class="w-48 truncate text-[var(--color-text-secondary)]">{{ track.artist ?? '' }}</span>
-    <span class="w-48 truncate text-[var(--color-text-secondary)]">{{ track.album ?? '' }}</span>
-    <span class="w-16 text-right text-[var(--color-text-muted)]">{{
-      formatDuration(track.durationMs)
-    }}</span>
-  </div>
-</cdk-virtual-scroll-viewport>
+    @for (col of visibleColumns(); track col.id) {
+      <button
+        type="button"
+        (click)="cycleSort(col.id)"
+        [class]="
+          (col.widthClass ?? 'flex-1') +
+          ' ' +
+          (col.numeric ? 'text-right' : 'text-left') +
+          ' ' +
+          (isSortColumn(col.id) ? 'text-[var(--color-text-primary)]' : '') +
+          ' truncate transition hover:text-[var(--color-accent)]'
+        "
+      >
+        {{ col.label }}
+        <span class="ml-1 text-[8px]">{{ sortIndicator(col.id) }}</span>
+      </button>
+    }
+    <button
+      type="button"
+      (click)="togglePicker($event)"
+      aria-label="Choose columns"
+      class="ml-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+    >
+      ⚙
+    </button>
+    @if (pickerOpen()) {
+      <div
+        class="fixed inset-0 z-30"
+        role="presentation"
+        (click)="closePicker()"
+        (keydown.escape)="closePicker()"
+      >
+        <div
+          (click)="$event.stopPropagation()"
+          (keydown)="$event.stopPropagation()"
+          class="absolute right-4 top-7 z-40 min-w-[180px] rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] p-2 shadow-xl"
+          role="dialog"
+        >
+          <div class="mb-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
+            Columns
+          </div>
+          @for (col of allColumns; track col.id) {
+            <label
+              class="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-xs normal-case tracking-normal text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]"
+            >
+              <input
+                type="checkbox"
+                [checked]="isColumnVisible(col.id)"
+                (change)="toggleColumn(col.id)"
+              />
+              {{ col.label }}
+            </label>
+          }
+        </div>
+      </div>
+    }
+  </header>
+  <cdk-virtual-scroll-viewport itemSize="36" class="flex-1">
+    <div
+      *cdkVirtualFor="let track of library.tracks(); let i = index; trackBy: trackById"
+      (click)="onRowClick(i, track, $event)"
+      (keydown.enter)="play(track)"
+      (dblclick)="play(track)"
+      (contextmenu)="onRowContextMenu(track, $event)"
+      [class]="
+        'flex h-9 cursor-pointer items-center border-b border-[var(--color-border)] px-4 text-sm ' +
+        (isSelected(track)
+          ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)]'
+          : isCurrent(track)
+            ? 'bg-[var(--color-bg-elevated)]'
+            : 'hover:bg-[var(--color-bg-elevated)]')
+      "
+      role="row"
+      tabindex="0"
+    >
+      @for (col of visibleColumns(); track col.id) {
+        <span
+          [class]="
+            (col.widthClass ?? 'flex-1') +
+            ' ' +
+            (col.numeric ? 'text-right' : '') +
+            ' truncate ' +
+            (col.id === 'title'
+              ? 'text-[var(--color-text-primary)]'
+              : 'text-[var(--color-text-secondary)]')
+          "
+        >
+          {{ col.format(track) }}
+        </span>
+      }
+    </div>
+  </cdk-virtual-scroll-viewport>
+</div>

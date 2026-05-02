@@ -70,6 +70,32 @@ export const EMPTY_FILTERS: TrackFilters = {
   search: null,
 };
 
+export type SortColumn =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'genre'
+  | 'year'
+  | 'duration_ms'
+  | 'rating'
+  | 'play_count'
+  | 'last_played'
+  | 'date_added'
+  | 'bit_rate'
+  | 'sample_rate'
+  | 'kind'
+  | 'size_bytes';
+
+export interface TrackSort {
+  column: SortColumn;
+  descending: boolean;
+}
+
+export const DEFAULT_SORT: TrackSort = {
+  column: 'date_added',
+  descending: true,
+};
+
 @Injectable({ providedIn: 'root' })
 export class LibraryService {
   private readonly tauri = inject(TauriService);
@@ -81,6 +107,9 @@ export class LibraryService {
 
   /** Active column-browser + search filters. Drives refreshTracks(). */
   readonly filters = signal<TrackFilters>({ ...EMPTY_FILTERS });
+
+  /** Active sort spec. Header clicks in the track list mutate this. */
+  readonly sort = signal<TrackSort>({ ...DEFAULT_SORT });
 
   /**
    * O(1) id → track lookup, derived from `tracks`. Rebuilt once per
@@ -122,8 +151,23 @@ export class LibraryService {
       limit,
       offset,
       filters: this.filters(),
+      sort: this.sort(),
     });
     this.tracks.set(raws.map((raw) => mapTrack(raw)));
+  }
+
+  /**
+   * Toggle the sort column. Clicking the active column flips direction;
+   * a different column resets to ascending. Refreshes the track list.
+   */
+  async cycleSort(column: SortColumn): Promise<void> {
+    const current = this.sort();
+    if (current.column === column) {
+      this.sort.set({ column, descending: !current.descending });
+    } else {
+      this.sort.set({ column, descending: false });
+    }
+    await this.refreshTracks();
   }
 
   async getDistinct(column: DistinctColumn): Promise<DistinctValue[]> {

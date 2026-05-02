@@ -95,6 +95,12 @@ export class PlaybackService implements OnDestroy {
       await this.tauri.listen<{ volume: number }>('playback:volume-changed', (payload) =>
         this.volume.set(payload.volume),
       ),
+      // Auto-advance only fires for natural EOF — the engine
+      // distinguishes user-stop / shutdown / redirect upstream and
+      // doesn't emit `track-ended` for those.
+      await this.tauri.listen<{ track_id: number }>('playback:track-ended', () => {
+        void this.advanceFromQueue();
+      }),
     );
   }
 
