@@ -6,10 +6,50 @@
   >
     Library
   </div>
-  <button class="px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]">All Songs</button>
-  <button class="px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]">Artists</button>
-  <button class="px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]">Albums</button>
-  <button class="px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]">Genres</button>
+  <button
+    type="button"
+    (click)="setView('tracks')"
+    [class]="
+      isActive('tracks')
+        ? 'border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-4 py-1 text-left text-[var(--color-text-primary)]'
+        : 'border-l-2 border-transparent px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]'
+    "
+  >
+    All Songs
+  </button>
+  <button
+    type="button"
+    (click)="setView('artists')"
+    [class]="
+      isActive('artists')
+        ? 'border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-4 py-1 text-left text-[var(--color-text-primary)]'
+        : 'border-l-2 border-transparent px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]'
+    "
+  >
+    Artists
+  </button>
+  <button
+    type="button"
+    (click)="setView('albums')"
+    [class]="
+      isActive('albums')
+        ? 'border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-4 py-1 text-left text-[var(--color-text-primary)]'
+        : 'border-l-2 border-transparent px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]'
+    "
+  >
+    Albums
+  </button>
+  <button
+    type="button"
+    (click)="setView('genres')"
+    [class]="
+      isActive('genres')
+        ? 'border-l-2 border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-4 py-1 text-left text-[var(--color-text-primary)]'
+        : 'border-l-2 border-transparent px-4 py-1 text-left hover:bg-[var(--color-bg-elevated)]'
+    "
+  >
+    Genres
+  </button>
 
   <button
     type="button"

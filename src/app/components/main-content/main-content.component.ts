@@ -1,8 +1,7 @@
-import { Component, signal } from '@angular/core';
+import { Component, inject } from '@angular/core';
+import { LibraryView, UiService } from '../../services/ui.service';
 import { SettingsAudioComponent } from '../settings-audio/settings-audio.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
-
-type ViewMode = 'tracks' | 'albums' | 'artists' | 'settings';
 
 @Component({
   selector: 'app-main-content',
@@ -10,15 +9,16 @@ type ViewMode = 'tracks' | 'albums' | 'artists' | 'settings';
   templateUrl: './main-content.component.html',
 })
 export class MainContentComponent {
-  protected readonly viewMode = signal<ViewMode>('tracks');
-  protected readonly modes: readonly ViewMode[] = [
+  private readonly ui = inject(UiService);
+  protected readonly viewMode = this.ui.libraryView;
+  protected readonly modes: readonly LibraryView[] = [
     'tracks',
     'albums',
     'artists',
     'settings',
   ] as const;
 
-  protected setMode(mode: ViewMode): void {
-    this.viewMode.set(mode);
+  protected setMode(mode: LibraryView): void {
+    this.ui.libraryView.set(mode);
   }
 }
