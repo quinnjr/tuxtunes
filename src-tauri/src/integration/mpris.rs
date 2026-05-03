@@ -200,62 +200,10 @@ impl Player {
 
     #[zbus(property)]
     fn metadata(&self) -> HashMap<String, zbus::zvariant::OwnedValue> {
-        let state = match self.state.lock() {
-            Ok(s) => s,
-            Err(_) => return HashMap::new(),
-        };
-        let mut map: HashMap<String, zbus::zvariant::OwnedValue> = HashMap::new();
-        let Some(track) = state.track.as_ref() else {
-            return map;
-        };
-
-        // mpris:trackid is an object path tagged with our local id.
-        let trackid_path = format!("/org/tuxtunes/track/{}", track.id);
-        if let Ok(p) = ObjectPath::try_from(trackid_path) {
-            if let Ok(v) = Value::from(p).try_to_owned() {
-                map.insert("mpris:trackid".into(), v);
-            }
+        match self.state.lock() {
+            Ok(s) => build_metadata(&s),
+            Err(_) => HashMap::new(),
         }
-
-        let length_us = track.duration_ms.saturating_mul(1000);
-        if let Ok(v) = Value::from(length_us).try_to_owned() {
-            map.insert("mpris:length".into(), v);
-        }
-
-        if let Ok(v) = Value::from(track.title.as_str()).try_to_owned() {
-            map.insert("xesam:title".into(), v);
-        }
-        if let Some(artist) = &track.artist {
-            // xesam:artist is "as" (array of strings) per the spec.
-            if let Ok(v) = Value::from(vec![artist.as_str()]).try_to_owned() {
-                map.insert("xesam:artist".into(), v);
-            }
-        }
-        if let Some(album) = &track.album {
-            if let Ok(v) = Value::from(album.as_str()).try_to_owned() {
-                map.insert("xesam:album".into(), v);
-            }
-        }
-
-        // Album art URL — file:// URI for the on-disk cover next to the
-        // track file. Most notification daemons / lock screens accept it.
-        let parent = std::path::Path::new(&track.file_path).parent();
-        if let Some(parent) = parent {
-            for name in &["cover.jpg", "cover.png", "cover.jpeg", "cover.webp"] {
-                let candidate = parent.join(name);
-                if candidate.exists() {
-                    if let Some(s) = candidate.to_str() {
-                        let url = format!("file://{s}");
-                        if let Ok(v) = Value::from(url).try_to_owned() {
-                            map.insert("mpris:artUrl".into(), v);
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-
-        map
     }
 
     #[zbus(property)]
@@ -314,6 +262,92 @@ impl Player {
     #[zbus(property)]
     fn can_control(&self) -> bool {
         true
+    }
+}
+
+/// Build the MPRIS metadata HashMap for the current state. Pure
+/// function — no D-Bus interaction — so unit tests can drive it
+/// without a session bus. Hands back an empty map when no track is
+/// loaded.
+pub fn build_metadata(state: &MprisState) -> HashMap<String, zbus::zvariant::OwnedValue> {
+    let mut map: HashMap<String, zbus::zvariant::OwnedValue> = HashMap::new();
+    let Some(track) = state.track.as_ref() else {
+        return map;
+    };
+
+    let trackid_path = format!("/org/tuxtunes/track/{}", track.id);
+    if let Ok(p) = ObjectPath::try_from(trackid_path) {
+        if let Ok(v) = Value::from(p).try_to_owned() {
+            map.insert("mpris:trackid".into(), v);
+        }
+    }
+
+    let length_us = track.duration_ms.saturating_mul(1000);
+    if let Ok(v) = Value::from(length_us).try_to_owned() {
+        map.insert("mpris:length".into(), v);
+    }
+
+    if let Ok(v) = Value::from(track.title.as_str()).try_to_owned() {
+        map.insert("xesam:title".into(), v);
+    }
+    if let Some(artist) = &track.artist {
+        if let Ok(v) = Value::from(vec![artist.as_str()]).try_to_owned() {
+            map.insert("xesam:artist".into(), v);
+        }
+    }
+    if let Some(album) = &track.album {
+        if let Ok(v) = Value::from(album.as_str()).try_to_owned() {
+            map.insert("xesam:album".into(), v);
+        }
+    }
+
+    // Album art URL — file:// URI for the on-disk cover next to the
+    // track file. Most notification daemons / lock screens accept it.
+    let parent = std::path::Path::new(&track.file_path).parent();
+    if let Some(parent) = parent {
+        for name in &["cover.jpg", "cover.png", "cover.jpeg", "cover.webp"] {
+            let candidate = parent.join(name);
+            if candidate.exists() {
+                if let Some(s) = candidate.to_str() {
+                    let url = format!("file://{s}");
+                    if let Ok(v) = Value::from(url).try_to_owned() {
+                        map.insert("mpris:artUrl".into(), v);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    map
+}
+
+/// Convert a 0..=100 percent volume into the MPRIS spec's 0.0..=1.0
+/// double. Inverse of `set_volume`'s mapping.
+pub fn percent_to_mpris_volume(pct: u8) -> f64 {
+    (pct.min(100) as f64) / 100.0
+}
+
+/// MPRIS spec → percent: clamp to [0,1] then scale to integer percent.
+pub fn mpris_volume_to_percent(value: f64) -> i64 {
+    (value.clamp(0.0, 1.0) * 100.0) as i64
+}
+
+/// Map a frontend playback state string into the MPRIS PlaybackStatus
+/// enum the D-Bus property publishes.
+pub fn playback_status_from_str(s: &str) -> PlaybackStatus {
+    match s {
+        "playing" => PlaybackStatus::Playing,
+        "paused" => PlaybackStatus::Paused,
+        _ => PlaybackStatus::Stopped,
+    }
+}
+
+impl PlaybackStatus {
+    /// String form of the enum used by the D-Bus property. Public so
+    /// callers (and tests) can verify the spec-mandated wording.
+    pub fn dbus_str(self) -> &'static str {
+        self.as_str()
     }
 }
 

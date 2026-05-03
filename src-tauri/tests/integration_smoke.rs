@@ -102,10 +102,97 @@ fn mpris_state_transitions_via_update_state_helper() {
     assert_eq!(state.position_us, 0);
     assert_eq!(state.volume, 0.0);
 
-    // Status enum exposes its string mapping for the D-Bus property.
-    // We can't reach `as_str` from outside the module (it's private),
-    // but the variants must be Debug-printable for diagnostics.
     let _ = format!("{:?}", PlaybackStatus::Playing);
     let _ = format!("{:?}", PlaybackStatus::Paused);
     let _ = format!("{:?}", PlaybackStatus::Stopped);
+}
+
+#[test]
+fn mpris_playback_status_dbus_str_is_spec_correct() {
+    use integration::mpris::PlaybackStatus;
+    assert_eq!(PlaybackStatus::Playing.dbus_str(), "Playing");
+    assert_eq!(PlaybackStatus::Paused.dbus_str(), "Paused");
+    assert_eq!(PlaybackStatus::Stopped.dbus_str(), "Stopped");
+}
+
+#[test]
+fn mpris_playback_status_from_frontend_string() {
+    use integration::mpris::{playback_status_from_str, PlaybackStatus};
+    assert_eq!(playback_status_from_str("playing"), PlaybackStatus::Playing);
+    assert_eq!(playback_status_from_str("paused"), PlaybackStatus::Paused);
+    assert_eq!(playback_status_from_str("stopped"), PlaybackStatus::Stopped);
+    // Unknown / loading / arbitrary strings fall through to Stopped —
+    // the safest projection for an unknown state.
+    assert_eq!(playback_status_from_str("loading"), PlaybackStatus::Stopped);
+    assert_eq!(playback_status_from_str(""), PlaybackStatus::Stopped);
+}
+
+#[test]
+fn mpris_volume_round_trips_between_percent_and_double() {
+    use integration::mpris::{mpris_volume_to_percent, percent_to_mpris_volume};
+    assert_eq!(percent_to_mpris_volume(0), 0.0);
+    assert_eq!(percent_to_mpris_volume(50), 0.5);
+    assert_eq!(percent_to_mpris_volume(100), 1.0);
+    // Clamp on out-of-range percent.
+    assert_eq!(percent_to_mpris_volume(200), 1.0);
+
+    assert_eq!(mpris_volume_to_percent(0.0), 0);
+    assert_eq!(mpris_volume_to_percent(0.5), 50);
+    assert_eq!(mpris_volume_to_percent(1.0), 100);
+    // Clamp on out-of-range double.
+    assert_eq!(mpris_volume_to_percent(2.0), 100);
+    assert_eq!(mpris_volume_to_percent(-0.5), 0);
+}
+
+#[test]
+fn mpris_build_metadata_for_no_track_is_empty() {
+    let state = integration::mpris::MprisState::default();
+    let map = integration::mpris::build_metadata(&state);
+    assert!(map.is_empty());
+}
+
+#[test]
+fn mpris_build_metadata_includes_title_artist_album() {
+    let mut state = integration::mpris::MprisState::default();
+    state.track = Some(fake_track("Hello"));
+    let map = integration::mpris::build_metadata(&state);
+    // Required keys per the MPRIS spec.
+    assert!(map.contains_key("xesam:title"));
+    assert!(map.contains_key("xesam:artist"));
+    assert!(map.contains_key("xesam:album"));
+    assert!(map.contains_key("mpris:trackid"));
+    assert!(map.contains_key("mpris:length"));
+}
+
+#[test]
+fn mpris_build_metadata_omits_artist_album_when_missing() {
+    let mut state = integration::mpris::MprisState::default();
+    state.track = Some(TrackRow {
+        artist: None,
+        album: None,
+        ..fake_track("Bare")
+    });
+    let map = integration::mpris::build_metadata(&state);
+    assert!(!map.contains_key("xesam:artist"));
+    assert!(!map.contains_key("xesam:album"));
+    // Title and trackid stay populated regardless.
+    assert!(map.contains_key("xesam:title"));
+    assert!(map.contains_key("mpris:trackid"));
+}
+
+#[test]
+fn mpris_build_metadata_picks_up_cover_art_when_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let track_path = dir.path().join("song.flac");
+    std::fs::write(&track_path, b"x").unwrap();
+    let cover = dir.path().join("cover.jpg");
+    std::fs::write(&cover, b"x").unwrap();
+
+    let mut state = integration::mpris::MprisState::default();
+    state.track = Some(TrackRow {
+        file_path: track_path.display().to_string(),
+        ..fake_track("WithArt")
+    });
+    let map = integration::mpris::build_metadata(&state);
+    assert!(map.contains_key("mpris:artUrl"));
 }
