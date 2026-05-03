@@ -55,6 +55,8 @@ pub fn run() {
             commands::sync::list_sync_sources,
             commands::sync::add_sync_source,
             commands::sync::run_sync_now,
+            commands::smart::evaluate_smart_rule,
+            commands::smart::preview_smart_rule,
             commands::preferences::get_library_root,
             commands::preferences::set_library_root,
             commands::preferences::get_organize_scheme,
