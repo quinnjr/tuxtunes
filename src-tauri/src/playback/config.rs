@@ -237,6 +237,24 @@ mod tests {
     }
 
     #[test]
+    fn audio_format_for_each_bit_depth() {
+        // Cover the four arms of the bits → mpv-format match: 16, 24,
+        // 32, and the fall-through (e.g. 8-bit, 64-bit) → "float".
+        for (bits, expected) in [(16u8, "s16"), (24, "s24"), (32, "s32"), (8, "float")] {
+            let p = build_properties(
+                &no_device_prefs(),
+                TrackAudioFormat {
+                    sample_rate: None,
+                    bit_depth: Some(bits),
+                    is_dsd: false,
+                },
+            );
+            let fmt = p.iter().find(|x| x.name == "audio-format").unwrap();
+            assert_eq!(fmt.value, expected, "wrong format for {bits}-bit");
+        }
+    }
+
+    #[test]
     fn prefs_roundtrip_through_serde() {
         // Exercises Serialize + Deserialize on PlaybackPrefs (and the
         // nested ReplayGainMode).

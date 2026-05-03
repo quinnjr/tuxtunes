@@ -177,4 +177,57 @@ mod tests {
         let back: ConflictRules = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
     }
+
+    #[test]
+    fn lww_int_tie_takes_source() {
+        // Equal values should resolve TakeSource (no-op tie-break).
+        assert_eq!(
+            resolve_int(Strategy::LastWriteWins, 5, 5, false),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_datetime_prefer_local_short_circuits() {
+        // PreferLocal must keep local regardless of which side has a value.
+        assert_eq!(
+            resolve_datetime(Strategy::PreferLocal, Some(100), Some(50)),
+            Decision::KeepLocal
+        );
+    }
+
+    #[test]
+    fn lww_datetime_neither_side_present_takes_source() {
+        // No timestamps either side → deterministic TakeSource fallback.
+        assert_eq!(
+            resolve_datetime(Strategy::LastWriteWins, None, None),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_bool_lww_inequality_takes_source() {
+        // LWW on bool with no timestamp context defaults to source so
+        // the resolution stays deterministic.
+        assert_eq!(
+            resolve_bool(Strategy::LastWriteWins, true, false),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_bool_lww_tie_takes_source() {
+        assert_eq!(
+            resolve_bool(Strategy::LastWriteWins, true, true),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_bool_prefer_local_keeps_local() {
+        assert_eq!(
+            resolve_bool(Strategy::PreferLocal, true, false),
+            Decision::KeepLocal
+        );
+    }
 }
