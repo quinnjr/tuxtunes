@@ -1,10 +1,10 @@
-mod commands;
+pub mod commands;
 pub mod db;
 pub mod fs;
 pub mod integration;
 pub mod library;
 pub mod playback;
-mod runtime;
+pub mod runtime;
 pub mod sync;
 
 use runtime::AppState;

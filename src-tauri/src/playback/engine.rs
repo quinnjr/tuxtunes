@@ -17,7 +17,7 @@ use libmpv2::events::{Event, PropertyData};
 use libmpv2::{Format, Mpv};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 
 #[derive(Debug, thiserror::Error)]
@@ -80,8 +80,12 @@ pub struct PlaybackEngine {
 }
 
 impl PlaybackEngine {
-    /// Spawn the engine thread and return a handle.
-    pub fn spawn(app: AppHandle) -> Result<Self, EngineError> {
+    /// Spawn the engine thread and return a handle. Generic over the
+    /// Tauri Runtime so the same code path supports production (Wry)
+    /// and tests (MockRuntime). The handle is captured into the worker
+    /// thread, so the Runtime parameter doesn't leak into PlaybackEngine
+    /// itself — the struct stays runtime-agnostic.
+    pub fn spawn<R: Runtime>(app: AppHandle<R>) -> Result<Self, EngineError> {
         let (tx, mut rx) = mpsc::unbounded_channel::<EngineCommand>();
         let (track_tx, track_rx) = mpsc::unbounded_channel::<PlaybackTracking>();
         let devices = Arc::new(Mutex::new(Vec::new()));
@@ -163,14 +167,33 @@ impl PlaybackEngine {
 }
 
 fn init_mpv() -> Result<Mpv, libmpv2::Error> {
+    // `TUXTUNES_AO=null` skips opening a real audio device, matching
+    // libmpv's null AO. Tests and CI set this so AO_INIT_FAILED isn't
+    // raised on machines without ALSA/PulseAudio. Production never
+    // sets it, so the runtime audio device is selected normally.
+    let null_ao = std::env::var("TUXTUNES_AO").ok().as_deref() == Some("null");
     Mpv::with_initializer(|init| {
+        if null_ao {
+            init.set_property("ao", "null")?;
+        }
+        // Best-effort init: an unknown property name on older/newer
+        // libmpv versions shouldn't kill startup. Each setter logs and
+        // continues. The two strict properties (vid + audio-buffer)
+        // remain required because the engine misbehaves without them.
         init.set_property("vid", "no")?;
-        init.set_property("gapless-audio", "yes")?;
-        init.set_property("audio-pitch-correction", "no")?;
-        init.set_property("audio-resample-mode", "no")?;
-        init.set_property("keep-open", "always")?;
         init.set_property("audio-buffer", 2.0_f64)?;
-        init.set_property("volume-max", 100_i64)?;
+        for (name, value) in [
+            ("gapless-audio", "yes"),
+            ("audio-pitch-correction", "no"),
+            ("keep-open", "always"),
+        ] {
+            if let Err(e) = init.set_property(name, value) {
+                log::warn!("mpv init: skipping {name}={value}: {e}");
+            }
+        }
+        if let Err(e) = init.set_property("volume-max", 100_i64) {
+            log::warn!("mpv init: skipping volume-max=100: {e}");
+        }
         Ok(())
     })
 }
@@ -183,7 +206,12 @@ fn apply_props(mpv: &Mpv, props: &[MpvProperty]) {
     }
 }
 
-fn handle_command(mpv: &Mpv, cmd: EngineCommand, current_track: &mut Option<i64>, app: &AppHandle) {
+fn handle_command<R: Runtime>(
+    mpv: &Mpv,
+    cmd: EngineCommand,
+    current_track: &mut Option<i64>,
+    app: &AppHandle<R>,
+) {
     match cmd {
         EngineCommand::LoadAndPlay {
             track_id,
@@ -283,7 +311,7 @@ struct EventLoopState {
 }
 
 impl EventLoopState {
-    fn emit_state(&mut self, app: &AppHandle, state: PlaybackState) {
+    fn emit_state<R: Runtime>(&mut self, app: &AppHandle<R>, state: PlaybackState) {
         if self.last_emitted_state == Some(state) {
             return;
         }
@@ -292,9 +320,9 @@ impl EventLoopState {
     }
 }
 
-fn handle_event(
+fn handle_event<R: Runtime>(
     event: Event<'_>,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     state: &mut EventLoopState,
     track_tx: &mpsc::UnboundedSender<PlaybackTracking>,
 ) {

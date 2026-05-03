@@ -4,14 +4,14 @@ use crate::db::Db;
 use crate::fs::coordinator::FsCoordinator;
 use crate::sync::worker::{SyncCommand, SyncWorker};
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 pub struct SyncCoordinator {
     worker: SyncWorker,
 }
 
 impl SyncCoordinator {
-    pub fn new(db: Arc<Db>, fs: Arc<FsCoordinator>, app: AppHandle) -> Self {
+    pub fn new<R: Runtime>(db: Arc<Db>, fs: Arc<FsCoordinator>, app: AppHandle<R>) -> Self {
         Self {
             worker: SyncWorker::spawn(db, fs, app),
         }
