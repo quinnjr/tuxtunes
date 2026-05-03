@@ -78,11 +78,22 @@ pub fn run() {
             // — the app continues without a tray rather than crashing.
             integration::tray::install(app.handle());
 
-            // Track-changed → tray "Now Playing" label sync. Listens on
-            // the same Tauri event channel the frontend's PlaybackService
-            // uses, so the tray and UI never disagree about what's
-            // playing. The lookup goes through TrackRow so we have the
-            // already-formatted artist string.
+            // Mount the MPRIS server. Returns a handle the event
+            // listeners below mutate on engine state changes; failures
+            // are logged but don't take the app down (e.g. running
+            // outside a session bus during dev).
+            let mpris = match runtime.block_on(integration::mpris::install(app.handle().clone())) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    log::warn!("MPRIS install failed: {e}");
+                    None
+                }
+            };
+            app.manage(integration::MprisHandle { mpris });
+
+            // Track-changed → tray label, notification, MPRIS metadata.
+            // Listens on the same Tauri event channel the frontend's
+            // PlaybackService uses so all three surfaces stay in sync.
             {
                 let app_for_listener = app.handle().clone();
                 let db = Arc::clone(&state_ref.db);
@@ -120,6 +131,107 @@ pub fn run() {
                                 }
                             }
                         }
+
+                        // MPRIS metadata update — track row goes into
+                        // shared state and PropertiesChanged signals
+                        // notify external consumers (gnome-shell etc.).
+                        if let Some(handle) = app.try_state::<integration::MprisHandle>() {
+                            if let Some(m) = &handle.mpris {
+                                let row_clone = row.clone();
+                                if let Err(e) = integration::mpris::update_state(
+                                    &m.conn,
+                                    &m.state,
+                                    |s| {
+                                        s.track = row_clone;
+                                        s.position_us = 0;
+                                    },
+                                )
+                                .await
+                                {
+                                    log::warn!("mpris track update failed: {e}");
+                                }
+                            }
+                        }
+                    });
+                });
+            }
+
+            // State-changed → MPRIS PlaybackStatus.
+            {
+                let app_for_listener = app.handle().clone();
+                app.handle().listen("playback:state-changed", move |event| {
+                    let app = app_for_listener.clone();
+                    let payload: serde_json::Value =
+                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+                    let state_str =
+                        payload.get("state").and_then(|v| v.as_str()).unwrap_or("stopped").to_string();
+                    tauri::async_runtime::spawn(async move {
+                        let Some(handle) = app.try_state::<integration::MprisHandle>() else {
+                            return;
+                        };
+                        let Some(m) = &handle.mpris else {
+                            return;
+                        };
+                        let new_status = match state_str.as_str() {
+                            "playing" => integration::mpris::PlaybackStatus::Playing,
+                            "paused" => integration::mpris::PlaybackStatus::Paused,
+                            _ => integration::mpris::PlaybackStatus::Stopped,
+                        };
+                        if let Err(e) =
+                            integration::mpris::update_state(&m.conn, &m.state, |s| {
+                                s.status = new_status;
+                            })
+                            .await
+                        {
+                            log::warn!("mpris state update failed: {e}");
+                        }
+                    });
+                });
+            }
+
+            // Position-update → MPRIS Position. Throttled to once
+            // per second by the engine already; no extra debouncing here.
+            {
+                let app_for_listener = app.handle().clone();
+                app.handle().listen("playback:position-update", move |event| {
+                    let app = app_for_listener.clone();
+                    let payload: serde_json::Value =
+                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+                    let position_ms = payload.get("position_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+                    tauri::async_runtime::spawn(async move {
+                        let Some(handle) = app.try_state::<integration::MprisHandle>() else {
+                            return;
+                        };
+                        let Some(m) = &handle.mpris else {
+                            return;
+                        };
+                        let _ = integration::mpris::update_state(&m.conn, &m.state, |s| {
+                            s.position_us = position_ms.saturating_mul(1000);
+                        })
+                        .await;
+                    });
+                });
+            }
+
+            // Volume-changed → MPRIS Volume.
+            {
+                let app_for_listener = app.handle().clone();
+                app.handle().listen("playback:volume-changed", move |event| {
+                    let app = app_for_listener.clone();
+                    let payload: serde_json::Value =
+                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+                    let pct = payload.get("volume").and_then(|v| v.as_i64()).unwrap_or(100);
+                    tauri::async_runtime::spawn(async move {
+                        let Some(handle) = app.try_state::<integration::MprisHandle>() else {
+                            return;
+                        };
+                        let Some(m) = &handle.mpris else {
+                            return;
+                        };
+                        let _ = integration::mpris::update_state(&m.conn, &m.state, |s| {
+                            s.volume = (pct as f64 / 100.0).clamp(0.0, 1.0);
+                        })
+                        .await;
                     });
                 });
             }

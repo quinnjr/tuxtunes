@@ -106,6 +106,25 @@ export class PlaybackService implements OnDestroy {
       // queue) stays in one place.
       await this.tauri.listen('tray:toggle-play', () => void this.togglePlay()),
       await this.tauri.listen('tray:next', () => void this.advanceFromQueue()),
+      // MPRIS clients (gnome-shell, KDE plasma media controller, lock
+      // screen, media keys) call into the Rust D-Bus server which
+      // emits these events. They go through the same state-machine
+      // path as the tray and the on-screen controls.
+      await this.tauri.listen('mpris:play-pause', () => void this.togglePlay()),
+      await this.tauri.listen('mpris:play', () => void this.resume()),
+      await this.tauri.listen('mpris:pause', () => void this.pause()),
+      await this.tauri.listen('mpris:stop', () => void this.stop()),
+      await this.tauri.listen('mpris:next', () => void this.advanceFromQueue()),
+      await this.tauri.listen<number>('mpris:seek', (offsetUs) => {
+        // MPRIS Seek is relative-microseconds; engine seeks absolute ms.
+        void this.seek(this.positionMs() + Math.round(offsetUs / 1000));
+      }),
+      await this.tauri.listen<number>('mpris:set-position', (positionUs) => {
+        void this.seek(Math.round(positionUs / 1000));
+      }),
+      await this.tauri.listen<number>('mpris:set-volume', (volumePct) => {
+        void this.setVolume(volumePct);
+      }),
     );
   }
 
