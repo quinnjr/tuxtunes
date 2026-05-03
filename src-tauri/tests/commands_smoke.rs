@@ -320,6 +320,41 @@ async fn open_smart_playlist_rejects_non_smart_id() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn play_track_loads_existing_row_and_drives_loadandplay() {
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    // Write a tiny "audio" file. With TUXTUNES_AO=null mpv won't
+    // decode it, but the LoadAndPlay command path still runs through
+    // build_properties + loadfile + error-event handling — that's the
+    // engine code we want to exercise.
+    let path = tmp.path().join("phantom.wav");
+    std::fs::write(&path, b"RIFF\0\0\0\0WAVEfmt ").unwrap();
+
+    let id: i64 = state
+        .db
+        .engine
+        .raw_sql_first(
+            "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('phantom', 0, 0, ?, '[]') RETURNING id",
+            &[prax_query::filter::FilterValue::String(
+                path.display().to_string(),
+            )],
+        )
+        .await
+        .unwrap()
+        .into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .unwrap();
+
+    // The command may return Ok or a libmpv-loadfile error; both
+    // paths are valid coverage of the engine's LoadAndPlay handling.
+    let _ = commands::playback::play_track(state, id).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn playback_command_surface_runs_through_engine() {
     let (app, _tmp) = fixture().await;
     let state = app.state::<AppState>();
