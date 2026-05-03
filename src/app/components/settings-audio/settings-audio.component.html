@@ -41,4 +41,27 @@
     <input type="checkbox" [checked]="exclusive()" (change)="toggleExclusive()" />
     <span class="text-[var(--color-text-primary)]">Use exclusive mode</span>
   </label>
+
+  <div class="mt-4">
+    <h3 class="mb-2 text-sm font-semibold text-[var(--color-text-primary)]">ReplayGain</h3>
+    <p class="mb-3 text-xs text-[var(--color-text-muted)]">
+      Apply normalized loudness gain so tracks play at consistent volume. Track gain levels each
+      file individually; album gain preserves intra-album dynamics.
+    </p>
+    <div class="flex flex-wrap gap-2">
+      @for (opt of replayGainOptions; track opt.id) {
+        <button
+          type="button"
+          (click)="setReplayGain(opt.id)"
+          [class]="
+            replayGainMode() === opt.id
+              ? 'rounded border border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-3 py-1 text-sm text-[var(--color-text-primary)]'
+              : 'rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-3 py-1 text-sm text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)]'
+          "
+        >
+          {{ opt.label }}
+        </button>
+      }
+    </div>
+  </div>
 </section>

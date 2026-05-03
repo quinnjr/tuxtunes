@@ -240,12 +240,29 @@ fn handle_command(mpv: &Mpv, cmd: EngineCommand, current_track: &mut Option<i64>
             let _ = mpv.set_property("volume", volume as i64);
         }
         EngineCommand::ApplyDevice { prefs } => {
-            if let Some(dev) = prefs.selected_device_id {
+            let device_id = prefs.selected_device_id.clone();
+            if let Some(dev) = &device_id {
                 let _ = mpv.set_property("audio-device", dev.as_str());
             }
             let _ = mpv.set_property(
                 "audio-exclusive",
                 if prefs.exclusive_mode { "yes" } else { "no" },
+            );
+            let _ = mpv.set_property("replaygain", prefs.replaygain_mode.as_mpv());
+            // Surface the new device state to the frontend so format
+            // chips and the settings panel can reflect what's
+            // actually active. mpv exposes the resolved sample-rate /
+            // bit-depth via `audio-out-params` after the next file
+            // load — we emit nulls here and let the engine refresh
+            // them when FileLoaded fires.
+            let _ = app.emit(
+                events::DEVICE_CHANGED,
+                events::DeviceChanged {
+                    device_id,
+                    sample_rate: None,
+                    bit_depth: None,
+                    exclusive: prefs.exclusive_mode,
+                },
             );
         }
     }

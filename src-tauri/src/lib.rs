@@ -51,6 +51,7 @@ pub fn run() {
             commands::playback::set_volume,
             commands::audio::list_audio_devices,
             commands::audio::set_audio_device,
+            commands::audio::get_audio_prefs,
             commands::sync::list_sync_sources,
             commands::sync::add_sync_source,
             commands::sync::run_sync_now,
@@ -254,6 +255,54 @@ pub fn run() {
                         Ok(None) => {}
                         Err(e) => log::warn!("read persisted volume failed: {e}"),
                     }
+                });
+            }
+
+            // Restore audio device + exclusive + ReplayGain prefs. Sent
+            // as a single ApplyDevice command so the engine resolves
+            // them as one transition rather than three separate ones.
+            {
+                let db = std::sync::Arc::clone(&state_ref.db);
+                let engine = std::sync::Arc::clone(&state_ref.engine);
+                runtime.spawn(async move {
+                    use crate::db::preferences::{
+                        self, KEY_AUDIO_DEVICE, KEY_AUDIO_EXCLUSIVE, KEY_REPLAYGAIN_MODE, KEY_VOLUME,
+                    };
+                    use crate::playback::config::{PlaybackPrefs, ReplayGainMode};
+                    use crate::playback::EngineCommand;
+                    let device_id = preferences::get::<String>(&db.engine, KEY_AUDIO_DEVICE)
+                        .await
+                        .ok()
+                        .flatten();
+                    if device_id.is_none() {
+                        return;
+                    }
+                    let exclusive = preferences::get::<bool>(&db.engine, KEY_AUDIO_EXCLUSIVE)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or(false);
+                    let replaygain_mode = preferences::get::<ReplayGainMode>(
+                        &db.engine,
+                        KEY_REPLAYGAIN_MODE,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(ReplayGainMode::Off);
+                    let volume = preferences::get::<i64>(&db.engine, KEY_VOLUME)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|v| v.clamp(0, 100) as u8)
+                        .unwrap_or(100);
+                    let prefs = PlaybackPrefs {
+                        selected_device_id: device_id,
+                        exclusive_mode: exclusive,
+                        replaygain_mode,
+                        volume,
+                    };
+                    let _ = engine.send(EngineCommand::ApplyDevice { prefs });
                 });
             }
 

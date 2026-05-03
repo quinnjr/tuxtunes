@@ -26,6 +26,9 @@ pub const KEY_VOLUME: &str = "volume";
 pub const KEY_LIBRARY_ROOT: &str = "library_root";
 pub const KEY_ORGANIZE_SCHEME: &str = "organize_scheme";
 pub const KEY_KEEP_ORGANIZED: &str = "keep_organized";
+pub const KEY_AUDIO_DEVICE: &str = "audio_device";
+pub const KEY_AUDIO_EXCLUSIVE: &str = "audio_exclusive";
+pub const KEY_REPLAYGAIN_MODE: &str = "replaygain_mode";
 
 const DEFAULT_LIBRARY_ROOT_SUFFIX: &str = "Music/TuxTunes";
 pub const DEFAULT_ORGANIZE_SCHEME: &str =
