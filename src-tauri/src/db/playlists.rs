@@ -140,6 +140,140 @@ pub async fn link_parent(
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
 }
 
+/// User-side playlist row used by the sidebar. Excludes the rule JSON
+/// from the projection so the sidebar query stays cheap; the editor
+/// fetches the full rule via `get_smart_rule` when opening one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlaylistRow {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub parent_id: Option<i64>,
+    pub sort_order: i64,
+    /// Track count cached on the row. For smart playlists this is the
+    /// last-evaluated count (NULL until first evaluation).
+    pub cached_track_count: Option<i64>,
+}
+
+/// Create a user-owned smart playlist (no sync source). Returns the
+/// new row id. The rule is JSON-encoded by the caller so the DB layer
+/// stays type-agnostic about the rule shape.
+pub async fn create_smart(
+    engine: &SqliteRawEngine,
+    name: &str,
+    rule_json: &str,
+) -> Result<i64, PlaylistsError> {
+    let sql = "INSERT INTO playlists (name, kind, sort_order, track_entries, smart_rule) \
+               VALUES (?, 'smart', 0, '[]', ?) RETURNING id";
+    let params = vec![
+        FilterValue::String(name.to_string()),
+        FilterValue::String(rule_json.to_string()),
+    ];
+    let row = engine
+        .raw_sql_first(sql, &params)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    row.into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| PlaylistsError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
+}
+
+/// Update an existing smart playlist's rule. The DB doesn't validate
+/// the JSON — the caller (commands::smart) round-trips it through
+/// SmartRule serde first.
+pub async fn update_smart_rule(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+    rule_json: &str,
+) -> Result<(), PlaylistsError> {
+    let sql = "UPDATE playlists SET smart_rule = ? WHERE id = ? AND kind = 'smart'";
+    let params = vec![
+        FilterValue::String(rule_json.to_string()),
+        FilterValue::Int(playlist_id),
+    ];
+    engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map(|_| ())
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
+/// Read back the rule JSON for a smart playlist. Returns Ok(None) for
+/// non-smart playlists or unknown ids.
+///
+/// `smart_rule` is a JSON column. prax-sqlite may surface it either as
+/// a raw JSON string (when SQLite stored it as TEXT) or as an already-
+/// parsed Value (when SQLite recognized JSON1). Re-serialize the
+/// non-string case so callers always get the canonical JSON text.
+pub async fn get_smart_rule(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+) -> Result<Option<String>, PlaylistsError> {
+    let sql = "SELECT smart_rule FROM playlists WHERE id = ? AND kind = 'smart'";
+    let params = vec![FilterValue::Int(playlist_id)];
+    let row = match engine.raw_sql_optional(sql, &params).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(PlaylistsError::Query(anyhow::Error::from(e))),
+    };
+    let cell = row.into_json().get("smart_rule").cloned();
+    let parsed = match cell {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s),
+        Some(other) => Some(
+            serde_json::to_string(&other)
+                .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?,
+        ),
+    };
+    Ok(parsed)
+}
+
+/// List every playlist for the sidebar. Ordered by sort_order then
+/// name so the user sees a stable presentation.
+pub async fn list_all(engine: &SqliteRawEngine) -> Result<Vec<PlaylistRow>, PlaylistsError> {
+    let sql = "SELECT id, name, kind, parent_id, sort_order, cached_track_count \
+               FROM playlists \
+               ORDER BY sort_order ASC, name COLLATE NOCASE ASC";
+    let rows = engine
+        .raw_sql_query(sql, &[])
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    rows.into_iter()
+        .map(|r| serde_json::from_value(r.into_json()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
+/// Hard-delete a playlist by id. Sync-sourced playlists deleted this
+/// way will reappear on the next sync — that's the intended behavior.
+pub async fn delete(engine: &SqliteRawEngine, playlist_id: i64) -> Result<(), PlaylistsError> {
+    let sql = "DELETE FROM playlists WHERE id = ?";
+    engine
+        .raw_sql_execute(sql, &[FilterValue::Int(playlist_id)])
+        .await
+        .map(|_| ())
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
+/// Update the cached track-count for a smart playlist after a fresh
+/// evaluation. Skipped silently for non-smart rows so the caller can
+/// always invoke this in the evaluator.
+pub async fn set_cached_count(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+    count: i64,
+) -> Result<(), PlaylistsError> {
+    let sql = "UPDATE playlists SET cached_track_count = ?, cached_at = CURRENT_TIMESTAMP \
+               WHERE id = ?";
+    let params = vec![FilterValue::Int(count), FilterValue::Int(playlist_id)];
+    engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map(|_| ())
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
 /// Delete playlists in `sync_source_id` whose `persistent_id` is not in
 /// `keep`.
 pub async fn delete_missing(
@@ -239,6 +373,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(check, parent);
+    }
+
+    #[tokio::test]
+    async fn create_smart_then_get_rule_roundtrips() {
+        let db = tmp().await;
+        let id = create_smart(&db.engine, "Top Plays", r#"{"any":true}"#)
+            .await
+            .unwrap();
+        assert!(id > 0);
+        let stored = get_smart_rule(&db.engine, id).await.unwrap();
+        assert_eq!(stored.as_deref(), Some(r#"{"any":true}"#));
+    }
+
+    #[tokio::test]
+    async fn update_smart_rule_replaces_value() {
+        let db = tmp().await;
+        let id = create_smart(&db.engine, "x", r#"{"a":1}"#).await.unwrap();
+        update_smart_rule(&db.engine, id, r#"{"a":2}"#).await.unwrap();
+        assert_eq!(
+            get_smart_rule(&db.engine, id).await.unwrap().as_deref(),
+            Some(r#"{"a":2}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn list_all_returns_user_and_synced_playlists() {
+        let db = tmp().await;
+        // Synced (kind=regular).
+        upsert(
+            &db.engine,
+            &PlaylistUpsert {
+                persistent_id: 1,
+                sync_source_id: 1,
+                name: "Synced",
+                kind: PlaylistKind::Regular,
+                parent_persistent_id: None,
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: None,
+            },
+        )
+        .await
+        .unwrap();
+        // User-created (kind=smart).
+        create_smart(&db.engine, "Mine", r#"{}"#).await.unwrap();
+        let rows = list_all(&db.engine).await.unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn delete_removes_the_row() {
+        let db = tmp().await;
+        let id = create_smart(&db.engine, "to_delete", r#"{}"#).await.unwrap();
+        delete(&db.engine, id).await.unwrap();
+        assert!(get_smart_rule(&db.engine, id).await.unwrap().is_none());
     }
 
     #[tokio::test]
