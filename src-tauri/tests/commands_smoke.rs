@@ -337,6 +337,11 @@ async fn playback_command_surface_runs_through_engine() {
     // covered branch.
     let err = commands::playback::play_track(state, 9999).await.unwrap_err();
     assert!(!err.is_empty());
+
+    // Yield long enough for the worker thread to drain the command
+    // queue before fixture drops (otherwise handle_command's body
+    // never runs and shows 0% coverage in the engine module).
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
