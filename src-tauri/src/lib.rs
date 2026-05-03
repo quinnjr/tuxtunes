@@ -93,17 +93,33 @@ pub fn run() {
                         serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
                     let track_id = payload.get("track_id").and_then(|v| v.as_i64());
                     tauri::async_runtime::spawn(async move {
-                        let label = match track_id {
+                        let row = match track_id {
                             Some(id) => match crate::db::tracks::get(&db.engine, id).await {
-                                Ok(row) => Some(integration::tray::track_label(&row)),
+                                Ok(r) => Some(r),
                                 Err(e) => {
-                                    log::warn!("tray label lookup failed for {id}: {e}");
+                                    log::warn!("track-changed lookup failed for {id}: {e}");
                                     None
                                 }
                             },
                             None => None,
                         };
+                        let label = row.as_ref().map(integration::tray::track_label);
                         integration::tray::set_now_playing_label(&app, label.as_deref());
+
+                        // Desktop notification — only when the window
+                        // is unfocused, to avoid notifying a user
+                        // who's actively looking at the player.
+                        if let Some(row) = &row {
+                            let focused = app
+                                .get_webview_window("main")
+                                .and_then(|w| w.is_focused().ok())
+                                .unwrap_or(false);
+                            if !focused {
+                                if let Err(e) = integration::notify::show_track(row) {
+                                    log::warn!("notification failed: {e}");
+                                }
+                            }
+                        }
                     });
                 });
             }
