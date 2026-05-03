@@ -782,4 +782,167 @@ mod tests {
             });
         assert!(verified.is_some(), "verified_at should be set");
     }
+
+    #[test]
+    fn track_sort_default_is_date_added_descending() {
+        let s = TrackSort::default();
+        assert_eq!(s.column, "date_added");
+        assert!(s.descending);
+    }
+
+    #[tokio::test]
+    async fn list_sort_ascending_uses_nulls_last() {
+        // Mix of named and NULL years: ascending should put NULL last,
+        // exercising the "ASC NULLS LAST" branch of sort_expr_for.
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, year, duration_ms, size_bytes, file_path, \
+                 playlist_ids) VALUES \
+                 ('a', 2020, 0, 0, '/tmp/a', '[]'), \
+                 ('b', 2010, 0, 0, '/tmp/b', '[]'), \
+                 ('c', NULL, 0, 0, '/tmp/c', '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let sort = TrackSort {
+            column: "year".into(),
+            descending: false,
+        };
+        let rows = list(&db.engine, 10, 0, &Default::default(), Some(&sort))
+            .await
+            .unwrap();
+        // NULLS LAST = NULL year shows up at position 2 (after 2010, 2020).
+        assert_eq!(rows[0].title, "b");
+        assert_eq!(rows[1].title, "a");
+        assert_eq!(rows[2].title, "c");
+    }
+
+    #[tokio::test]
+    async fn list_sort_by_artist_uses_album_artist_preference() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, artist, album_artist, duration_ms, size_bytes, \
+                 file_path, playlist_ids) VALUES \
+                 ('a', 'Z artist', 'A album_artist', 0, 0, '/tmp/a', '[]'), \
+                 ('b', 'B artist', NULL, 0, 0, '/tmp/b', '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let sort = TrackSort {
+            column: "artist".into(),
+            descending: false,
+        };
+        let rows = list(&db.engine, 10, 0, &Default::default(), Some(&sort))
+            .await
+            .unwrap();
+        // Effective artist: 'A album_artist' < 'B artist', so a comes first.
+        assert_eq!(rows[0].title, "a");
+    }
+
+    #[tokio::test]
+    async fn load_local_state_map_skips_invalid_pid() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 's', '/s', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Two valid + one with un-parseable persistent_id.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (sync_source_id, persistent_id, title, duration_ms, \
+                 size_bytes, file_path, playlist_ids, rating, play_count, loved) VALUES \
+                 (1, '00000000deadbeef', 'a', 0, 0, '/tmp/a', '[]', 80, 5, 1), \
+                 (1, '00000000feedface', 'b', 0, 0, '/tmp/b', '[]', 0, 0, 0), \
+                 (1, 'NOT_HEX',         'c', 0, 0, '/tmp/c', '[]', 0, 0, 0)",
+                &[],
+            )
+            .await
+            .unwrap();
+        let map = load_local_state_map(&db.engine, 1).await.unwrap();
+        assert_eq!(map.len(), 2);
+        let row = map.get(&0xDEAD_BEEF).unwrap();
+        assert_eq!(row.rating, 80);
+        assert_eq!(row.play_count, 5);
+        assert!(row.loved);
+    }
+
+    #[tokio::test]
+    async fn by_persistent_id_returns_none_when_absent() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 's', '/s', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let res = by_persistent_id(&db.engine, 1, "ffffffffffffffff")
+            .await
+            .unwrap();
+        assert!(res.is_none());
+    }
+
+    #[tokio::test]
+    async fn update_descriptive_fields_writes_every_column() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 's', '/s', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let upsert = ItlTrackUpsert {
+            persistent_id: 0xAAAA_BBBB_CCCC_DDDD,
+            sync_source_id: 1,
+            title: "old",
+            artist: Some("Old Artist"),
+            album: Some("Old Album"),
+            album_artist: Some("Old AA"),
+            composer: None,
+            genre: Some("Rock"),
+            kind: Some("flac"),
+            duration_ms: 1000,
+            size_bytes: 100,
+            bit_rate: Some(128),
+            sample_rate: Some(44100),
+            track_number: Some(1),
+            disc_number: Some(1),
+            year: Some(2000),
+            bpm: None,
+            rating: 0,
+            play_count: 0,
+            date_added_unix: 0,
+            file_path: "/tmp/u.flac",
+            original_path: None,
+        };
+        let id = insert_from_itl(&db.engine, &upsert).await.unwrap();
+
+        let updated = ItlTrackUpsert {
+            title: "new",
+            artist: Some("New Artist"),
+            album: Some("New Album"),
+            year: Some(2025),
+            ..upsert
+        };
+        update_descriptive_fields(&db.engine, id, &updated, 100, 42)
+            .await
+            .unwrap();
+
+        let row = get(&db.engine, id).await.unwrap();
+        assert_eq!(row.title, "new");
+        assert_eq!(row.artist.as_deref(), Some("New Artist"));
+        assert_eq!(row.album.as_deref(), Some("New Album"));
+        assert_eq!(row.play_count, 42);
+    }
 }

@@ -238,4 +238,35 @@ mod tests {
         set_keep_organized(&db.engine, false).await.unwrap();
         assert!(!get_keep_organized(&db.engine).await.unwrap());
     }
+
+    #[tokio::test]
+    async fn get_returns_serde_error_for_type_mismatch() {
+        // Store a string under KEY_VOLUME, then ask for an i64 — the
+        // deserialize must fail with PreferencesError::Serde rather
+        // than silently coerce.
+        let db = tmp_db().await;
+        set(&db.engine, KEY_VOLUME, &"not a number".to_string())
+            .await
+            .unwrap();
+        let res: Result<Option<i64>, _> = get(&db.engine, KEY_VOLUME).await;
+        let err = res.unwrap_err();
+        assert!(matches!(err, PreferencesError::Serde { .. }));
+    }
+
+    #[tokio::test]
+    async fn get_handles_already_parsed_json_value() {
+        // Insert a row where the JSON column is a number directly so
+        // the unwrap match's `other => other` arm passes it through to
+        // serde_json::from_value without re-parsing.
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO preferences (key, value) VALUES ('raw', json('42'))",
+                &[],
+            )
+            .await
+            .unwrap();
+        let v: Option<i64> = get(&db.engine, "raw").await.unwrap();
+        assert_eq!(v, Some(42));
+    }
 }

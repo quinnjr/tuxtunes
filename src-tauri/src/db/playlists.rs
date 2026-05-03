@@ -431,6 +431,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_cached_count_writes_columns() {
+        let db = tmp().await;
+        let id = create_smart(&db.engine, "x", r#"{}"#).await.unwrap();
+        set_cached_count(&db.engine, id, 42).await.unwrap();
+        let count: i64 = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT cached_track_count FROM playlists WHERE id = ?",
+                &[FilterValue::Int(id)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 42);
+    }
+
+    #[tokio::test]
+    async fn get_smart_rule_for_non_smart_row_returns_none() {
+        let db = tmp().await;
+        // Regular playlist, not smart — get_smart_rule must return None
+        // because the WHERE clause filters on kind='smart'.
+        let id = upsert(
+            &db.engine,
+            &PlaylistUpsert {
+                persistent_id: 1,
+                sync_source_id: 1,
+                name: "regular",
+                kind: PlaylistKind::Regular,
+                parent_persistent_id: None,
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(get_smart_rule(&db.engine, id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn get_smart_rule_for_unknown_id_returns_none() {
+        let db = tmp().await;
+        assert!(get_smart_rule(&db.engine, 9999).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn playlists_error_display_works() {
+        let e = PlaylistsError::Query(anyhow::anyhow!("kaput"));
+        assert!(e.to_string().contains("kaput"));
+    }
+
+    #[tokio::test]
     async fn delete_missing_drops_unlisted() {
         let db = tmp().await;
         for i in 1u64..=3 {
