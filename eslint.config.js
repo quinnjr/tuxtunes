@@ -11,6 +11,7 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       '.angular/**',
+      'coverage/**',
       'node_modules/**',
       'src-tauri/target/**',
       'src-tauri/gen/**',
@@ -25,7 +26,14 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
       parserOptions: {
-        projectService: true,
+        projectService: {
+          // vitest config lives at the repo root and isn't part of any
+          // tsconfig include — let the project service synthesize a
+          // default project for that single file. Spec files are
+          // covered by tsconfig.spec.json which is now referenced from
+          // tsconfig.json so the project service auto-discovers them.
+          allowDefaultProject: ['vitest.config.ts'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -57,5 +65,20 @@ export default tseslint.config(
     files: ['**/*.html'],
     extends: [...angular.configs.templateRecommended, ...angular.configs.templateAccessibility],
     rules: {},
+  },
+  {
+    // Test files use stubs / fixtures that violate several lint rules
+    // by design — empty async stubs that match Promise-returning APIs,
+    // typed casts to `as never` for vi.fn impls, etc. Relax those.
+    files: ['**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/no-empty-function': 'off',
+      '@typescript-eslint/no-misused-promises': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+      'unicorn/no-useless-undefined': 'off',
+      'unicorn/consistent-function-scoping': 'off',
+    },
   },
 );
