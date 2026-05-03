@@ -420,6 +420,28 @@ async fn sync_command_surface_lists_and_validates() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn add_sync_source_command_inserts_and_returns_id() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let id = commands::sync::add_sync_source(
+        state.clone(),
+        commands::sync::AddSyncSourceArgs {
+            name: "Test".into(),
+            source_path: "/tmp/x.itl".into(),
+            path_mappings: vec![],
+            conflict_rules: Default::default(),
+            auto_copy_files: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(id > 0);
+    let sources = commands::sync::list_sync_sources(state).await.unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0].name, "Test");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn pick_and_add_track_returns_none_when_dialog_cancels() {
     // Note: The blocking_pick_file dialog can't actually open in mock
     // mode and may panic or block. We don't invoke the command here —

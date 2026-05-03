@@ -9,10 +9,19 @@
 use crate::db::tracks::TrackRow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{ObjectPath, Value};
 use zbus::{connection, interface};
+
+/// Runtime-erased actions the zbus interface impls call. Concrete
+/// implementations close over an `AppHandle<R>` and erase the runtime
+/// type so the structs (which zbus pins to a concrete type via
+/// `#[interface]`) don't need to be generic over `R`. The payload
+/// goes as `serde_json::Value` so the closure can forward arbitrary
+/// shapes to `AppHandle::emit` without needing to be generic itself.
+type EmitFn = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+type WindowFn = Arc<dyn Fn() + Send + Sync>;
 
 const BUS_NAME: &str = "org.mpris.MediaPlayer2.tuxtunes";
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
@@ -63,7 +72,8 @@ impl PlaybackStatus {
 pub type SharedState = Arc<Mutex<MprisState>>;
 
 struct MediaPlayer2 {
-    app: AppHandle,
+    raise: WindowFn,
+    quit: WindowFn,
 }
 
 #[interface(name = "org.mpris.MediaPlayer2")]
@@ -71,16 +81,11 @@ impl MediaPlayer2 {
     /// Bring the main window to the front. Implementing Raise lets
     /// system trays and other MPRIS clients un-minimize the player.
     async fn raise(&self) {
-        use tauri::Manager;
-        let Some(window) = self.app.get_webview_window("main") else {
-            return;
-        };
-        let _ = window.show();
-        let _ = window.set_focus();
+        (self.raise)();
     }
 
     async fn quit(&self) {
-        self.app.exit(0);
+        (self.quit)();
     }
 
     #[zbus(property)]
@@ -130,40 +135,40 @@ impl MediaPlayer2 {
 }
 
 struct Player {
-    app: AppHandle,
+    emit: EmitFn,
     state: SharedState,
 }
 
 #[interface(name = "org.mpris.MediaPlayer2.Player")]
 impl Player {
     async fn play_pause(&self) {
-        let _ = self.app.emit(EVT_MPRIS_PLAY_PAUSE, ());
+        (self.emit)(EVT_MPRIS_PLAY_PAUSE, serde_json::Value::Null);
     }
 
     async fn play(&self) {
-        let _ = self.app.emit(EVT_MPRIS_PLAY, ());
+        (self.emit)(EVT_MPRIS_PLAY, serde_json::Value::Null);
     }
 
     async fn pause(&self) {
-        let _ = self.app.emit(EVT_MPRIS_PAUSE, ());
+        (self.emit)(EVT_MPRIS_PAUSE, serde_json::Value::Null);
     }
 
     async fn stop(&self) {
-        let _ = self.app.emit(EVT_MPRIS_STOP, ());
+        (self.emit)(EVT_MPRIS_STOP, serde_json::Value::Null);
     }
 
     async fn next(&self) {
-        let _ = self.app.emit(EVT_MPRIS_NEXT, ());
+        (self.emit)(EVT_MPRIS_NEXT, serde_json::Value::Null);
     }
 
     async fn previous(&self) {
-        let _ = self.app.emit(EVT_MPRIS_PREVIOUS, ());
+        (self.emit)(EVT_MPRIS_PREVIOUS, serde_json::Value::Null);
     }
 
     /// `offset` is microseconds, positive = forward. The frontend
     /// resolves into an absolute position before calling seek().
     async fn seek(&self, offset: i64) {
-        let _ = self.app.emit(EVT_MPRIS_SEEK, offset);
+        (self.emit)(EVT_MPRIS_SEEK, serde_json::json!(offset));
     }
 
     /// `position` is microseconds. The track-id arg is the
@@ -171,7 +176,7 @@ impl Player {
     /// the current track here; the frontend can compare to the
     /// currently-playing id.
     async fn set_position(&self, _track_id: ObjectPath<'_>, position: i64) {
-        let _ = self.app.emit(EVT_MPRIS_SET_POSITION, position);
+        (self.emit)(EVT_MPRIS_SET_POSITION, serde_json::json!(position));
     }
 
     async fn open_uri(&self, _uri: String) {
@@ -219,7 +224,7 @@ impl Player {
         // Spec: 0.0–1.0. Emit as percent for the frontend to range-check
         // and call set_volume on the engine.
         let pct = (value.clamp(0.0, 1.0) * 100.0) as i64;
-        let _ = self.app.emit(EVT_MPRIS_SET_VOLUME, pct);
+        (self.emit)(EVT_MPRIS_SET_VOLUME, serde_json::json!(pct));
     }
 
     #[zbus(property)]
@@ -364,20 +369,54 @@ pub struct Mpris {
 
 /// Stand the server up on the session bus and return both the shared
 /// state and the live connection. Called from lib.rs at startup.
-pub async fn install(app: AppHandle) -> zbus::Result<Mpris> {
+/// Generic over the Tauri runtime so tests can drive it with a
+/// MockRuntime AppHandle just like production drives it with Wry.
+pub async fn install<R: Runtime>(app: AppHandle<R>) -> zbus::Result<Mpris> {
+    install_with_bus_name(app, BUS_NAME).await
+}
+
+/// Install variant that lets a caller (typically a test) pick a unique
+/// bus name. Production uses [`install`] which pins to the spec name.
+pub async fn install_with_bus_name<R: Runtime>(
+    app: AppHandle<R>,
+    bus_name: &str,
+) -> zbus::Result<Mpris> {
     let state: SharedState = Arc::new(Mutex::new(MprisState {
         volume: 1.0,
         ..Default::default()
     }));
 
-    let media_player = MediaPlayer2 { app: app.clone() };
+    // Three runtime-erased closures the zbus interfaces hold instead
+    // of an `AppHandle<R>` directly. Closing over a clone of the
+    // handle keeps the runtime parameter out of the struct types
+    // (which the `#[interface]` macro pins to a concrete shape).
+    let emit_app = app.clone();
+    let emit: EmitFn = Arc::new(move |event: &str, payload: serde_json::Value| {
+        let _ = emit_app.emit(event, payload);
+    });
+
+    let raise_app = app.clone();
+    let raise: WindowFn = Arc::new(move || {
+        let Some(window) = raise_app.get_webview_window("main") else {
+            return;
+        };
+        let _ = window.show();
+        let _ = window.set_focus();
+    });
+
+    let quit_app = app.clone();
+    let quit: WindowFn = Arc::new(move || {
+        quit_app.exit(0);
+    });
+
+    let media_player = MediaPlayer2 { raise, quit };
     let player = Player {
-        app: app.clone(),
+        emit,
         state: Arc::clone(&state),
     };
 
     let conn = connection::Builder::session()?
-        .name(BUS_NAME)?
+        .name(bus_name)?
         .serve_at(OBJECT_PATH, media_player)?
         .serve_at(OBJECT_PATH, player)?
         .build()

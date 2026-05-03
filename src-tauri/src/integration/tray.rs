@@ -9,16 +9,18 @@
 
 use crate::db::tracks;
 use std::sync::OnceLock;
-use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-/// Handle to the "Now Playing" menu item, captured at install time so
-/// later updates can call `set_text` without re-traversing the menu.
-/// Tauri's menu types are runtime-generic; pinning to `Wry` avoids
-/// having to thread `<R>` through every callsite. The desktop app only
-/// uses Wry — Tauri's only desktop runtime — so this is safe.
-static NOW_PLAYING_ITEM: OnceLock<MenuItem<Wry>> = OnceLock::new();
+type LabelUpdater = Box<dyn Fn(&str) + Send + Sync>;
+
+/// Closure that updates the "Now Playing" menu item's label. The
+/// closure captures the typed `MenuItem<R>` at install time, so this
+/// static can stay runtime-erased even though Tauri's menu types are
+/// runtime-generic. install() can run with any `R: Runtime` (Wry in
+/// production, MockRuntime in tests).
+static UPDATE_NOW_PLAYING: OnceLock<LabelUpdater> = OnceLock::new();
 
 const ID_PLAY_PAUSE: &str = "tray:play-pause";
 const ID_NEXT: &str = "tray:next";
@@ -37,13 +39,13 @@ pub const EVT_TRAY_PREV: &str = "tray:prev";
 /// Build the tray, mount its menu, and wire click → event dispatch.
 /// Failures are logged and the app continues — a tray that won't build
 /// shouldn't take the rest of the app down with it.
-pub fn install(app: &AppHandle) {
+pub fn install<R: Runtime>(app: &AppHandle<R>) {
     if let Err(e) = try_install(app) {
         log::warn!("tray install failed: {e}");
     }
 }
 
-fn try_install(app: &AppHandle) -> tauri::Result<()> {
+fn try_install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let now_playing = MenuItemBuilder::with_id(ID_NOW_PLAYING, "Nothing playing")
         .enabled(false)
         .build(app)?;
@@ -64,10 +66,14 @@ fn try_install(app: &AppHandle) -> tauri::Result<()> {
         .item(&quit)
         .build()?;
 
-    // Capture the now-playing handle before the builder consumes it
-    // into the menu. Subsequent set_text calls flow through this
-    // OnceLock without needing to walk the menu tree.
-    let _ = NOW_PLAYING_ITEM.set(now_playing);
+    // Capture the now-playing handle in a runtime-erased closure
+    // before the menu builder takes ownership. set_now_playing_label
+    // routes through this OnceLock without needing to walk the menu
+    // tree or thread `<R>` through every callsite.
+    let item_for_closure = now_playing.clone();
+    let _ = UPDATE_NOW_PLAYING.set(Box::new(move |label: &str| {
+        let _ = item_for_closure.set_text(label);
+    }));
 
     let _tray = TrayIconBuilder::with_id("tuxtunes-main")
         .tooltip("TuxTunes")
@@ -80,7 +86,7 @@ fn try_install(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn handle_menu(app: &AppHandle, id: &str) {
+fn handle_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
         ID_PLAY_PAUSE => {
             let _ = app.emit(EVT_TRAY_TOGGLE_PLAY, ());
@@ -97,7 +103,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
     }
 }
 
-fn handle_icon(app: &AppHandle, event: &TrayIconEvent) {
+fn handle_icon<R: Runtime>(app: &AppHandle<R>, event: &TrayIconEvent) {
     // Single left-click toggles main window visibility (matches the
     // MPRIS Raise contract and common Linux media-player behavior).
     if let TrayIconEvent::Click {
@@ -110,7 +116,7 @@ fn handle_icon(app: &AppHandle, event: &TrayIconEvent) {
     }
 }
 
-fn toggle_main_window(app: &AppHandle) {
+fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -126,16 +132,16 @@ fn toggle_main_window(app: &AppHandle) {
 }
 
 /// Update the "Now Playing" menu line. Called from a tokio task that
-/// consumes track-changed events. The OnceLock-stored handle keeps the
-/// update out of any per-call menu walk.
-pub fn set_now_playing_label(_app: &AppHandle, label: Option<&str>) {
-    let Some(item) = NOW_PLAYING_ITEM.get() else {
+/// consumes track-changed events. The OnceLock-stored closure routes
+/// the update without requiring callers to know the runtime type.
+pub fn set_now_playing_label<R: Runtime>(_app: &AppHandle<R>, label: Option<&str>) {
+    let Some(update) = UPDATE_NOW_PLAYING.get() else {
         return;
     };
     let text = label
         .map(|t| format!("Now Playing: {t}"))
         .unwrap_or_else(|| "Nothing playing".to_string());
-    let _ = item.set_text(text);
+    update(&text);
 }
 
 /// Render a track row's "title — artist" string for tray label and
@@ -145,4 +151,20 @@ pub fn track_label(row: &tracks::TrackRow) -> String {
         Some(a) if !a.is_empty() => format!("{} — {}", row.title, a),
         _ => row.title.clone(),
     }
+}
+
+/// Test hook exposing handle_menu so integration tests can drive
+/// each of the menu-event branches without standing up a real tray.
+/// Hidden from rustdoc — not part of the public API.
+#[doc(hidden)]
+pub fn dispatch_menu_for_test<R: Runtime>(app: &AppHandle<R>, id: &str) {
+    handle_menu(app, id);
+}
+
+/// Test hook exposing handle_icon's branches so tests can exercise
+/// the MouseButton::Left filter without a real tray icon emitting
+/// events. Hidden from rustdoc — not part of the public API.
+#[doc(hidden)]
+pub fn dispatch_icon_for_test<R: Runtime>(app: &AppHandle<R>, event: &TrayIconEvent) {
+    handle_icon(app, event);
 }
