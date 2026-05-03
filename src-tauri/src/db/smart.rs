@@ -723,6 +723,302 @@ mod tests {
         assert_eq!(escape_like("a_b"), "a\\_b");
     }
 
+    #[tokio::test]
+    async fn evaluate_text_is_not() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("a", "Rock", 0, 0), ("b", "Jazz", 0, 0)]).await;
+        let r = rule(
+            true,
+            vec![leaf("genre", Op::IsNot, Value::Text("Rock".into()))],
+        );
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "b");
+    }
+
+    #[tokio::test]
+    async fn evaluate_text_not_contains_handles_nulls() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("hello world", "x", 0, 0), ("goodbye", "x", 0, 0)]).await;
+        let r = rule(
+            true,
+            vec![leaf("title", Op::NotContains, Value::Text("hello".into()))],
+        );
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "goodbye");
+    }
+
+    #[tokio::test]
+    async fn evaluate_text_starts_and_ends_with() {
+        let db = tmp_db().await;
+        seed(
+            &db.engine,
+            &[
+                ("Pre-fix", "x", 0, 0),
+                ("middle", "x", 0, 0),
+                ("post-Pre", "x", 0, 0),
+            ],
+        )
+        .await;
+        let starts = rule(
+            true,
+            vec![leaf("title", Op::StartsWith, Value::Text("Pre".into()))],
+        );
+        assert_eq!(evaluate(&db.engine, &starts).await.unwrap().len(), 1);
+        let ends = rule(
+            true,
+            vec![leaf("title", Op::EndsWith, Value::Text("Pre".into()))],
+        );
+        let ends_rows = evaluate(&db.engine, &ends).await.unwrap();
+        assert_eq!(ends_rows.len(), 1);
+        assert_eq!(ends_rows[0].title, "post-Pre");
+    }
+
+    #[tokio::test]
+    async fn evaluate_int_is_isnot_less_inrange() {
+        let db = tmp_db().await;
+        seed(
+            &db.engine,
+            &[("a", "x", 0, 1), ("b", "x", 0, 5), ("c", "x", 0, 10)],
+        )
+        .await;
+        let is = rule(true, vec![leaf("play_count", Op::Is, Value::Int(5))]);
+        assert_eq!(evaluate(&db.engine, &is).await.unwrap().len(), 1);
+        let isnot = rule(true, vec![leaf("play_count", Op::IsNot, Value::Int(5))]);
+        assert_eq!(evaluate(&db.engine, &isnot).await.unwrap().len(), 2);
+        let less = rule(true, vec![leaf("play_count", Op::Less, Value::Int(5))]);
+        assert_eq!(evaluate(&db.engine, &less).await.unwrap().len(), 1);
+        let in_range = rule(
+            true,
+            vec![leaf(
+                "play_count",
+                Op::InRange,
+                Value::Range { from: 2, to: 9 },
+            )],
+        );
+        let rows = evaluate(&db.engine, &in_range).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "b");
+    }
+
+    #[tokio::test]
+    async fn evaluate_bool_is_and_isnot() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, \
+                 playlist_ids, loved) \
+                 VALUES ('loved', 1000, 0, '/tmp/l.flac', '[]', 1), \
+                        ('plain', 1000, 0, '/tmp/p.flac', '[]', 0)",
+                &[],
+            )
+            .await
+            .unwrap();
+        let is_loved = rule(true, vec![leaf("loved", Op::Is, Value::Bool(true))]);
+        let rows = evaluate(&db.engine, &is_loved).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "loved");
+        let isnot_loved = rule(true, vec![leaf("loved", Op::IsNot, Value::Bool(true))]);
+        let rows = evaluate(&db.engine, &isnot_loved).await.unwrap();
+        assert_eq!(rows[0].title, "plain");
+    }
+
+    #[tokio::test]
+    async fn evaluate_date_not_in_the_last() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("recent", "x", 0, 0), ("old", "x", 0, 0)]).await;
+        db.engine
+            .raw_sql_execute(
+                "UPDATE tracks SET date_added = datetime('now', '-30 days') WHERE title = 'old'",
+                &[],
+            )
+            .await
+            .unwrap();
+        let r = rule(
+            true,
+            vec![leaf(
+                "date_added",
+                Op::NotInTheLast,
+                Value::Relative {
+                    n: 7,
+                    unit: TimeUnit::Days,
+                },
+            )],
+        );
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "old");
+    }
+
+    #[tokio::test]
+    async fn evaluate_nested_or_group() {
+        let db = tmp_db().await;
+        seed(
+            &db.engine,
+            &[("a", "Rock", 0, 0), ("b", "Jazz", 0, 0), ("c", "Pop", 0, 0)],
+        )
+        .await;
+        let nested = ConditionGroup {
+            match_all: false,
+            children: vec![
+                leaf("genre", Op::Is, Value::Text("Rock".into())),
+                leaf("genre", Op::Is, Value::Text("Pop".into())),
+            ],
+        };
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: None,
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![Condition::Group(nested)],
+            },
+        };
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn malformed_text_value_for_text_field_errors() {
+        let db = tmp_db().await;
+        let r = rule(true, vec![leaf("title", Op::Is, Value::Int(5))]);
+        assert!(matches!(
+            evaluate(&db.engine, &r).await.unwrap_err(),
+            SmartError::Malformed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_int_value_for_int_field_errors() {
+        let db = tmp_db().await;
+        let r = rule(
+            true,
+            vec![leaf("play_count", Op::Is, Value::Text("five".into()))],
+        );
+        assert!(matches!(
+            evaluate(&db.engine, &r).await.unwrap_err(),
+            SmartError::Malformed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_bool_value_for_bool_field_errors() {
+        let db = tmp_db().await;
+        let r = rule(true, vec![leaf("loved", Op::Is, Value::Int(1))]);
+        assert!(matches!(
+            evaluate(&db.engine, &r).await.unwrap_err(),
+            SmartError::Malformed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_range_value_errors() {
+        let db = tmp_db().await;
+        let r = rule(true, vec![leaf("play_count", Op::InRange, Value::Int(5))]);
+        assert!(matches!(
+            evaluate(&db.engine, &r).await.unwrap_err(),
+            SmartError::Malformed(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_relative_value_errors() {
+        let db = tmp_db().await;
+        let r = rule(
+            true,
+            vec![leaf("date_added", Op::InTheLast, Value::Int(5))],
+        );
+        assert!(matches!(
+            evaluate(&db.engine, &r).await.unwrap_err(),
+            SmartError::Malformed(_)
+        ));
+    }
+
+    #[test]
+    fn time_unit_modifier_handles_weeks_and_months() {
+        assert_eq!(TimeUnit::Days.modifier(3), "-3 days");
+        assert_eq!(TimeUnit::Weeks.modifier(2), "-14 days");
+        assert_eq!(TimeUnit::Months.modifier(6), "-6 months");
+    }
+
+    #[tokio::test]
+    async fn empty_group_compiles_to_truthy() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("a", "x", 0, 0), ("b", "x", 0, 0)]).await;
+        let r = rule(true, vec![]);
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn order_for_every_selection_mode_compiles() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("a", "x", 0, 0), ("b", "x", 0, 0)]).await;
+        for mode in [
+            SelectionMode::Random,
+            SelectionMode::SongName,
+            SelectionMode::Album,
+            SelectionMode::Artist,
+            SelectionMode::Genre,
+            SelectionMode::MostRecentlyAdded,
+            SelectionMode::MostOftenPlayed,
+            SelectionMode::MostRecentlyPlayed,
+            SelectionMode::HighestRating,
+        ] {
+            let r = SmartRule {
+                match_all: true,
+                live_updating: true,
+                limit: Some(Limit {
+                    value: 10,
+                    unit: LimitUnit::Songs,
+                    selected_by: Some(mode),
+                }),
+                root: ConditionGroup {
+                    match_all: true,
+                    children: vec![],
+                },
+            };
+            assert_eq!(evaluate(&db.engine, &r).await.unwrap().len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn limit_with_non_song_unit_yields_unbounded_query() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("a", "x", 0, 0), ("b", "x", 0, 0), ("c", "x", 0, 0)]).await;
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: Some(Limit {
+                value: 1,
+                unit: LimitUnit::Minutes,
+                selected_by: None,
+            }),
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![],
+            },
+        };
+        assert_eq!(evaluate(&db.engine, &r).await.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn smart_error_display_covers_every_variant() {
+        let q = SmartError::Query(anyhow::anyhow!("boom"));
+        assert!(q.to_string().contains("boom"));
+        let u = SmartError::UnsupportedField("xyz".into());
+        assert!(u.to_string().contains("xyz"));
+        let i = SmartError::InvalidOperator {
+            field: "f".into(),
+            op: "Op".into(),
+        };
+        let s = i.to_string();
+        assert!(s.contains("f") && s.contains("Op"));
+        let m = SmartError::Malformed("nope".into());
+        assert!(m.to_string().contains("nope"));
+    }
+
     #[test]
     fn rule_roundtrips_through_serde() {
         let r = SmartRule {

@@ -123,3 +123,176 @@ pub async fn delete_by_keep_set(
         .raw_sql_execute(&sql, &[FilterValue::Int(sync_source_id)])
         .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+    use serde::Deserialize;
+
+    async fn tmp() -> Db {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp.path()).await.unwrap();
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 'x', '/x', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn pid_hex_zero_pads_to_sixteen_chars() {
+        assert_eq!(pid_hex(0), "0000000000000000");
+        assert_eq!(pid_hex(0xDEAD_BEEF), "00000000deadbeef");
+        assert_eq!(pid_hex(u64::MAX), "ffffffffffffffff");
+    }
+
+    #[test]
+    fn opt_str_handles_some_and_none() {
+        assert!(matches!(opt_str(Some("hi")), FilterValue::String(s) if s == "hi"));
+        assert!(matches!(opt_str(None), FilterValue::Null));
+    }
+
+    #[test]
+    fn opt_int_handles_some_and_none() {
+        assert!(matches!(opt_int(Some(42)), FilterValue::Int(42)));
+        assert!(matches!(opt_int(None), FilterValue::Null));
+    }
+
+    #[test]
+    fn sqlite_bool_decodes_integers_to_bool() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(deserialize_with = "sqlite_bool")]
+            flag: bool,
+        }
+        let one: Holder = serde_json::from_str(r#"{"flag":1}"#).unwrap();
+        assert!(one.flag);
+        let zero: Holder = serde_json::from_str(r#"{"flag":0}"#).unwrap();
+        assert!(!zero.flag);
+        // Non-integer (e.g. native bool) falls through to false. The
+        // helper is forgiving rather than strict — a sync source with
+        // unexpected JSON shape still loads cleanly.
+        let str_val: Holder = serde_json::from_str(r#"{"flag":"true"}"#).unwrap();
+        assert!(!str_val.flag);
+    }
+
+    #[tokio::test]
+    async fn load_pid_to_local_id_map_round_trips() {
+        let db = tmp().await;
+        // Two synced rows + one un-synced (NULL persistent_id) the
+        // helper should ignore.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+                 sort_order, track_entries) \
+                 VALUES (1, ?, 'a', 'regular', 0, '[]'), \
+                        (1, ?, 'b', 'regular', 0, '[]'), \
+                        (1, NULL, 'c', 'regular', 0, '[]')",
+                &[
+                    FilterValue::String(pid_hex(0xAABB)),
+                    FilterValue::String(pid_hex(0xCCDD)),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let map = load_pid_to_local_id_map(&db.engine, "playlists", 1)
+            .await
+            .unwrap();
+        assert_eq!(map.len(), 2);
+        assert!(map.contains_key(&0xAABB));
+        assert!(map.contains_key(&0xCCDD));
+    }
+
+    #[tokio::test]
+    async fn load_pid_to_local_id_map_skips_unparseable_persistent_ids() {
+        let db = tmp().await;
+        // Manually-inserted rubbish persistent_id should be silently
+        // dropped, not abort the load.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+                 sort_order, track_entries) \
+                 VALUES (1, 'not-hex', 'a', 'regular', 0, '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let map = load_pid_to_local_id_map(&db.engine, "playlists", 1)
+            .await
+            .unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_by_keep_set_with_empty_keep_clears_source() {
+        let db = tmp().await;
+        // Insert two rows under sync_source 1 and one under a fictional
+        // source 99 that the delete must not touch.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (99, 'y', '/y', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+                 sort_order, track_entries) \
+                 VALUES (1, ?, 'a', 'regular', 0, '[]'), \
+                        (1, ?, 'b', 'regular', 0, '[]'), \
+                        (99, ?, 'c', 'regular', 0, '[]')",
+                &[
+                    FilterValue::String(pid_hex(1)),
+                    FilterValue::String(pid_hex(2)),
+                    FilterValue::String(pid_hex(3)),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let deleted = delete_by_keep_set(&db.engine, "playlists", 1, &[])
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2);
+        // Source 99 untouched.
+        let remaining: i64 = db
+            .engine
+            .raw_sql_scalar("SELECT COUNT(*) FROM playlists", &[])
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_by_keep_set_chunks_more_than_batch() {
+        let db = tmp().await;
+        // BATCH = 500 — insert 600 rows so the keep set spans two chunks
+        // and exercises the multi-INSERT path.
+        let mut sql = String::from(
+            "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+             sort_order, track_entries) VALUES ",
+        );
+        for i in 1u64..=600 {
+            if i > 1 {
+                sql.push(',');
+            }
+            sql.push_str(&format!("(1, '{:016x}', 'p', 'regular', 0, '[]')", i));
+        }
+        db.engine.raw_sql_execute(&sql, &[]).await.unwrap();
+
+        // Keep the first 550, drop 50.
+        let keep: Vec<u64> = (1u64..=550).collect();
+        let deleted = delete_by_keep_set(&db.engine, "playlists", 1, &keep)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 50);
+    }
+}
