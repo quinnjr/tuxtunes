@@ -390,7 +390,9 @@ mod tests {
     async fn update_smart_rule_replaces_value() {
         let db = tmp().await;
         let id = create_smart(&db.engine, "x", r#"{"a":1}"#).await.unwrap();
-        update_smart_rule(&db.engine, id, r#"{"a":2}"#).await.unwrap();
+        update_smart_rule(&db.engine, id, r#"{"a":2}"#)
+            .await
+            .unwrap();
         assert_eq!(
             get_smart_rule(&db.engine, id).await.unwrap().as_deref(),
             Some(r#"{"a":2}"#)
@@ -425,7 +427,9 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_the_row() {
         let db = tmp().await;
-        let id = create_smart(&db.engine, "to_delete", r#"{}"#).await.unwrap();
+        let id = create_smart(&db.engine, "to_delete", r#"{}"#)
+            .await
+            .unwrap();
         delete(&db.engine, id).await.unwrap();
         assert!(get_smart_rule(&db.engine, id).await.unwrap().is_none());
     }

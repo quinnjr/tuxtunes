@@ -205,11 +205,11 @@ mod tests {
         obj.insert("id".into(), serde_json::Value::from(1_i64));
         obj.insert("name".into(), serde_json::Value::from("X"));
         obj.insert("source_path".into(), serde_json::Value::from("/x"));
+        obj.insert("path_mappings".into(), serde_json::Value::Array(vec![]));
         obj.insert(
-            "path_mappings".into(),
-            serde_json::Value::Array(vec![]),
+            "conflict_rules".into(),
+            serde_json::Value::Object(Default::default()),
         );
-        obj.insert("conflict_rules".into(), serde_json::Value::Object(Default::default()));
         obj.insert("kind".into(), serde_json::Value::from("itunes_itl"));
         obj.insert("auto_copy_files".into(), serde_json::Value::from(1_i64));
         obj.insert("last_sync_at".into(), serde_json::Value::Null);

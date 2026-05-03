@@ -146,15 +146,12 @@ pub fn run() {
                         if let Some(handle) = app.try_state::<integration::MprisHandle>() {
                             if let Some(m) = &handle.mpris {
                                 let row_clone = row.clone();
-                                if let Err(e) = integration::mpris::update_state(
-                                    &m.conn,
-                                    &m.state,
-                                    |s| {
+                                if let Err(e) =
+                                    integration::mpris::update_state(&m.conn, &m.state, |s| {
                                         s.track = row_clone;
                                         s.position_us = 0;
-                                    },
-                                )
-                                .await
+                                    })
+                                    .await
                                 {
                                     log::warn!("mpris track update failed: {e}");
                                 }
@@ -171,8 +168,11 @@ pub fn run() {
                     let app = app_for_listener.clone();
                     let payload: serde_json::Value =
                         serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
-                    let state_str =
-                        payload.get("state").and_then(|v| v.as_str()).unwrap_or("stopped").to_string();
+                    let state_str = payload
+                        .get("state")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stopped")
+                        .to_string();
                     tauri::async_runtime::spawn(async move {
                         let Some(handle) = app.try_state::<integration::MprisHandle>() else {
                             return;
@@ -185,11 +185,10 @@ pub fn run() {
                             "paused" => integration::mpris::PlaybackStatus::Paused,
                             _ => integration::mpris::PlaybackStatus::Stopped,
                         };
-                        if let Err(e) =
-                            integration::mpris::update_state(&m.conn, &m.state, |s| {
-                                s.status = new_status;
-                            })
-                            .await
+                        if let Err(e) = integration::mpris::update_state(&m.conn, &m.state, |s| {
+                            s.status = new_status;
+                        })
+                        .await
                         {
                             log::warn!("mpris state update failed: {e}");
                         }
@@ -201,47 +200,55 @@ pub fn run() {
             // per second by the engine already; no extra debouncing here.
             {
                 let app_for_listener = app.handle().clone();
-                app.handle().listen("playback:position-update", move |event| {
-                    let app = app_for_listener.clone();
-                    let payload: serde_json::Value =
-                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
-                    let position_ms = payload.get("position_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-                    tauri::async_runtime::spawn(async move {
-                        let Some(handle) = app.try_state::<integration::MprisHandle>() else {
-                            return;
-                        };
-                        let Some(m) = &handle.mpris else {
-                            return;
-                        };
-                        let _ = integration::mpris::update_state(&m.conn, &m.state, |s| {
-                            s.position_us = position_ms.saturating_mul(1000);
-                        })
-                        .await;
+                app.handle()
+                    .listen("playback:position-update", move |event| {
+                        let app = app_for_listener.clone();
+                        let payload: serde_json::Value = serde_json::from_str(event.payload())
+                            .unwrap_or(serde_json::Value::Null);
+                        let position_ms = payload
+                            .get("position_ms")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        tauri::async_runtime::spawn(async move {
+                            let Some(handle) = app.try_state::<integration::MprisHandle>() else {
+                                return;
+                            };
+                            let Some(m) = &handle.mpris else {
+                                return;
+                            };
+                            let _ = integration::mpris::update_state(&m.conn, &m.state, |s| {
+                                s.position_us = position_ms.saturating_mul(1000);
+                            })
+                            .await;
+                        });
                     });
-                });
             }
 
             // Volume-changed → MPRIS Volume.
             {
                 let app_for_listener = app.handle().clone();
-                app.handle().listen("playback:volume-changed", move |event| {
-                    let app = app_for_listener.clone();
-                    let payload: serde_json::Value =
-                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
-                    let pct = payload.get("volume").and_then(|v| v.as_i64()).unwrap_or(100);
-                    tauri::async_runtime::spawn(async move {
-                        let Some(handle) = app.try_state::<integration::MprisHandle>() else {
-                            return;
-                        };
-                        let Some(m) = &handle.mpris else {
-                            return;
-                        };
-                        let _ = integration::mpris::update_state(&m.conn, &m.state, |s| {
-                            s.volume = (pct as f64 / 100.0).clamp(0.0, 1.0);
-                        })
-                        .await;
+                app.handle()
+                    .listen("playback:volume-changed", move |event| {
+                        let app = app_for_listener.clone();
+                        let payload: serde_json::Value = serde_json::from_str(event.payload())
+                            .unwrap_or(serde_json::Value::Null);
+                        let pct = payload
+                            .get("volume")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(100);
+                        tauri::async_runtime::spawn(async move {
+                            let Some(handle) = app.try_state::<integration::MprisHandle>() else {
+                                return;
+                            };
+                            let Some(m) = &handle.mpris else {
+                                return;
+                            };
+                            let _ = integration::mpris::update_state(&m.conn, &m.state, |s| {
+                                s.volume = (pct as f64 / 100.0).clamp(0.0, 1.0);
+                            })
+                            .await;
+                        });
                     });
-                });
             }
 
             // Restore persisted volume. Sending SetVolume tells mpv to set
@@ -273,7 +280,8 @@ pub fn run() {
                 let engine = std::sync::Arc::clone(&state_ref.engine);
                 runtime.spawn(async move {
                     use crate::db::preferences::{
-                        self, KEY_AUDIO_DEVICE, KEY_AUDIO_EXCLUSIVE, KEY_REPLAYGAIN_MODE, KEY_VOLUME,
+                        self, KEY_AUDIO_DEVICE, KEY_AUDIO_EXCLUSIVE, KEY_REPLAYGAIN_MODE,
+                        KEY_VOLUME,
                     };
                     use crate::playback::config::{PlaybackPrefs, ReplayGainMode};
                     use crate::playback::EngineCommand;
@@ -289,14 +297,12 @@ pub fn run() {
                         .ok()
                         .flatten()
                         .unwrap_or(false);
-                    let replaygain_mode = preferences::get::<ReplayGainMode>(
-                        &db.engine,
-                        KEY_REPLAYGAIN_MODE,
-                    )
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or(ReplayGainMode::Off);
+                    let replaygain_mode =
+                        preferences::get::<ReplayGainMode>(&db.engine, KEY_REPLAYGAIN_MODE)
+                            .await
+                            .ok()
+                            .flatten()
+                            .unwrap_or(ReplayGainMode::Off);
                     let volume = preferences::get::<i64>(&db.engine, KEY_VOLUME)
                         .await
                         .ok()

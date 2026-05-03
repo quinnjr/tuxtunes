@@ -49,7 +49,10 @@ impl Default for TrackSort {
 fn sort_expr_for(column: &str, descending: bool) -> Option<String> {
     let (expr, nocase): (&str, bool) = match column {
         "title" => ("title", true),
-        "artist" => ("COALESCE(NULLIF(album_artist, ''), NULLIF(artist, ''))", true),
+        "artist" => (
+            "COALESCE(NULLIF(album_artist, ''), NULLIF(artist, ''))",
+            true,
+        ),
         "album" => ("album", true),
         "genre" => ("genre", true),
         "year" => ("year", false),
@@ -460,7 +463,9 @@ mod tests {
         let db = tmp_db().await;
         let a = insert_fixture(&db.engine, "Alpha", "/tmp/a.flac").await;
         let b = insert_fixture(&db.engine, "Bravo", "/tmp/b.flac").await;
-        let rows = list(&db.engine, 10, 0, &Default::default(), None).await.unwrap();
+        let rows = list(&db.engine, 10, 0, &Default::default(), None)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 2);
         // newest first — Bravo was inserted second → has the higher id
         assert_eq!(rows[0].id, b);

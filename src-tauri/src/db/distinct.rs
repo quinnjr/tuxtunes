@@ -109,7 +109,8 @@ pub async fn get_distinct(
     column: &str,
     filters: &TrackFilters,
 ) -> Result<Vec<DistinctValue>, DistinctError> {
-    let expr = column_expr_for(column).ok_or_else(|| DistinctError::UnsupportedColumn(column.to_string()))?;
+    let expr = column_expr_for(column)
+        .ok_or_else(|| DistinctError::UnsupportedColumn(column.to_string()))?;
 
     // Drop the same column's filter from the where clause — selecting
     // distinct values for "genre" should ignore the active genre filter

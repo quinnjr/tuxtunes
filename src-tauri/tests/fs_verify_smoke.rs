@@ -59,7 +59,9 @@ async fn verify_walks_library_and_classifies_each_row() {
 
     let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
     let handle = app.handle().clone();
-    let stats = tuxtunes::fs::verify::verify_all(&db.engine, &handle).await.unwrap();
+    let stats = tuxtunes::fs::verify::verify_all(&db.engine, &handle)
+        .await
+        .unwrap();
 
     assert_eq!(stats.total, 3);
     assert_eq!(stats.verified, 1);
@@ -75,6 +77,8 @@ async fn verify_on_empty_library_completes() {
 
     let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
     let handle = app.handle().clone();
-    let stats = tuxtunes::fs::verify::verify_all(&db.engine, &handle).await.unwrap();
+    let stats = tuxtunes::fs::verify::verify_all(&db.engine, &handle)
+        .await
+        .unwrap();
     assert_eq!(stats.total, 0);
 }

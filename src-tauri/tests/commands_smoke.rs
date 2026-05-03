@@ -104,7 +104,9 @@ async fn list_albums_artists_distinct_round_trip() {
 
     let albums = commands::library::list_albums(state.clone()).await.unwrap();
     assert_eq!(albums.len(), 2);
-    let artists = commands::library::list_artists(state.clone()).await.unwrap();
+    let artists = commands::library::list_artists(state.clone())
+        .await
+        .unwrap();
     assert_eq!(artists.len(), 2);
     let in_album = commands::library::tracks_for_album(state.clone(), "X".into(), "A".into())
         .await
@@ -168,10 +170,7 @@ async fn show_in_files_command_runs_without_crashing() {
     let id: i64 = state
         .db
         .engine
-        .raw_sql_scalar(
-            "SELECT id FROM tracks WHERE title = 'show'",
-            &[],
-        )
+        .raw_sql_scalar("SELECT id FROM tracks WHERE title = 'show'", &[])
         .await
         .unwrap();
     // xdg-open may not exist in CI; we just want the function to walk
@@ -184,21 +183,29 @@ async fn preferences_command_surface() {
     let (app, _tmp) = fixture().await;
     let state = app.state::<AppState>();
 
-    let root = commands::preferences::get_library_root(state.clone()).await.unwrap();
+    let root = commands::preferences::get_library_root(state.clone())
+        .await
+        .unwrap();
     assert!(!root.is_empty());
     commands::preferences::set_library_root(state.clone(), "/tmp/lib".into())
         .await
         .unwrap();
 
-    let scheme = commands::preferences::get_organize_scheme(state.clone()).await.unwrap();
+    let scheme = commands::preferences::get_organize_scheme(state.clone())
+        .await
+        .unwrap();
     assert!(!scheme.is_empty());
     commands::preferences::set_organize_scheme(state.clone(), "{title}.{ext}".into())
         .await
         .unwrap();
 
-    let keep = commands::preferences::get_keep_organized(state.clone()).await.unwrap();
+    let keep = commands::preferences::get_keep_organized(state.clone())
+        .await
+        .unwrap();
     assert!(keep);
-    commands::preferences::set_keep_organized(state, false).await.unwrap();
+    commands::preferences::set_keep_organized(state, false)
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -206,8 +213,12 @@ async fn audio_command_surface_persists_prefs() {
     let (app, _tmp) = fixture().await;
     let state = app.state::<AppState>();
 
-    let _ = commands::audio::list_audio_devices(state.clone()).await.unwrap();
-    let snap = commands::audio::get_audio_prefs(state.clone()).await.unwrap();
+    let _ = commands::audio::list_audio_devices(state.clone())
+        .await
+        .unwrap();
+    let snap = commands::audio::get_audio_prefs(state.clone())
+        .await
+        .unwrap();
     assert!(snap.device_id.is_none());
 
     commands::audio::set_audio_device(
@@ -222,7 +233,10 @@ async fn audio_command_surface_persists_prefs() {
     .unwrap();
     let snap2 = commands::audio::get_audio_prefs(state).await.unwrap();
     assert_eq!(snap2.device_id.as_deref(), Some("alsa/null"));
-    assert_eq!(snap2.replaygain_mode, tuxtunes::playback::config::ReplayGainMode::Track);
+    assert_eq!(
+        snap2.replaygain_mode,
+        tuxtunes::playback::config::ReplayGainMode::Track
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -253,7 +267,9 @@ async fn smart_rule_evaluate_and_preview_via_command() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].title, "T1");
 
-    let count = commands::smart::preview_smart_rule(state, rule).await.unwrap();
+    let count = commands::smart::preview_smart_rule(state, rule)
+        .await
+        .unwrap();
     assert_eq!(count, 1);
 }
 
@@ -273,7 +289,9 @@ async fn playlist_crud_via_commands() {
         .unwrap();
     assert!(id > 0);
 
-    let lists = commands::playlists::list_playlists(state.clone()).await.unwrap();
+    let lists = commands::playlists::list_playlists(state.clone())
+        .await
+        .unwrap();
     assert_eq!(lists.len(), 1);
 
     let updated_rule: SmartRule = serde_json::from_str(
@@ -290,7 +308,9 @@ async fn playlist_crud_via_commands() {
         .unwrap();
     assert!(opened.is_empty()); // No tracks inserted yet.
 
-    commands::playlists::delete_playlist(state, id).await.unwrap();
+    commands::playlists::delete_playlist(state, id)
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -315,7 +335,9 @@ async fn open_smart_playlist_rejects_non_smart_id() {
         .raw_sql_scalar("SELECT id FROM playlists", &[])
         .await
         .unwrap();
-    let err = commands::playlists::open_smart_playlist(state, id).await.unwrap_err();
+    let err = commands::playlists::open_smart_playlist(state, id)
+        .await
+        .unwrap_err();
     assert!(err.contains("not a smart playlist"));
 }
 
@@ -366,11 +388,15 @@ async fn playback_command_surface_runs_through_engine() {
     commands::playback::resume(state.clone()).await.unwrap();
     commands::playback::stop(state.clone()).await.unwrap();
     commands::playback::seek(state.clone(), 1000).await.unwrap();
-    commands::playback::set_volume(state.clone(), 50).await.unwrap();
+    commands::playback::set_volume(state.clone(), 50)
+        .await
+        .unwrap();
 
     // play_track on an unknown id surfaces a String error; that's a
     // covered branch.
-    let err = commands::playback::play_track(state, 9999).await.unwrap_err();
+    let err = commands::playback::play_track(state, 9999)
+        .await
+        .unwrap_err();
     assert!(!err.is_empty());
 
     // Yield long enough for the worker thread to drain the command
@@ -383,7 +409,9 @@ async fn playback_command_surface_runs_through_engine() {
 async fn sync_command_surface_lists_and_validates() {
     let (app, _tmp) = fixture().await;
     let state = app.state::<AppState>();
-    let sources = commands::sync::list_sync_sources(state.clone()).await.unwrap();
+    let sources = commands::sync::list_sync_sources(state.clone())
+        .await
+        .unwrap();
     assert!(sources.is_empty());
 
     // run_sync_now on a non-existent source should still be Ok at the

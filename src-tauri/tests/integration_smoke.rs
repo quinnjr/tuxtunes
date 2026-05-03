@@ -153,8 +153,10 @@ fn mpris_build_metadata_for_no_track_is_empty() {
 
 #[test]
 fn mpris_build_metadata_includes_title_artist_album() {
-    let mut state = integration::mpris::MprisState::default();
-    state.track = Some(fake_track("Hello"));
+    let state = integration::mpris::MprisState {
+        track: Some(fake_track("Hello")),
+        ..Default::default()
+    };
     let map = integration::mpris::build_metadata(&state);
     // Required keys per the MPRIS spec.
     assert!(map.contains_key("xesam:title"));
@@ -166,12 +168,14 @@ fn mpris_build_metadata_includes_title_artist_album() {
 
 #[test]
 fn mpris_build_metadata_omits_artist_album_when_missing() {
-    let mut state = integration::mpris::MprisState::default();
-    state.track = Some(TrackRow {
-        artist: None,
-        album: None,
-        ..fake_track("Bare")
-    });
+    let state = integration::mpris::MprisState {
+        track: Some(TrackRow {
+            artist: None,
+            album: None,
+            ..fake_track("Bare")
+        }),
+        ..Default::default()
+    };
     let map = integration::mpris::build_metadata(&state);
     assert!(!map.contains_key("xesam:artist"));
     assert!(!map.contains_key("xesam:album"));
@@ -188,11 +192,13 @@ fn mpris_build_metadata_picks_up_cover_art_when_present() {
     let cover = dir.path().join("cover.jpg");
     std::fs::write(&cover, b"x").unwrap();
 
-    let mut state = integration::mpris::MprisState::default();
-    state.track = Some(TrackRow {
-        file_path: track_path.display().to_string(),
-        ..fake_track("WithArt")
-    });
+    let state = integration::mpris::MprisState {
+        track: Some(TrackRow {
+            file_path: track_path.display().to_string(),
+            ..fake_track("WithArt")
+        }),
+        ..Default::default()
+    };
     let map = integration::mpris::build_metadata(&state);
     assert!(map.contains_key("mpris:artUrl"));
 }

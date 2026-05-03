@@ -155,10 +155,7 @@ pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> R
 /// non-goals), so xdg-open is the standard cross-DE entry point —
 /// `tauri-plugin-shell::Shell::open` is deprecated.
 #[tauri::command]
-pub async fn show_in_files(
-    state: tauri::State<'_, AppState>,
-    track_id: i64,
-) -> Result<(), String> {
+pub async fn show_in_files(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
     let row = tracks::get(&state.db.engine, track_id)
         .await
         .map_err(|e| e.to_string())?;

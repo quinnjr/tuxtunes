@@ -30,10 +30,7 @@ impl AppState {
     /// (PlaybackEngine, FsCoordinator, SyncCoordinator) are each
     /// generic over `R: Runtime` and erase the runtime as soon as
     /// they capture the handle into their worker threads.
-    pub async fn new<R: Runtime>(
-        db_path: &Path,
-        app: AppHandle<R>,
-    ) -> Result<Self, AppStateError> {
+    pub async fn new<R: Runtime>(db_path: &Path, app: AppHandle<R>) -> Result<Self, AppStateError> {
         let db = Arc::new(Db::open(db_path).await?);
         let engine = Arc::new(PlaybackEngine::spawn(app.clone())?);
         let fs = Arc::new(FsCoordinator::new(Arc::clone(&db.engine), app.clone()));

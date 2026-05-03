@@ -8,8 +8,6 @@
 //! - sync::worker::SyncWorker dispatch via SyncCoordinator
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
 
 fn fixture_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
@@ -61,7 +59,10 @@ async fn reconcile_tracks_against_real_fixture() {
     // important coverage signal is that the reconciler walked the
     // entire library and produced ANY result.
     let total = stats.inserted + stats.updated + stats.deleted + stats.warnings;
-    assert!(total > 1000, "expected reconciler to walk the library, got {stats:?}");
+    assert!(
+        total > 1000,
+        "expected reconciler to walk the library, got {stats:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -102,14 +103,10 @@ async fn reconcile_playlists_against_real_fixture() {
     .await
     .unwrap();
 
-    let stats = tuxtunes::sync::reconcile_playlists::reconcile(
-        &db.engine,
-        &handle,
-        source_id,
-        &lib,
-    )
-    .await
-    .expect("reconcile playlists");
+    let stats =
+        tuxtunes::sync::reconcile_playlists::reconcile(&db.engine, &handle, source_id, &lib)
+            .await
+            .expect("reconcile playlists");
     // Same shape as track reconcile: the playlist walker should have
     // touched some rows even if the path mappings dropped tracks.
     let total = stats.inserted + stats.updated + stats.deleted;

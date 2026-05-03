@@ -180,7 +180,10 @@ impl Player {
 
     #[zbus(property)]
     fn playback_status(&self) -> &str {
-        self.state.lock().map(|s| s.status.as_str()).unwrap_or("Stopped")
+        self.state
+            .lock()
+            .map(|s| s.status.as_str())
+            .unwrap_or("Stopped")
     }
 
     #[zbus(property)]

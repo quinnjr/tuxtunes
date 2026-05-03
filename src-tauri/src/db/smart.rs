@@ -222,9 +222,8 @@ pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartEr
         _ => String::new(),
     };
 
-    let sql = format!(
-        "SELECT {columns} FROM tracks WHERE {where_sql} ORDER BY {order} {limit_clause}"
-    );
+    let sql =
+        format!("SELECT {columns} FROM tracks WHERE {where_sql} ORDER BY {order} {limit_clause}");
 
     Ok(CompiledQuery { sql, params })
 }
@@ -259,10 +258,18 @@ fn compile_leaf(leaf: &LeafCondition, params: &mut Vec<FV>) -> Result<String, Sm
         (FieldKind::Text, Op::IsNot) => {
             text_op(meta.column, "<>", &leaf.value, params, &leaf.field)
         }
-        (FieldKind::Text, Op::Contains) => like_op(meta.column, "%", "%", &leaf.value, params, &leaf.field),
-        (FieldKind::Text, Op::NotContains) => like_not(meta.column, "%", "%", &leaf.value, params, &leaf.field),
-        (FieldKind::Text, Op::StartsWith) => like_op(meta.column, "", "%", &leaf.value, params, &leaf.field),
-        (FieldKind::Text, Op::EndsWith) => like_op(meta.column, "%", "", &leaf.value, params, &leaf.field),
+        (FieldKind::Text, Op::Contains) => {
+            like_op(meta.column, "%", "%", &leaf.value, params, &leaf.field)
+        }
+        (FieldKind::Text, Op::NotContains) => {
+            like_not(meta.column, "%", "%", &leaf.value, params, &leaf.field)
+        }
+        (FieldKind::Text, Op::StartsWith) => {
+            like_op(meta.column, "", "%", &leaf.value, params, &leaf.field)
+        }
+        (FieldKind::Text, Op::EndsWith) => {
+            like_op(meta.column, "%", "", &leaf.value, params, &leaf.field)
+        }
 
         // --- Int ---
         (FieldKind::Int, Op::Is) => int_op(meta.column, "=", &leaf.value, params, &leaf.field),
@@ -273,12 +280,20 @@ fn compile_leaf(leaf: &LeafCondition, params: &mut Vec<FV>) -> Result<String, Sm
 
         // --- Bool ---
         (FieldKind::Bool, Op::Is) => bool_op(meta.column, "=", &leaf.value, params, &leaf.field),
-        (FieldKind::Bool, Op::IsNot) => bool_op(meta.column, "<>", &leaf.value, params, &leaf.field),
+        (FieldKind::Bool, Op::IsNot) => {
+            bool_op(meta.column, "<>", &leaf.value, params, &leaf.field)
+        }
 
         // --- Date ---
-        (FieldKind::Date, Op::InTheLast) => date_relative(meta.column, true, &leaf.value, &leaf.field),
-        (FieldKind::Date, Op::NotInTheLast) => date_relative(meta.column, false, &leaf.value, &leaf.field),
-        (FieldKind::Date, Op::Greater) => int_op(meta.column, ">", &leaf.value, params, &leaf.field),
+        (FieldKind::Date, Op::InTheLast) => {
+            date_relative(meta.column, true, &leaf.value, &leaf.field)
+        }
+        (FieldKind::Date, Op::NotInTheLast) => {
+            date_relative(meta.column, false, &leaf.value, &leaf.field)
+        }
+        (FieldKind::Date, Op::Greater) => {
+            int_op(meta.column, ">", &leaf.value, params, &leaf.field)
+        }
         (FieldKind::Date, Op::Less) => int_op(meta.column, "<", &leaf.value, params, &leaf.field),
 
         _ => Err(SmartError::InvalidOperator {
@@ -417,9 +432,7 @@ fn date_relative(
     // datetime('now', '-N days') is parameterless from the caller's
     // perspective — the modifier is built from a typed enum variant
     // and a checked integer, so no untrusted text reaches SQL.
-    Ok(format!(
-        "{column} {cmp} datetime('now', '{modifier}')"
-    ))
+    Ok(format!("{column} {cmp} datetime('now', '{modifier}')"))
 }
 
 fn order_for(mode: SelectionMode) -> String {
@@ -565,17 +578,10 @@ mod tests {
         let db = tmp_db().await;
         seed(
             &db.engine,
-            &[
-                ("a", "x", 0, 1),
-                ("b", "x", 0, 5),
-                ("c", "x", 0, 10),
-            ],
+            &[("a", "x", 0, 1), ("b", "x", 0, 5), ("c", "x", 0, 10)],
         )
         .await;
-        let r = rule(
-            true,
-            vec![leaf("play_count", Op::Greater, Value::Int(3))],
-        );
+        let r = rule(true, vec![leaf("play_count", Op::Greater, Value::Int(3))]);
         let rows = evaluate(&db.engine, &r).await.unwrap();
         assert_eq!(rows.len(), 2);
     }
@@ -739,7 +745,11 @@ mod tests {
     #[tokio::test]
     async fn evaluate_text_not_contains_handles_nulls() {
         let db = tmp_db().await;
-        seed(&db.engine, &[("hello world", "x", 0, 0), ("goodbye", "x", 0, 0)]).await;
+        seed(
+            &db.engine,
+            &[("hello world", "x", 0, 0), ("goodbye", "x", 0, 0)],
+        )
+        .await;
         let r = rule(
             true,
             vec![leaf("title", Op::NotContains, Value::Text("hello".into()))],
@@ -925,10 +935,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_relative_value_errors() {
         let db = tmp_db().await;
-        let r = rule(
-            true,
-            vec![leaf("date_added", Op::InTheLast, Value::Int(5))],
-        );
+        let r = rule(true, vec![leaf("date_added", Op::InTheLast, Value::Int(5))]);
         assert!(matches!(
             evaluate(&db.engine, &r).await.unwrap_err(),
             SmartError::Malformed(_)
@@ -986,7 +993,11 @@ mod tests {
     #[tokio::test]
     async fn limit_with_non_song_unit_yields_unbounded_query() {
         let db = tmp_db().await;
-        seed(&db.engine, &[("a", "x", 0, 0), ("b", "x", 0, 0), ("c", "x", 0, 0)]).await;
+        seed(
+            &db.engine,
+            &[("a", "x", 0, 0), ("b", "x", 0, 0), ("c", "x", 0, 0)],
+        )
+        .await;
         let r = SmartRule {
             match_all: true,
             live_updating: true,

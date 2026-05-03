@@ -10,9 +10,7 @@ use crate::db::tracks::TrackRow;
 use crate::runtime::AppState;
 
 #[tauri::command]
-pub async fn list_playlists(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<PlaylistRow>, String> {
+pub async fn list_playlists(state: tauri::State<'_, AppState>) -> Result<Vec<PlaylistRow>, String> {
     playlists::list_all(&state.db.engine)
         .await
         .map_err(|e| e.to_string())

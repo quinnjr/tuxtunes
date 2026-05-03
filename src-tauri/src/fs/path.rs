@@ -448,7 +448,10 @@ mod tests {
         std::fs::write(&f, b"x").unwrap();
         let resolved = resolve_collision(&f);
         // Expect the function to have picked "file (2).flac".
-        assert_eq!(resolved.file_name().unwrap().to_str().unwrap(), "file (2).flac");
+        assert_eq!(
+            resolved.file_name().unwrap().to_str().unwrap(),
+            "file (2).flac"
+        );
     }
 
     #[test]
