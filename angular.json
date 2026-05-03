@@ -86,6 +86,28 @@
             }
           },
           "defaultConfiguration": "development"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "buildTarget": "tuxtunes:build:development",
+            "tsConfig": "tsconfig.spec.json",
+            "runner": "vitest",
+            "include": ["src/**/*.spec.ts"],
+            "coverageInclude": ["src/app/**/*.ts"],
+            "coverageExclude": [
+              "src/app/**/*.spec.ts",
+              "src/app/test-helpers.ts",
+              "src/app/models/generated/**"
+            ],
+            "providersFile": "src/test-providers.ts"
+          },
+          "configurations": {
+            "ci": {
+              "watch": false,
+              "coverage": true
+            }
+          }
         }
       }
     }

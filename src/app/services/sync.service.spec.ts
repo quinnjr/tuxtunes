@@ -1,5 +1,6 @@
 import { Injector, runInInjectionContext } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
+import type { ConflictRules } from '../models/sync';
 import { SyncService } from './sync.service';
 import { TauriService } from './tauri.service';
 
@@ -49,7 +50,7 @@ const RAW_SOURCE = {
     last_skipped: 'prefer_source',
     loved: 'prefer_source',
     deletes: 'respect',
-  },
+  } as ConflictRules,
   auto_copy_files: true,
 };
 

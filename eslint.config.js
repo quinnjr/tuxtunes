@@ -70,13 +70,16 @@ export default tseslint.config(
     // Test files use stubs / fixtures that violate several lint rules
     // by design — empty async stubs that match Promise-returning APIs,
     // typed casts to `as never` for vi.fn impls, etc. Relax those.
-    files: ['**/*.spec.ts'],
+    files: ['**/*.spec.ts', 'src/app/test-helpers.ts'],
     rules: {
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-misused-promises': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/unbound-method': 'off',
+      '@typescript-eslint/prefer-function-type': 'off',
+      '@typescript-eslint/no-floating-promises': 'off',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
       'unicorn/no-useless-undefined': 'off',
       'unicorn/consistent-function-scoping': 'off',
     },
