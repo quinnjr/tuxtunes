@@ -20,8 +20,8 @@ use zbus::{connection, interface};
 /// `#[interface]`) don't need to be generic over `R`. The payload
 /// goes as `serde_json::Value` so the closure can forward arbitrary
 /// shapes to `AppHandle::emit` without needing to be generic itself.
-type EmitFn = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
-type WindowFn = Arc<dyn Fn() + Send + Sync>;
+pub type EmitFn = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+pub type WindowFn = Arc<dyn Fn() + Send + Sync>;
 
 const BUS_NAME: &str = "org.mpris.MediaPlayer2.tuxtunes";
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
@@ -71,9 +71,19 @@ impl PlaybackStatus {
 
 pub type SharedState = Arc<Mutex<MprisState>>;
 
-struct MediaPlayer2 {
+pub struct MediaPlayer2 {
     raise: WindowFn,
     quit: WindowFn,
+}
+
+impl MediaPlayer2 {
+    /// Test hook for constructing a MediaPlayer2 directly so unit
+    /// tests can call the interface methods without going through a
+    /// D-Bus client.
+    #[doc(hidden)]
+    pub fn for_test(raise: WindowFn, quit: WindowFn) -> Self {
+        Self { raise, quit }
+    }
 }
 
 #[interface(name = "org.mpris.MediaPlayer2")]
@@ -134,9 +144,17 @@ impl MediaPlayer2 {
     }
 }
 
-struct Player {
+pub struct Player {
     emit: EmitFn,
     state: SharedState,
+}
+
+impl Player {
+    /// Test hook for constructing a Player directly.
+    #[doc(hidden)]
+    pub fn for_test(emit: EmitFn, state: SharedState) -> Self {
+        Self { emit, state }
+    }
 }
 
 #[interface(name = "org.mpris.MediaPlayer2.Player")]

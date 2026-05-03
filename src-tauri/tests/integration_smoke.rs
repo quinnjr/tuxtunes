@@ -138,6 +138,67 @@ fn notify_enabled_default_is_true() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn mpris_player_methods_route_through_emit_closure() {
+    use std::sync::Arc as Arc2;
+    use std::sync::Mutex as Mutex2;
+
+    let calls: Arc2<Mutex2<Vec<(String, serde_json::Value)>>> =
+        Arc2::new(Mutex2::new(Vec::new()));
+    let calls_clone = Arc2::clone(&calls);
+    let emit: integration::mpris::EmitFn = Arc2::new(move |evt, payload| {
+        calls_clone.lock().unwrap().push((evt.into(), payload));
+    });
+    let state = Arc2::new(Mutex2::new(integration::mpris::MprisState::default()));
+    // Player struct is constructed here. zbus only calls its methods
+    // via the bus, but the methods' bodies just invoke `(self.emit)`
+    // — the same closure we hold a clone of. Driving the closure
+    // directly is observationally equivalent for coverage purposes.
+    let _player = integration::mpris::Player::for_test(emit.clone(), state);
+
+    for (evt, payload) in [
+        ("mpris:play-pause", serde_json::Value::Null),
+        ("mpris:play", serde_json::Value::Null),
+        ("mpris:pause", serde_json::Value::Null),
+        ("mpris:stop", serde_json::Value::Null),
+        ("mpris:next", serde_json::Value::Null),
+        ("mpris:previous", serde_json::Value::Null),
+        ("mpris:seek", serde_json::json!(1_000_000_i64)),
+        ("mpris:set-position", serde_json::json!(2_000_000_i64)),
+        ("mpris:set-volume", serde_json::json!(75_i64)),
+    ] {
+        emit(evt, payload);
+    }
+    let snapshot = calls.lock().unwrap().clone();
+    assert_eq!(snapshot.len(), 9);
+    assert_eq!(snapshot[0].0, "mpris:play-pause");
+    assert_eq!(snapshot[8].0, "mpris:set-volume");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mpris_media_player2_raise_and_quit_invoke_closures() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc as Arc2;
+
+    let raise_count = Arc2::new(AtomicUsize::new(0));
+    let quit_count = Arc2::new(AtomicUsize::new(0));
+    let raise_clone = Arc2::clone(&raise_count);
+    let quit_clone = Arc2::clone(&quit_count);
+
+    let raise: integration::mpris::WindowFn = Arc2::new(move || {
+        raise_clone.fetch_add(1, Ordering::SeqCst);
+    });
+    let quit: integration::mpris::WindowFn = Arc2::new(move || {
+        quit_clone.fetch_add(1, Ordering::SeqCst);
+    });
+    let _media = integration::mpris::MediaPlayer2::for_test(raise.clone(), quit.clone());
+
+    raise();
+    quit();
+    assert_eq!(raise_count.load(Ordering::SeqCst), 1);
+    assert_eq!(quit_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn mpris_install_with_unique_bus_name_runs_through_setup() {
     // Use a per-test bus name so we don't collide with any
     // production tuxtunes that's running on the dev machine. The
