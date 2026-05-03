@@ -1,6 +1,7 @@
 mod commands;
 pub mod db;
 pub mod fs;
+pub mod integration;
 pub mod library;
 pub mod playback;
 mod runtime;
@@ -8,7 +9,8 @@ pub mod sync;
 
 use runtime::AppState;
 use std::path::PathBuf;
-use tauri::Manager;
+use std::sync::Arc;
+use tauri::{Listener, Manager};
 
 fn data_dir(app: &tauri::App) -> PathBuf {
     app.path().app_data_dir().expect("app data dir resolves")
@@ -71,6 +73,40 @@ pub fn run() {
             app.manage(state);
 
             let state_ref = app.state::<AppState>();
+
+            // Mount the system tray. Failures are logged inside install()
+            // — the app continues without a tray rather than crashing.
+            integration::tray::install(app.handle());
+
+            // Track-changed → tray "Now Playing" label sync. Listens on
+            // the same Tauri event channel the frontend's PlaybackService
+            // uses, so the tray and UI never disagree about what's
+            // playing. The lookup goes through TrackRow so we have the
+            // already-formatted artist string.
+            {
+                let app_for_listener = app.handle().clone();
+                let db = Arc::clone(&state_ref.db);
+                app.handle().listen("playback:track-changed", move |event| {
+                    let app = app_for_listener.clone();
+                    let db = Arc::clone(&db);
+                    let payload: serde_json::Value =
+                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+                    let track_id = payload.get("track_id").and_then(|v| v.as_i64());
+                    tauri::async_runtime::spawn(async move {
+                        let label = match track_id {
+                            Some(id) => match crate::db::tracks::get(&db.engine, id).await {
+                                Ok(row) => Some(integration::tray::track_label(&row)),
+                                Err(e) => {
+                                    log::warn!("tray label lookup failed for {id}: {e}");
+                                    None
+                                }
+                            },
+                            None => None,
+                        };
+                        integration::tray::set_now_playing_label(&app, label.as_deref());
+                    });
+                });
+            }
 
             // Restore persisted volume. Sending SetVolume tells mpv to set
             // the property; the property observer then fires a VolumeChanged

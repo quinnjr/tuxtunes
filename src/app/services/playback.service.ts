@@ -101,7 +101,29 @@ export class PlaybackService implements OnDestroy {
       await this.tauri.listen<{ track_id: number }>('playback:track-ended', () => {
         void this.advanceFromQueue();
       }),
+      // Tray menu actions route through the frontend so the
+      // state-machine logic (toggle on current state, advance from
+      // queue) stays in one place.
+      await this.tauri.listen('tray:toggle-play', () => void this.togglePlay()),
+      await this.tauri.listen('tray:next', () => void this.advanceFromQueue()),
     );
+  }
+
+  /** State-aware play/pause — used by both the transport bar and the tray. */
+  async togglePlay(): Promise<void> {
+    switch (this.state()) {
+      case 'playing': {
+        await this.pause();
+        break;
+      }
+      case 'paused': {
+        await this.resume();
+        break;
+      }
+      default: {
+        break;
+      }
+    }
   }
 
   async play(trackId: number): Promise<void> {

@@ -81,19 +81,7 @@ export class TransportBarComponent {
   }
 
   protected async togglePlay(): Promise<void> {
-    switch (this.playback.state()) {
-      case 'playing': {
-        await this.playback.pause();
-        break;
-      }
-      case 'paused': {
-        await this.playback.resume();
-        break;
-      }
-      default: {
-        break;
-      }
-    }
+    await this.playback.togglePlay();
   }
 
   protected async stop(): Promise<void> {
