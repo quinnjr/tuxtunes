@@ -240,6 +240,43 @@ async fn audio_command_surface_persists_prefs() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn set_audio_device_without_replaygain_loads_from_prefs() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    // Seed the persisted replaygain so the None-arm of the match has
+    // a value to pull from.
+    commands::audio::set_audio_device(
+        state.clone(),
+        commands::audio::SetAudioDeviceArgs {
+            device_id: "alsa/seeded".into(),
+            exclusive: true,
+            replaygain_mode: Some(tuxtunes::playback::config::ReplayGainMode::Album),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Call again without replaygain_mode — the None branch picks up
+    // the previously-stored ReplayGainMode::Album.
+    commands::audio::set_audio_device(
+        state.clone(),
+        commands::audio::SetAudioDeviceArgs {
+            device_id: "alsa/seeded".into(),
+            exclusive: false,
+            replaygain_mode: None,
+        },
+    )
+    .await
+    .unwrap();
+    let snap = commands::audio::get_audio_prefs(state).await.unwrap();
+    assert_eq!(
+        snap.replaygain_mode,
+        tuxtunes::playback::config::ReplayGainMode::Album,
+    );
+    assert!(!snap.exclusive);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn smart_rule_evaluate_and_preview_via_command() {
     let (app, _tmp) = fixture().await;
     let state = app.state::<AppState>();

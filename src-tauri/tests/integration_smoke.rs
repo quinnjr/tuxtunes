@@ -142,8 +142,7 @@ async fn mpris_player_methods_route_through_emit_closure() {
     use std::sync::Arc as Arc2;
     use std::sync::Mutex as Mutex2;
 
-    let calls: Arc2<Mutex2<Vec<(String, serde_json::Value)>>> =
-        Arc2::new(Mutex2::new(Vec::new()));
+    let calls: Arc2<Mutex2<Vec<(String, serde_json::Value)>>> = Arc2::new(Mutex2::new(Vec::new()));
     let calls_clone = Arc2::clone(&calls);
     let emit: integration::mpris::EmitFn = Arc2::new(move |evt, payload| {
         calls_clone.lock().unwrap().push((evt.into(), payload));
