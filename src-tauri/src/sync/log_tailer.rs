@@ -144,4 +144,33 @@ mod tests {
         let seqs: Vec<u64> = lines.iter().map(|(s, _)| *s).collect();
         assert_eq!(seqs, vec![0, 1, 2]);
     }
+
+    #[test]
+    fn drain_strips_crlf_and_holds_partial_line() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            // CRLF line ending plus a trailing partial (no newline yet).
+            f.write_all(b"alpha\r\nbeta").unwrap();
+            f.flush().unwrap();
+        }
+
+        let got = Arc::new(Mutex::new(Vec::<(u64, String)>::new()));
+        let g = Arc::clone(&got);
+        let push = move |seq: u64, line: String| g.lock().unwrap().push((seq, line));
+
+        let mut pending = Vec::new();
+        let mut seq = 0u64;
+        let offset = drain(&path, 0, &mut pending, &mut seq, &push);
+
+        // Only the completed line is emitted, with the `\r` stripped; the
+        // partial "beta" stays buffered for the next read.
+        assert_eq!(*got.lock().unwrap(), vec![(0, "alpha".to_string())]);
+        assert_eq!(pending, b"beta");
+        assert_eq!(offset, 11); // all bytes consumed: "alpha\r\nbeta"
+    }
 }
