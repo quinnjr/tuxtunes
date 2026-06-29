@@ -30,7 +30,7 @@ export class ImportWizardComponent {
   protected readonly open = inject(UiService).importWizardOpen;
 
   private readonly logBox = viewChild<ElementRef<HTMLElement>>('logBox');
-  protected readonly pinned = signal(true);
+  private readonly pinned = signal(true);
 
   constructor() {
     // Autoscroll to the newest line while the user is pinned to the bottom.
