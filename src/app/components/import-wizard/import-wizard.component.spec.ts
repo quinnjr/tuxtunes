@@ -132,4 +132,15 @@ describe('ImportWizardComponent', () => {
     cmp.toggleAutoCopy();
     expect(cmp.autoCopy()).toBe(true);
   });
+
+  it('renders the running log on the progress step', () => {
+    const { fixture, cmp, sync, ui } = setup();
+    ui.importWizardOpen.set(true);
+    cmp.step.set('progress');
+    sync.logLines.set(['reading .itl', 'applying tracks: 100']);
+    fixture.detectChanges();
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('reading .itl');
+    expect(text).toContain('applying tracks: 100');
+  });
 });
