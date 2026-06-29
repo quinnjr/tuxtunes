@@ -182,19 +182,19 @@
               </div>
             }
 
-            @if (sync.warnings().length > 0) {
-              <details
-                class="rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 text-sm"
+            @if (sync.logLines().length > 0) {
+              <div
+                #logBox
+                role="log"
+                aria-label="Import log"
+                aria-live="polite"
+                (scroll)="onLogScroll()"
+                class="max-h-64 overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 font-mono text-xs leading-relaxed text-[var(--color-text-secondary)]"
               >
-                <summary class="cursor-pointer text-[var(--color-text-secondary)]">
-                  {{ sync.warnings().length }} warnings
-                </summary>
-                <ul class="mt-2 max-h-40 overflow-auto font-mono text-xs">
-                  @for (w of sync.warnings(); track $index) {
-                    <li class="text-[var(--color-text-muted)]">[{{ w.kind }}] {{ w.detail }}</li>
-                  }
-                </ul>
-              </details>
+                @for (line of sync.logLines(); track $index) {
+                  <div class="whitespace-pre-wrap">{{ line }}</div>
+                }
+              </div>
             }
 
             <footer class="mt-2 flex justify-end">

@@ -1,4 +1,12 @@
-import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  inject,
+  signal,
+  effect,
+  viewChild,
+  ElementRef,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { ConflictRules, PathMapping, Strategy } from '../../models/sync';
@@ -20,6 +28,26 @@ interface PathRow {
 export class ImportWizardComponent {
   protected readonly sync = inject(SyncService);
   protected readonly open = inject(UiService).importWizardOpen;
+
+  private readonly logBox = viewChild<ElementRef<HTMLElement>>('logBox');
+  private readonly pinned = signal(true);
+
+  constructor() {
+    // Autoscroll to the newest line while the user is pinned to the bottom.
+    effect(() => {
+      this.sync.logLines(); // track new lines
+      if (!this.pinned()) return;
+      const el = this.logBox()?.nativeElement;
+      if (el) requestAnimationFrame(() => (el.scrollTop = el.scrollHeight));
+    });
+  }
+
+  protected onLogScroll(): void {
+    const el = this.logBox()?.nativeElement;
+    if (!el) return;
+    // Re-pin when the user scrolls back to within ~24px of the bottom.
+    this.pinned.set(el.scrollHeight - el.scrollTop - el.clientHeight < 24);
+  }
 
   protected readonly step = signal<WizardStep>('pick');
   protected readonly filePath = signal('');

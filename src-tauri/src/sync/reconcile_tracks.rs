@@ -4,6 +4,7 @@
 use crate::db::tracks::{self, ItlTrackUpsert, LocalTrackForSync, TracksError};
 use crate::sync::conflict::{self, ConflictRules, Decision};
 use crate::sync::events::{SyncPhase, SyncProgress, SyncWarning, WarningKind};
+use crate::sync::import_log::{LogLevel, LogSink};
 use crate::sync::path_map::{self, PathMapError, PathMapping};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
@@ -35,10 +36,16 @@ pub async fn reconcile<R: Runtime>(
     lib: &ItlFile,
     mappings: &[PathMapping],
     rules: &ConflictRules,
+    log: LogSink<'_>,
 ) -> Result<(TrackReconcileStats, Vec<IngestCandidate>), TracksError> {
     let mut stats = TrackReconcileStats::default();
     let mut ingest_candidates = Vec::new();
     let total = lib.tracks().len() as u64;
+    // Cap repetitive per-warning log lines so a library full of unmappable
+    // paths can't flood the log file (and the live `sync:log` stream). The
+    // `sync:warning` events are unaffected; this only bounds the narrative log.
+    let mut warn_log_count = 0u64;
+    const WARN_LOG_CAP: u64 = 50;
 
     // One SELECT up-front replaces N per-track by_persistent_id SELECTs.
     let local_map = tracks::load_local_state_map(engine, source_id).await?;
@@ -56,6 +63,7 @@ pub async fn reconcile<R: Runtime>(
                     message: format!("{idx} / {total}"),
                 },
             );
+            log(LogLevel::Info, &format!("applying tracks {idx} / {total}"));
         }
 
         let pid = t.persistent_id();
@@ -76,6 +84,22 @@ pub async fn reconcile<R: Runtime>(
                         detail: format!("track {pid:016x} ({:?}): {reason}", t.title()),
                     },
                 );
+                if warn_log_count < WARN_LOG_CAP {
+                    log(
+                        LogLevel::Warn,
+                        &format!(
+                            "unmappable path: track {pid:016x} ({:?}): {reason}",
+                            t.title()
+                        ),
+                    );
+                    warn_log_count += 1;
+                    if warn_log_count == WARN_LOG_CAP {
+                        log(
+                            LogLevel::Warn,
+                            "further unmappable-path warnings suppressed in log",
+                        );
+                    }
+                }
                 stats.warnings += 1;
                 continue;
             }

@@ -9,6 +9,8 @@
 
 use std::path::PathBuf;
 
+fn noop_log(_: tuxtunes::sync::import_log::LogLevel, _: &str) {}
+
 fn fixture_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let p = PathBuf::from(home).join("Music/iTunes/iTunes Library.itl");
@@ -62,6 +64,7 @@ async fn reconcile_tracks_with_path_mapping_inserts_rows() {
         &lib,
         &mappings,
         &Default::default(),
+        &noop_log,
     )
     .await;
     if let Ok((stats, _candidates)) = res {
@@ -108,6 +111,7 @@ async fn reconcile_tracks_against_real_fixture() {
         &lib,
         &[],
         &Default::default(),
+        &noop_log,
     )
     .await
     .expect("reconcile tracks");
@@ -157,6 +161,7 @@ async fn reconcile_playlists_against_real_fixture() {
         &lib,
         &[],
         &Default::default(),
+        &noop_log,
     )
     .await
     .unwrap();
