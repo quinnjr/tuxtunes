@@ -94,6 +94,7 @@ mod tests {
         assert_eq!(WARNING, "sync:warning");
         assert_eq!(COMPLETE, "sync:complete");
         assert_eq!(FAILED, "sync:failed");
+        assert_eq!(LOG, "sync:log");
     }
 
     #[test]
@@ -129,11 +130,6 @@ mod tests {
         ] {
             assert!(json.contains(key), "missing {key}: {json}");
         }
-    }
-
-    #[test]
-    fn log_channel_name_stable() {
-        assert_eq!(LOG, "sync:log");
     }
 
     #[test]
