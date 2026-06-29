@@ -6,6 +6,7 @@ pub const PROGRESS: &str = "sync:progress";
 pub const WARNING: &str = "sync:warning";
 pub const COMPLETE: &str = "sync:complete";
 pub const FAILED: &str = "sync:failed";
+pub const LOG: &str = "sync:log";
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -59,6 +60,14 @@ pub struct SyncComplete {
 pub struct SyncFailed {
     pub source_id: i64,
     pub error: String,
+}
+
+/// One narrative line streamed from the import log file to the UI.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LogLine {
+    pub source_id: i64,
+    pub seq: u64,
+    pub line: String,
 }
 
 #[cfg(test)]
@@ -120,5 +129,23 @@ mod tests {
         ] {
             assert!(json.contains(key), "missing {key}: {json}");
         }
+    }
+
+    #[test]
+    fn log_channel_name_stable() {
+        assert_eq!(LOG, "sync:log");
+    }
+
+    #[test]
+    fn log_line_serializes_snake_case() {
+        let l = LogLine {
+            source_id: 7,
+            seq: 3,
+            line: "applying tracks: 100".into(),
+        };
+        let json = serde_json::to_string(&l).unwrap();
+        assert!(json.contains(r#""source_id":7"#));
+        assert!(json.contains(r#""seq":3"#));
+        assert!(json.contains(r#""line":"applying tracks: 100""#));
     }
 }
