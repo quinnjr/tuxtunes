@@ -80,7 +80,11 @@ where
     };
     pending.extend_from_slice(&buf);
     while let Some(pos) = pending.iter().position(|&b| b == b'\n') {
-        let end = if pos > 0 && pending[pos - 1] == b'\r' { pos - 1 } else { pos };
+        let end = if pos > 0 && pending[pos - 1] == b'\r' {
+            pos - 1
+        } else {
+            pos
+        };
         let s = String::from_utf8_lossy(&pending[..end]).into_owned();
         pending.drain(..=pos);
         emit(*seq, s);
@@ -107,7 +111,10 @@ mod tests {
         });
 
         {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
             writeln!(f, "alpha").unwrap();
             writeln!(f, "beta").unwrap();
             write!(f, "gamma-partial").unwrap(); // no newline yet
@@ -115,7 +122,10 @@ mod tests {
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
         {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
             writeln!(f).unwrap(); // finishes "gamma-partial"
             f.flush().unwrap();
         }

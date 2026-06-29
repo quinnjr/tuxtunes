@@ -81,7 +81,10 @@ pub async fn reconcile<R: Runtime>(
                 );
                 log(
                     LogLevel::Warn,
-                    &format!("unmappable path: track {pid:016x} ({:?}): {reason}", t.title()),
+                    &format!(
+                        "unmappable path: track {pid:016x} ({:?}): {reason}",
+                        t.title()
+                    ),
                 );
                 stats.warnings += 1;
                 continue;
