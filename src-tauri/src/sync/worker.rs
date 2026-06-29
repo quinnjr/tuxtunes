@@ -4,6 +4,8 @@
 use crate::db::{sync_sources, Db};
 use crate::fs::coordinator::FsCoordinator;
 use crate::sync::events::{SyncComplete, SyncFailed, SyncPhase, SyncProgress};
+use crate::sync::import_log::{ImportLog, LogLevel, LogSink};
+use crate::sync::log_tailer::LogTailer;
 use crate::sync::{reconcile_playlists, reconcile_tracks};
 use itl_rs::ItlFile;
 use std::sync::Arc;
@@ -52,8 +54,60 @@ async fn run_one<R: Runtime>(
     app: &AppHandle<R>,
     source_id: i64,
 ) -> Result<(), anyhow::Error> {
+    // Best-effort per-run log file. A missing log must never fail the import.
+    let import_log = match ImportLog::create(app, source_id) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            log::warn!("import log unavailable: {e}");
+            None
+        }
+    };
+
+    // Live tailer: stream each new log line to the UI as `sync:log`.
+    let tailer = import_log.as_ref().map(|l| {
+        let app = app.clone();
+        LogTailer::spawn(l.path().to_path_buf(), move |seq, line| {
+            let _ = app.emit(
+                crate::sync::events::LOG,
+                crate::sync::events::LogLine {
+                    source_id,
+                    seq,
+                    line,
+                },
+            );
+        })
+    });
+
+    let sink = |level: LogLevel, msg: &str| {
+        if let Some(l) = &import_log {
+            l.write(level, msg);
+        }
+    };
+
+    let result = run_inner(db, fs, app, source_id, &sink).await;
+
+    if let Err(e) = &result {
+        sink(LogLevel::Warn, &format!("failed: {e}"));
+    }
+
+    // Stop after a final drain so the closing lines reach the UI.
+    if let Some(t) = tailer {
+        t.stop().await;
+    }
+
+    result
+}
+
+async fn run_inner<R: Runtime>(
+    db: &Arc<Db>,
+    fs: &Arc<FsCoordinator>,
+    app: &AppHandle<R>,
+    source_id: i64,
+    log: LogSink<'_>,
+) -> Result<(), anyhow::Error> {
     let source = sync_sources::get(&db.engine, source_id).await?;
 
+    log(LogLevel::Info, "reading .itl");
     let _ = app.emit(
         crate::sync::events::PROGRESS,
         SyncProgress {
@@ -89,8 +143,11 @@ async fn run_one<R: Runtime>(
             message: "applying tracks".into(),
         },
     );
+    log(
+        LogLevel::Info,
+        &format!("applying tracks: {}", lib.tracks().len()),
+    );
 
-    let noop_log = |_: crate::sync::import_log::LogLevel, _: &str| {};
     let (track_stats, ingest_candidates) = reconcile_tracks::reconcile(
         &db.engine,
         app,
@@ -98,7 +155,7 @@ async fn run_one<R: Runtime>(
         &lib,
         &source.path_mappings,
         &source.conflict_rules,
-        &noop_log,
+        log,
     )
     .await?;
 
@@ -118,6 +175,10 @@ async fn run_one<R: Runtime>(
             message: "applying playlists".into(),
         },
     );
+    log(
+        LogLevel::Info,
+        &format!("applying playlists: {}", lib.playlists().len()),
+    );
 
     let pl_stats = reconcile_playlists::reconcile(&db.engine, app, source_id, &lib).await?;
 
@@ -131,6 +192,7 @@ async fn run_one<R: Runtime>(
             message: "finalizing".into(),
         },
     );
+    log(LogLevel::Info, "finalizing");
     sync_sources::finalize_sync(&db.engine, source_id, &hash).await?;
 
     let _ = app.emit(
@@ -144,6 +206,18 @@ async fn run_one<R: Runtime>(
             updated_playlists: pl_stats.updated,
             deleted_playlists: pl_stats.deleted,
         },
+    );
+    log(
+        LogLevel::Info,
+        &format!(
+            "done — tracks +{}/~{}/-{}, playlists +{}/~{}/-{}",
+            track_stats.inserted,
+            track_stats.updated,
+            track_stats.deleted,
+            pl_stats.inserted,
+            pl_stats.updated,
+            pl_stats.deleted,
+        ),
     );
 
     Ok(())
