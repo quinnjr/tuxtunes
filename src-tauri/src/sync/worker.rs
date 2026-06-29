@@ -103,11 +103,11 @@ async fn run_inner<R: Runtime>(
     fs: &Arc<FsCoordinator>,
     app: &AppHandle<R>,
     source_id: i64,
-    log: LogSink<'_>,
+    log_sink: LogSink<'_>,
 ) -> Result<(), anyhow::Error> {
     let source = sync_sources::get(&db.engine, source_id).await?;
 
-    log(LogLevel::Info, "reading .itl");
+    log_sink(LogLevel::Info, "reading .itl");
     let _ = app.emit(
         crate::sync::events::PROGRESS,
         SyncProgress {
@@ -143,7 +143,7 @@ async fn run_inner<R: Runtime>(
             message: "applying tracks".into(),
         },
     );
-    log(
+    log_sink(
         LogLevel::Info,
         &format!("applying tracks: {}", lib.tracks().len()),
     );
@@ -155,7 +155,7 @@ async fn run_inner<R: Runtime>(
         &lib,
         &source.path_mappings,
         &source.conflict_rules,
-        log,
+        log_sink,
     )
     .await?;
 
@@ -175,7 +175,7 @@ async fn run_inner<R: Runtime>(
             message: "applying playlists".into(),
         },
     );
-    log(
+    log_sink(
         LogLevel::Info,
         &format!("applying playlists: {}", lib.playlists().len()),
     );
@@ -192,7 +192,7 @@ async fn run_inner<R: Runtime>(
             message: "finalizing".into(),
         },
     );
-    log(LogLevel::Info, "finalizing");
+    log_sink(LogLevel::Info, "finalizing");
     sync_sources::finalize_sync(&db.engine, source_id, &hash).await?;
 
     let _ = app.emit(
@@ -207,7 +207,7 @@ async fn run_inner<R: Runtime>(
             deleted_playlists: pl_stats.deleted,
         },
     );
-    log(
+    log_sink(
         LogLevel::Info,
         &format!(
             "done — tracks +{}/~{}/-{}, playlists +{}/~{}/-{}",
