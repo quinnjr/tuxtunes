@@ -18,14 +18,33 @@
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
+/* The @theme palette above is the dark default. ThemeService sets
+   <html data-theme="light|dark">; the light block swaps the palette.
+   color-scheme is inherited, so setting it on :root flows to every
+   native control (select/option popups, scrollbars) — without it
+   WebKit paints those in its own default scheme regardless of ours. */
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-bg-primary: #f5f5fa;
+  --color-bg-surface: #ffffff;
+  --color-bg-transport: #ececf3;
+  --color-bg-elevated: #e9e9f1;
+  --color-bg-tertiary: #d6e2f2;
+  --color-text-primary: #1a1a2e;
+  --color-text-secondary: #4c4c5e;
+  --color-text-muted: #8a8a98;
+  --color-border: #d9d9e3;
+  --color-border-strong: #c2c2d0;
+}
+
 html,
 body {
   height: 100%;
   margin: 0;
-  /* Render native controls (select/option popups, scrollbars) dark.
-     Without this WebKit paints them in its default light scheme even
-     though the surrounding app uses the dark palette above. */
-  color-scheme: dark;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-family: var(--font-sans);

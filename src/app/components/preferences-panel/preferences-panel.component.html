@@ -15,6 +15,32 @@
       </header>
 
       <div class="flex flex-col gap-1 text-sm">
+        <span class="text-[var(--color-text-secondary)]">Color mode</span>
+        <div
+          class="inline-flex w-fit rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-0.5"
+          role="radiogroup"
+          aria-label="Color mode"
+        >
+          @for (m of colorModes; track m) {
+            <button
+              type="button"
+              role="radio"
+              [attr.aria-checked]="theme.mode() === m"
+              (click)="theme.set(m)"
+              [class]="
+                'rounded px-3 py-1 text-sm capitalize transition ' +
+                (theme.mode() === m
+                  ? 'bg-[var(--color-accent)] text-white'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]')
+              "
+            >
+              {{ m }}
+            </button>
+          }
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-1 text-sm">
         <span class="text-[var(--color-text-secondary)]">Library root</span>
         <div class="flex items-center gap-2">
           <span

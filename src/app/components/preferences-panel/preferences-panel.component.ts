@@ -2,6 +2,7 @@ import { Component, effect, inject, signal, ChangeDetectionStrategy } from '@ang
 import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { PreferencesService } from '../../services/preferences.service';
+import { ColorMode, ThemeService } from '../../services/theme.service';
 import { UiService } from '../../services/ui.service';
 
 @Component({
@@ -12,7 +13,11 @@ import { UiService } from '../../services/ui.service';
 })
 export class PreferencesPanelComponent {
   protected readonly prefs = inject(PreferencesService);
+  protected readonly theme = inject(ThemeService);
   protected readonly open = inject(UiService).preferencesOpen;
+
+  /** Color-mode choices, in display order, for the segmented selector. */
+  protected readonly colorModes: readonly ColorMode[] = ['light', 'dark', 'system'] as const;
 
   protected readonly draftRoot = signal('');
   protected readonly draftScheme = signal('');
