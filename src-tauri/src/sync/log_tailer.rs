@@ -11,9 +11,10 @@ use tokio::task::JoinHandle;
 const POLL: Duration = Duration::from_millis(150);
 
 /// Handle to a spawned tailing task.
+#[must_use]
 pub struct LogTailer {
     stop: Arc<AtomicBool>,
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl LogTailer {
@@ -38,13 +39,24 @@ impl LogTailer {
                 tokio::time::sleep(POLL).await;
             }
         });
-        Self { stop, handle }
+        Self {
+            stop,
+            handle: Some(handle),
+        }
     }
 
     /// Signal stop and await the task's final drain.
-    pub async fn stop(self) {
+    pub async fn stop(mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.handle.await;
+        if let Some(h) = self.handle.take() {
+            let _ = h.await;
+        }
+    }
+}
+
+impl Drop for LogTailer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
 
@@ -68,12 +80,10 @@ where
     };
     pending.extend_from_slice(&buf);
     while let Some(pos) = pending.iter().position(|&b| b == b'\n') {
-        let mut line: Vec<u8> = pending.drain(..=pos).collect();
-        line.pop(); // drop '\n'
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-        emit(*seq, String::from_utf8_lossy(&line).into_owned());
+        let end = if pos > 0 && pending[pos - 1] == b'\r' { pos - 1 } else { pos };
+        let s = String::from_utf8_lossy(&pending[..end]).into_owned();
+        pending.drain(..=pos);
+        emit(*seq, s);
         *seq += 1;
     }
     offset + read
