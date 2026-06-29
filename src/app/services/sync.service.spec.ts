@@ -176,6 +176,32 @@ describe('SyncService', () => {
     expect(harness.svc.warnings().at(-1)?.detail).toBe('n99');
   });
 
+  it('accumulates sync:log lines into logLines', async () => {
+    const { svc, ready, emit } = build();
+    await ready;
+    emit('sync:log', { source_id: 1, seq: 0, line: 'reading .itl' });
+    emit('sync:log', { source_id: 1, seq: 1, line: 'applying tracks: 100' });
+    expect(svc.logLines()).toEqual(['reading .itl', 'applying tracks: 100']);
+  });
+
+  it('caps logLines at 1000 entries', async () => {
+    const { svc, ready, emit } = build();
+    await ready;
+    for (let i = 0; i < 1100; i += 1) {
+      emit('sync:log', { source_id: 1, seq: i, line: `line-${i}` });
+    }
+    expect(svc.logLines().length).toBe(1000);
+    expect(svc.logLines()[0]).toBe('line-100');
+  });
+
+  it('runNow clears logLines', async () => {
+    const { svc, ready, emit } = build();
+    await ready;
+    emit('sync:log', { source_id: 1, seq: 0, line: 'x' });
+    await svc.runNow(1);
+    expect(svc.logLines()).toEqual([]);
+  });
+
   it('ngOnDestroy() invokes every captured unlistener', async () => {
     // Capture the unlisten functions the service receives via a custom
     // listen() impl. Verify each one is called exactly once on destroy.

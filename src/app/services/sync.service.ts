@@ -32,6 +32,7 @@ export class SyncService implements OnDestroy {
   readonly warnings = signal<SyncWarning[]>([]);
   readonly lastComplete = signal<SyncComplete | null>(null);
   readonly lastError = signal<SyncFailed | null>(null);
+  readonly logLines = signal<string[]>([]);
 
   /**
    * Coarse run state derived from the event signals. `running` while a
@@ -110,6 +111,9 @@ export class SyncService implements OnDestroy {
       await this.tauri.listen<{ source_id: number; error: string }>('sync:failed', (raw) =>
         this.lastError.set({ sourceId: raw.source_id, error: raw.error }),
       ),
+      await this.tauri.listen<{ source_id: number; seq: number; line: string }>('sync:log', (raw) =>
+        this.logLines.update((cur) => [...cur, raw.line].slice(-1000)),
+      ),
     );
   }
 
@@ -129,6 +133,7 @@ export class SyncService implements OnDestroy {
     this.warnings.set([]);
     this.lastComplete.set(null);
     this.lastError.set(null);
+    this.logLines.set([]);
     await this.tauri.invoke<void>('run_sync_now', { sourceId });
   }
 }
