@@ -47,7 +47,7 @@ impl ImportLog {
     pub fn create_in_dir(dir: &Path, source_id: i64) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         // Colons are illegal in filenames on some platforms — use dashes.
-        let ts = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S%.3f");
+        let ts = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S-%3f");
         let path = dir.join(format!("import-{source_id}-{ts}.log"));
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok(Self {
@@ -63,10 +63,9 @@ impl ImportLog {
     /// Write one timestamped line and flush so the tailer observes it promptly.
     pub fn write(&self, level: LogLevel, msg: &str) {
         let ts = chrono::Local::now().format("%H:%M:%S%.3f");
-        if let Ok(mut w) = self.writer.lock() {
-            let _ = writeln!(w, "{ts}  {}  {msg}", level.label());
-            let _ = w.flush();
-        }
+        let mut w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = writeln!(w, "{ts}  {}  {msg}", level.label());
+        let _ = w.flush();
     }
 }
 
