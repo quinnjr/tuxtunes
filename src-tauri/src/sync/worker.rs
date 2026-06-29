@@ -90,6 +90,7 @@ async fn run_one<R: Runtime>(
         },
     );
 
+    let noop_log = |_: crate::sync::import_log::LogLevel, _: &str| {};
     let (track_stats, ingest_candidates) = reconcile_tracks::reconcile(
         &db.engine,
         app,
@@ -97,6 +98,7 @@ async fn run_one<R: Runtime>(
         &lib,
         &source.path_mappings,
         &source.conflict_rules,
+        &noop_log,
     )
     .await?;
 

@@ -4,6 +4,7 @@
 use crate::db::tracks::{self, ItlTrackUpsert, LocalTrackForSync, TracksError};
 use crate::sync::conflict::{self, ConflictRules, Decision};
 use crate::sync::events::{SyncPhase, SyncProgress, SyncWarning, WarningKind};
+use crate::sync::import_log::{LogLevel, LogSink};
 use crate::sync::path_map::{self, PathMapError, PathMapping};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
@@ -35,6 +36,7 @@ pub async fn reconcile<R: Runtime>(
     lib: &ItlFile,
     mappings: &[PathMapping],
     rules: &ConflictRules,
+    log: LogSink<'_>,
 ) -> Result<(TrackReconcileStats, Vec<IngestCandidate>), TracksError> {
     let mut stats = TrackReconcileStats::default();
     let mut ingest_candidates = Vec::new();
@@ -56,6 +58,7 @@ pub async fn reconcile<R: Runtime>(
                     message: format!("{idx} / {total}"),
                 },
             );
+            log(LogLevel::Info, &format!("applying tracks {idx} / {total}"));
         }
 
         let pid = t.persistent_id();
@@ -75,6 +78,10 @@ pub async fn reconcile<R: Runtime>(
                         kind: WarningKind::UnmappablePath,
                         detail: format!("track {pid:016x} ({:?}): {reason}", t.title()),
                     },
+                );
+                log(
+                    LogLevel::Warn,
+                    &format!("unmappable path: track {pid:016x} ({:?}): {reason}", t.title()),
                 );
                 stats.warnings += 1;
                 continue;
