@@ -1,5 +1,10 @@
 //! Polling tailer: follows an append-only file and emits each newly
 //! completed line. Robust to partial-line writes; drains on stop.
+//!
+//! The poll loop does blocking `std::fs` reads, so it runs on tokio's
+//! dedicated blocking pool (`spawn_blocking`) rather than an async worker
+//! thread — a tailer polling on an async worker can starve the runtime
+//! that's driving the import it's following.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -26,7 +31,9 @@ impl LogTailer {
     {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_loop = Arc::clone(&stop);
-        let handle = tokio::spawn(async move {
+        // Blocking pool: the loop sleeps and does blocking file IO, so it must
+        // not occupy an async worker thread.
+        let handle = tokio::task::spawn_blocking(move || {
             let mut offset: u64 = 0;
             let mut pending: Vec<u8> = Vec::new();
             let mut seq: u64 = 0;
@@ -36,7 +43,7 @@ impl LogTailer {
                 if stopping {
                     break;
                 }
-                tokio::time::sleep(POLL).await;
+                std::thread::sleep(POLL);
             }
         });
         Self {
