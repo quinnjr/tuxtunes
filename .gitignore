@@ -62,3 +62,6 @@ coverage/
 
 # Claude Code local session config
 .claude/
+
+# git worktrees for feature/bugfix/hotfix branches
+.worktrees/
