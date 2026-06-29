@@ -59,3 +59,6 @@ Thumbs.db
 # Claude Code (local-only settings)
 .claude/settings.local.json
 coverage/
+
+# Claude Code local session config
+.claude/
