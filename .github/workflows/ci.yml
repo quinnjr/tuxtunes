@@ -11,14 +11,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install node deps
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Install Rust toolchain (for prax-typegen)
         uses: dtolnay/rust-toolchain@stable
@@ -38,16 +41,16 @@ jobs:
           fi
 
       - name: Generate TypeScript models
-        run: npm run codegen
+        run: pnpm run codegen
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Format check
-        run: npm run format:check
+        run: pnpm run format:check
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
   backend:
     runs-on: ubuntu-latest

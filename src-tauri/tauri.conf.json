@@ -5,8 +5,8 @@
   "identifier": "com.pegasusheavyindustries.tuxtunes",
   "build": {
     "devUrl": "http://localhost:4200",
-    "beforeDevCommand": "npm run start",
-    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "pnpm run start",
+    "beforeBuildCommand": "pnpm run build",
     "frontendDist": "../dist/tuxtunes/browser"
   },
   "app": {
