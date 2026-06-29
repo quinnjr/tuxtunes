@@ -153,9 +153,10 @@ pub async fn reconcile<R: Runtime>(
     // One summary for everything past the cap, so the IPC channel and the log
     // see a bounded number of warning events regardless of library size.
     if warn_throttle.suppressed() > 0 {
+        let n = warn_throttle.suppressed();
         let detail = format!(
-            "{} further unmappable paths suppressed",
-            warn_throttle.suppressed()
+            "{n} further unmappable {} suppressed",
+            if n == 1 { "path" } else { "paths" }
         );
         let _ = app.emit(
             crate::sync::events::WARNING,
@@ -266,6 +267,17 @@ mod tests {
         assert!(!t.allow()); // 3rd -> suppressed
         assert!(!t.allow()); // 4th -> suppressed
         assert_eq!(t.suppressed(), 2);
+    }
+
+    #[test]
+    fn warn_throttle_exactly_fills_cap_without_suppressing() {
+        let mut t = WarnThrottle::new(3);
+        assert!(t.allow());
+        assert!(t.allow());
+        assert!(t.allow()); // 3rd fills the cap exactly
+        assert_eq!(t.suppressed(), 0);
+        assert!(!t.allow()); // 4th overflows
+        assert_eq!(t.suppressed(), 1);
     }
 
     #[test]
