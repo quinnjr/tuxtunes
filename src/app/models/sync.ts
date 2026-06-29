@@ -92,7 +92,9 @@ export type WarningKind =
   | 'unmappable_path'
   | 'smart_rule_decode_failed'
   | 'conflict_resolved'
-  | 'unknown_field';
+  | 'unknown_field'
+  | 'ingest_skipped'
+  | 'duplicate_track';
 
 export interface SyncWarning {
   sourceId: number;

@@ -7,9 +7,9 @@ use crate::db::playlists::{self, PlaylistKind, PlaylistUpsert, PlaylistsError};
 use crate::db::sync_util::{self, pid_hex};
 use crate::db::tracks::TracksError;
 use crate::sync::events::{SyncPhase, SyncProgress};
+use crate::sync::observer::SyncObserver;
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
-use tauri::{AppHandle, Emitter, Runtime};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlaylistReconcileStats {
@@ -19,9 +19,9 @@ pub struct PlaylistReconcileStats {
     pub warnings: u64,
 }
 
-pub async fn reconcile<R: Runtime>(
+pub async fn reconcile(
     engine: &SqliteRawEngine,
-    app: &AppHandle<R>,
+    obs: &dyn SyncObserver,
     source_id: i64,
     lib: &ItlFile,
 ) -> Result<PlaylistReconcileStats, PlaylistsError> {
@@ -45,16 +45,13 @@ pub async fn reconcile<R: Runtime>(
 
     for (idx, p) in lib.playlists().iter().enumerate() {
         if idx % 50 == 0 {
-            let _ = app.emit(
-                crate::sync::events::PROGRESS,
-                SyncProgress {
-                    source_id,
-                    phase: SyncPhase::ApplyingPlaylists,
-                    current: idx as u64,
-                    total,
-                    message: format!("{idx} / {total}"),
-                },
-            );
+            obs.progress(&SyncProgress {
+                source_id,
+                phase: SyncPhase::ApplyingPlaylists,
+                current: idx as u64,
+                total,
+                message: format!("{idx} / {total}"),
+            });
         }
 
         let pid = p.persistent_id();

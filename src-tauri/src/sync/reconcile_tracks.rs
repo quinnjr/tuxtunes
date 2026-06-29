@@ -5,11 +5,12 @@ use crate::db::tracks::{self, ItlTrackUpsert, LocalTrackForSync, TracksError};
 use crate::sync::conflict::{self, ConflictRules, Decision};
 use crate::sync::events::{SyncPhase, SyncProgress, SyncWarning, WarningKind};
 use crate::sync::import_log::{LogLevel, LogSink};
+use crate::sync::observer::SyncObserver;
 use crate::sync::path_map::{self, PathMapError, PathMapping};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
+use std::collections::HashSet;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Runtime};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TrackReconcileStats {
@@ -28,10 +29,11 @@ pub struct IngestCandidate {
 }
 
 /// Reconcile every track in `lib` into `engine`. Emits progress + warning
-/// events via `app`. Returns aggregate counts and ingest candidates.
-pub async fn reconcile<R: Runtime>(
+/// events via `obs` and writes human-readable lines to `log`. Returns
+/// aggregate counts and ingest candidates.
+pub async fn reconcile(
     engine: &SqliteRawEngine,
-    app: &AppHandle<R>,
+    obs: &dyn SyncObserver,
     source_id: i64,
     lib: &ItlFile,
     mappings: &[PathMapping],
@@ -41,29 +43,36 @@ pub async fn reconcile<R: Runtime>(
     let mut stats = TrackReconcileStats::default();
     let mut ingest_candidates = Vec::new();
     let total = lib.tracks().len() as u64;
-    // Cap how many individual unmappable-path warnings we surface — both as
-    // `sync:warning` events and as log lines — so a library with no path
-    // mappings can't flood the UI's IPC channel or the log file. The remainder
-    // is reported once as a summary after the walk.
+    // Cap how many individual warnings we surface — both as `sync:warning`
+    // events and as log lines — so a library with no path mappings (or one
+    // riddled with duplicates) can't flood the UI's IPC channel or the log
+    // file. The remainder is reported once as a summary after the walk.
     const WARN_CAP: u64 = 50;
-    let mut warn_throttle = WarnThrottle::new(WARN_CAP);
+    let mut unmappable_throttle = WarnThrottle::new(WARN_CAP);
+    let mut duplicate_throttle = WarnThrottle::new(WARN_CAP);
 
     // One SELECT up-front replaces N per-track by_persistent_id SELECTs.
     let local_map = tracks::load_local_state_map(engine, source_id).await?;
     let mut keep: Vec<u64> = Vec::with_capacity(lib.tracks().len());
 
+    // persistent_ids and resolved file paths handled this run. `local_map`
+    // is a pre-run snapshot, so a .itl that lists the same persistent_id (or
+    // two entries resolving to the same file) would route both copies to the
+    // insert branch and the second would violate the tracks.persistent_id /
+    // tracks.file_path UNIQUE constraints, aborting the whole import. Real
+    // iTunes libraries contain such duplicates, so skip any repeat.
+    let mut seen: HashSet<u64> = HashSet::with_capacity(lib.tracks().len());
+    let mut seen_paths: HashSet<String> = HashSet::with_capacity(lib.tracks().len());
+
     for (idx, t) in lib.tracks().iter().enumerate() {
         if idx % 250 == 0 {
-            let _ = app.emit(
-                crate::sync::events::PROGRESS,
-                SyncProgress {
-                    source_id,
-                    phase: SyncPhase::ApplyingTracks,
-                    current: idx as u64,
-                    total,
-                    message: format!("{idx} / {total}"),
-                },
-            );
+            obs.progress(&SyncProgress {
+                source_id,
+                phase: SyncPhase::ApplyingTracks,
+                current: idx as u64,
+                total,
+                message: format!("{idx} / {total}"),
+            });
             log(LogLevel::Info, &format!("applying tracks {idx} / {total}"));
         }
 
@@ -73,26 +82,55 @@ pub async fn reconcile<R: Runtime>(
             continue;
         }
 
+        if !seen.insert(pid) {
+            if duplicate_throttle.allow() {
+                let detail = format!(
+                    "duplicate persistent_id {pid:016x} ({:?}); skipping repeat",
+                    t.title()
+                );
+                obs.warning(&SyncWarning {
+                    source_id,
+                    kind: WarningKind::DuplicateTrack,
+                    detail: detail.clone(),
+                });
+                log(LogLevel::Warn, &format!("duplicate track: {detail}"));
+            }
+            stats.warnings += 1;
+            continue;
+        }
+
         let raw_path = t.local_path().unwrap_or("");
         let mapped = match path_map::remap(raw_path, mappings) {
             Ok(p) => p,
             Err(PathMapError::Unmappable(reason)) => {
-                if warn_throttle.allow() {
+                if unmappable_throttle.allow() {
                     let detail = format!("track {pid:016x} ({:?}): {reason}", t.title());
-                    let _ = app.emit(
-                        crate::sync::events::WARNING,
-                        SyncWarning {
-                            source_id,
-                            kind: WarningKind::UnmappablePath,
-                            detail: detail.clone(),
-                        },
-                    );
+                    obs.warning(&SyncWarning {
+                        source_id,
+                        kind: WarningKind::UnmappablePath,
+                        detail: detail.clone(),
+                    });
                     log(LogLevel::Warn, &format!("unmappable path: {detail}"));
                 }
                 stats.warnings += 1;
                 continue;
             }
         };
+
+        if !seen_paths.insert(mapped.clone()) {
+            if duplicate_throttle.allow() {
+                let detail =
+                    format!("duplicate file path {mapped:?} (pid {pid:016x}); skipping repeat");
+                obs.warning(&SyncWarning {
+                    source_id,
+                    kind: WarningKind::DuplicateTrack,
+                    detail: detail.clone(),
+                });
+                log(LogLevel::Warn, &format!("duplicate track: {detail}"));
+            }
+            stats.warnings += 1;
+            continue;
+        }
 
         keep.push(pid);
 
@@ -150,22 +188,32 @@ pub async fn reconcile<R: Runtime>(
         }
     }
 
-    // One summary for everything past the cap, so the IPC channel and the log
-    // see a bounded number of warning events regardless of library size.
-    if warn_throttle.suppressed() > 0 {
-        let n = warn_throttle.suppressed();
+    // One summary per throttled category, so the IPC channel and the log see a
+    // bounded number of warning events regardless of library size.
+    if unmappable_throttle.suppressed() > 0 {
+        let n = unmappable_throttle.suppressed();
         let detail = format!(
             "{n} further unmappable {} suppressed",
             if n == 1 { "path" } else { "paths" }
         );
-        let _ = app.emit(
-            crate::sync::events::WARNING,
-            SyncWarning {
-                source_id,
-                kind: WarningKind::UnmappablePath,
-                detail: detail.clone(),
-            },
+        obs.warning(&SyncWarning {
+            source_id,
+            kind: WarningKind::UnmappablePath,
+            detail: detail.clone(),
+        });
+        log(LogLevel::Warn, &detail);
+    }
+    if duplicate_throttle.suppressed() > 0 {
+        let n = duplicate_throttle.suppressed();
+        let detail = format!(
+            "{n} further duplicate {} skipped",
+            if n == 1 { "track" } else { "tracks" }
         );
+        obs.warning(&SyncWarning {
+            source_id,
+            kind: WarningKind::DuplicateTrack,
+            detail: detail.clone(),
+        });
         log(LogLevel::Warn, &detail);
     }
 
@@ -177,11 +225,11 @@ pub async fn reconcile<R: Runtime>(
     Ok((stats, ingest_candidates))
 }
 
-/// Bounds how many individual unmappable-path warnings are surfaced per run.
+/// Bounds how many individual warnings of one category are surfaced per run.
 /// The first `cap` are allowed (emitted as `sync:warning` events and written
 /// to the log); the rest are counted so the caller can report a single
-/// summary. Keeps a library with no path mappings from flooding the UI's IPC
-/// channel and the log file.
+/// summary. Keeps a pathological library from flooding the UI's IPC channel
+/// and the log file.
 struct WarnThrottle {
     shown: u64,
     suppressed: u64,
@@ -255,9 +303,9 @@ fn resolve_user_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Integration-level tests live in tests/sync_integration.rs, since
-    // the full reconcile path needs a real ItlFile fixture. We only
-    // unit-test the pure helper here.
+    // Integration-level tests live in tests/sync_smoke.rs, since the full
+    // reconcile path needs a real ItlFile fixture. We only unit-test the pure
+    // helper here.
 
     #[test]
     fn warn_throttle_allows_up_to_cap_then_counts_suppressed() {

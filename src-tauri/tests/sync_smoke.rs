@@ -49,17 +49,12 @@ async fn reconcile_tracks_with_path_mapping_inserts_rows() {
     .await
     .unwrap();
 
-    let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
-    let handle = app.handle().clone();
-
-    // Actual outcome depends on whether `D:/...` paths resolve on
-    // this dev machine. The DB has a UNIQUE constraint on file_path,
-    // so a real library with non-unique mapped paths can produce an
-    // Err — that's still coverage of the upsert branch we want. Both
-    // Ok and Err are acceptable.
+    // Outcome depends on whether `D:/...` paths resolve on this dev
+    // machine; duplicate persistent_ids / file paths are skipped rather
+    // than aborting, so a real library walks to completion.
     let res = tuxtunes::sync::reconcile_tracks::reconcile(
         &db.engine,
-        &handle,
+        &tuxtunes::sync::observer::NoopObserver,
         source_id,
         &lib,
         &mappings,
@@ -101,12 +96,9 @@ async fn reconcile_tracks_against_real_fixture() {
     .await
     .unwrap();
 
-    let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
-    let handle = app.handle().clone();
-
     let (stats, _candidates) = tuxtunes::sync::reconcile_tracks::reconcile(
         &db.engine,
-        &handle,
+        &tuxtunes::sync::observer::NoopObserver,
         source_id,
         &lib,
         &[],
@@ -152,11 +144,9 @@ async fn reconcile_playlists_against_real_fixture() {
     .unwrap();
 
     // Tracks must exist before playlists reference them.
-    let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
-    let handle = app.handle().clone();
     let _ = tuxtunes::sync::reconcile_tracks::reconcile(
         &db.engine,
-        &handle,
+        &tuxtunes::sync::observer::NoopObserver,
         source_id,
         &lib,
         &[],
@@ -166,10 +156,14 @@ async fn reconcile_playlists_against_real_fixture() {
     .await
     .unwrap();
 
-    let stats =
-        tuxtunes::sync::reconcile_playlists::reconcile(&db.engine, &handle, source_id, &lib)
-            .await
-            .expect("reconcile playlists");
+    let stats = tuxtunes::sync::reconcile_playlists::reconcile(
+        &db.engine,
+        &tuxtunes::sync::observer::NoopObserver,
+        source_id,
+        &lib,
+    )
+    .await
+    .expect("reconcile playlists");
     // Same shape as track reconcile: the playlist walker should have
     // touched some rows even if the path mappings dropped tracks.
     let total = stats.inserted + stats.updated + stats.deleted;
@@ -226,13 +220,16 @@ async fn sync_coordinator_run_now_drives_worker_to_finalize() {
     coord.run_now(source_id).unwrap();
 
     // Wait for the worker to reach finalize_sync (sets last_sync_at).
-    // Empty mappings mean no INSERTs, so this should complete within
-    // a few seconds.
+    // Empty mappings mean no INSERTs, so the work itself takes ~1-2s.
+    // The timeout is a generous safety margin: the sibling fixture tests
+    // in this binary each do a full import of the (large) real library,
+    // and under that shared-process load the worker can be scheduled
+    // slowly — 30s proved flaky, so allow ample headroom before failing.
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(30);
+    let timeout = std::time::Duration::from_secs(180);
     loop {
         if start.elapsed() > timeout {
-            panic!("sync did not finish within 30s");
+            panic!("sync did not finish within 180s");
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let last_sync: Option<String> = db
