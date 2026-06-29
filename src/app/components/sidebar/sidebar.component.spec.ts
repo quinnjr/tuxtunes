@@ -1,14 +1,10 @@
 import { TestBed } from '@angular/core/testing';
-import { describe, expect, it, vi } from 'vitest';
-import { LibraryService } from '../../services/library.service';
+import { describe, expect, it } from 'vitest';
 import { UiService } from '../../services/ui.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { SidebarComponent } from './sidebar.component';
 
 interface SidebarInternals {
-  add(): Promise<void>;
-  openImportWizard(): void;
-  openPreferences(): void;
   setView(v: string): void;
   isActive(v: string): boolean;
 }
@@ -24,32 +20,11 @@ function setup() {
   return {
     fixture,
     cmp: fixture.componentInstance as unknown as SidebarInternals,
-    library: TestBed.inject(LibraryService),
     ui: TestBed.inject(UiService),
   };
 }
 
 describe('SidebarComponent', () => {
-  it('add() delegates to LibraryService.addTrackFromPicker', async () => {
-    const { cmp, library } = setup();
-    const spy = vi.spyOn(library, 'addTrackFromPicker').mockResolvedValue(null);
-    await cmp.add();
-    expect(spy).toHaveBeenCalled();
-  });
-
-  it('openImportWizard() flips the UI signal', () => {
-    const { cmp, ui } = setup();
-    expect(ui.importWizardOpen()).toBe(false);
-    cmp.openImportWizard();
-    expect(ui.importWizardOpen()).toBe(true);
-  });
-
-  it('openPreferences() flips the UI signal', () => {
-    const { cmp, ui } = setup();
-    cmp.openPreferences();
-    expect(ui.preferencesOpen()).toBe(true);
-  });
-
   it('setView("genres") opens the column browser and keeps libraryView=tracks', () => {
     const { cmp, ui } = setup();
     cmp.setView('genres');

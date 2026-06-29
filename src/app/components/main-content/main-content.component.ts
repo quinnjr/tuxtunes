@@ -4,7 +4,6 @@ import { LibraryView, UiService } from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
 import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
 import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
-import { SettingsRouteComponent } from '../settings-route/settings-route.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
 
 @Component({
@@ -13,7 +12,6 @@ import { TrackListViewComponent } from '../track-list-view/track-list-view.compo
     AlbumGridViewComponent,
     ArtistSplitViewComponent,
     ColumnBrowserComponent,
-    SettingsRouteComponent,
     TrackListViewComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -23,12 +21,7 @@ export class MainContentComponent {
   protected readonly ui = inject(UiService);
   protected readonly library = inject(LibraryService);
   protected readonly viewMode = this.ui.libraryView;
-  protected readonly modes: readonly LibraryView[] = [
-    'tracks',
-    'albums',
-    'artists',
-    'settings',
-  ] as const;
+  protected readonly modes: readonly LibraryView[] = ['tracks', 'albums', 'artists'] as const;
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
 

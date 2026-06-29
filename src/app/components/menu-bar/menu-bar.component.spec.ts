@@ -1,0 +1,82 @@
+import { TestBed } from '@angular/core/testing';
+import { describe, expect, it, vi } from 'vitest';
+import { LibraryService } from '../../services/library.service';
+import { UiService } from '../../services/ui.service';
+import { appProviders, tauriStub } from '../../test-helpers';
+import { MenuBarComponent } from './menu-bar.component';
+
+interface MenuBarInternals {
+  openMenu(): 'file' | 'settings' | null;
+  toggle(menu: 'file' | 'settings'): void;
+  close(): void;
+  addFiles(): Promise<void>;
+  importItunes(): void;
+  openPreferences(): void;
+}
+
+function setup() {
+  const stub = tauriStub();
+  TestBed.configureTestingModule({
+    imports: [MenuBarComponent],
+    providers: appProviders(stub),
+  });
+  const fixture = TestBed.createComponent(MenuBarComponent);
+  fixture.detectChanges();
+  return {
+    fixture,
+    cmp: fixture.componentInstance as unknown as MenuBarInternals,
+    library: TestBed.inject(LibraryService),
+    ui: TestBed.inject(UiService),
+  };
+}
+
+describe('MenuBarComponent', () => {
+  it('toggle() opens then closes the same menu', () => {
+    const { cmp } = setup();
+    expect(cmp.openMenu()).toBeNull();
+    cmp.toggle('file');
+    expect(cmp.openMenu()).toBe('file');
+    cmp.toggle('file');
+    expect(cmp.openMenu()).toBeNull();
+  });
+
+  it('toggle() switches directly between menus', () => {
+    const { cmp } = setup();
+    cmp.toggle('file');
+    cmp.toggle('settings');
+    expect(cmp.openMenu()).toBe('settings');
+  });
+
+  it('addFiles() delegates to LibraryService.addTrackFromPicker and closes the menu', async () => {
+    const { cmp, library } = setup();
+    const spy = vi.spyOn(library, 'addTrackFromPicker').mockResolvedValue(null);
+    cmp.toggle('file');
+    await cmp.addFiles();
+    expect(spy).toHaveBeenCalled();
+    expect(cmp.openMenu()).toBeNull();
+  });
+
+  it('importItunes() flips the import-wizard signal and closes the menu', () => {
+    const { cmp, ui } = setup();
+    expect(ui.importWizardOpen()).toBe(false);
+    cmp.toggle('file');
+    cmp.importItunes();
+    expect(ui.importWizardOpen()).toBe(true);
+    expect(cmp.openMenu()).toBeNull();
+  });
+
+  it('openPreferences() flips the preferences signal and closes the menu', () => {
+    const { cmp, ui } = setup();
+    cmp.toggle('settings');
+    cmp.openPreferences();
+    expect(ui.preferencesOpen()).toBe(true);
+    expect(cmp.openMenu()).toBeNull();
+  });
+
+  it('renders the File and Settings menu triggers', () => {
+    const { fixture } = setup();
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('File');
+    expect(text).toContain('Settings');
+  });
+});

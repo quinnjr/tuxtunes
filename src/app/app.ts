@@ -2,6 +2,7 @@ import { Component, OnInit, inject, ChangeDetectionStrategy } from '@angular/cor
 import { ContextMenuComponent } from './components/context-menu/context-menu.component';
 import { ImportWizardComponent } from './components/import-wizard/import-wizard.component';
 import { MainContentComponent } from './components/main-content/main-content.component';
+import { MenuBarComponent } from './components/menu-bar/menu-bar.component';
 import { NowPlayingPanelComponent } from './components/now-playing-panel/now-playing-panel.component';
 import { PreferencesPanelComponent } from './components/preferences-panel/preferences-panel.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
@@ -15,6 +16,7 @@ import { LibraryService } from './services/library.service';
     ContextMenuComponent,
     ImportWizardComponent,
     MainContentComponent,
+    MenuBarComponent,
     NowPlayingPanelComponent,
     PreferencesPanelComponent,
     SidebarComponent,
