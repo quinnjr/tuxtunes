@@ -41,11 +41,12 @@ pub async fn reconcile<R: Runtime>(
     let mut stats = TrackReconcileStats::default();
     let mut ingest_candidates = Vec::new();
     let total = lib.tracks().len() as u64;
-    // Cap repetitive per-warning log lines so a library full of unmappable
-    // paths can't flood the log file (and the live `sync:log` stream). The
-    // `sync:warning` events are unaffected; this only bounds the narrative log.
-    let mut warn_log_count = 0u64;
-    const WARN_LOG_CAP: u64 = 50;
+    // Cap how many individual unmappable-path warnings we surface — both as
+    // `sync:warning` events and as log lines — so a library with no path
+    // mappings can't flood the UI's IPC channel or the log file. The remainder
+    // is reported once as a summary after the walk.
+    const WARN_CAP: u64 = 50;
+    let mut warn_throttle = WarnThrottle::new(WARN_CAP);
 
     // One SELECT up-front replaces N per-track by_persistent_id SELECTs.
     let local_map = tracks::load_local_state_map(engine, source_id).await?;
@@ -76,29 +77,17 @@ pub async fn reconcile<R: Runtime>(
         let mapped = match path_map::remap(raw_path, mappings) {
             Ok(p) => p,
             Err(PathMapError::Unmappable(reason)) => {
-                let _ = app.emit(
-                    crate::sync::events::WARNING,
-                    SyncWarning {
-                        source_id,
-                        kind: WarningKind::UnmappablePath,
-                        detail: format!("track {pid:016x} ({:?}): {reason}", t.title()),
-                    },
-                );
-                if warn_log_count < WARN_LOG_CAP {
-                    log(
-                        LogLevel::Warn,
-                        &format!(
-                            "unmappable path: track {pid:016x} ({:?}): {reason}",
-                            t.title()
-                        ),
+                if warn_throttle.allow() {
+                    let detail = format!("track {pid:016x} ({:?}): {reason}", t.title());
+                    let _ = app.emit(
+                        crate::sync::events::WARNING,
+                        SyncWarning {
+                            source_id,
+                            kind: WarningKind::UnmappablePath,
+                            detail: detail.clone(),
+                        },
                     );
-                    warn_log_count += 1;
-                    if warn_log_count == WARN_LOG_CAP {
-                        log(
-                            LogLevel::Warn,
-                            "further unmappable-path warnings suppressed in log",
-                        );
-                    }
+                    log(LogLevel::Warn, &format!("unmappable path: {detail}"));
                 }
                 stats.warnings += 1;
                 continue;
@@ -161,12 +150,67 @@ pub async fn reconcile<R: Runtime>(
         }
     }
 
+    // One summary for everything past the cap, so the IPC channel and the log
+    // see a bounded number of warning events regardless of library size.
+    if warn_throttle.suppressed() > 0 {
+        let n = warn_throttle.suppressed();
+        let detail = format!(
+            "{n} further unmappable {} suppressed",
+            if n == 1 { "path" } else { "paths" }
+        );
+        let _ = app.emit(
+            crate::sync::events::WARNING,
+            SyncWarning {
+                source_id,
+                kind: WarningKind::UnmappablePath,
+                detail: detail.clone(),
+            },
+        );
+        log(LogLevel::Warn, &detail);
+    }
+
     if rules.deletes == crate::sync::conflict::DeleteStrategy::Respect {
         let deleted = tracks::delete_missing(engine, source_id, &keep).await?;
         stats.deleted = deleted;
     }
 
     Ok((stats, ingest_candidates))
+}
+
+/// Bounds how many individual unmappable-path warnings are surfaced per run.
+/// The first `cap` are allowed (emitted as `sync:warning` events and written
+/// to the log); the rest are counted so the caller can report a single
+/// summary. Keeps a library with no path mappings from flooding the UI's IPC
+/// channel and the log file.
+struct WarnThrottle {
+    shown: u64,
+    suppressed: u64,
+    cap: u64,
+}
+
+impl WarnThrottle {
+    fn new(cap: u64) -> Self {
+        Self {
+            shown: 0,
+            suppressed: 0,
+            cap,
+        }
+    }
+
+    /// Record a warning; returns true if it should be surfaced individually.
+    fn allow(&mut self) -> bool {
+        if self.shown < self.cap {
+            self.shown += 1;
+            true
+        } else {
+            self.suppressed += 1;
+            false
+        }
+    }
+
+    fn suppressed(&self) -> u64 {
+        self.suppressed
+    }
 }
 
 fn nz(v: i64) -> Option<i64> {
@@ -214,6 +258,43 @@ mod tests {
     // Integration-level tests live in tests/sync_integration.rs, since
     // the full reconcile path needs a real ItlFile fixture. We only
     // unit-test the pure helper here.
+
+    #[test]
+    fn warn_throttle_allows_up_to_cap_then_counts_suppressed() {
+        let mut t = WarnThrottle::new(2);
+        assert!(t.allow()); // 1st
+        assert!(t.allow()); // 2nd
+        assert!(!t.allow()); // 3rd -> suppressed
+        assert!(!t.allow()); // 4th -> suppressed
+        assert_eq!(t.suppressed(), 2);
+    }
+
+    #[test]
+    fn warn_throttle_exactly_fills_cap_without_suppressing() {
+        let mut t = WarnThrottle::new(3);
+        assert!(t.allow());
+        assert!(t.allow());
+        assert!(t.allow()); // 3rd fills the cap exactly
+        assert_eq!(t.suppressed(), 0);
+        assert!(!t.allow()); // 4th overflows
+        assert_eq!(t.suppressed(), 1);
+    }
+
+    #[test]
+    fn warn_throttle_reports_no_suppression_under_cap() {
+        let mut t = WarnThrottle::new(5);
+        assert!(t.allow());
+        assert!(t.allow());
+        assert_eq!(t.suppressed(), 0);
+    }
+
+    #[test]
+    fn warn_throttle_zero_cap_suppresses_everything() {
+        let mut t = WarnThrottle::new(0);
+        assert!(!t.allow());
+        assert!(!t.allow());
+        assert_eq!(t.suppressed(), 2);
+    }
 
     #[test]
     fn nz_filters_zeros() {
