@@ -18,7 +18,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-transport-bar',
   imports: [FaIconComponent],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './transport-bar.component.html',
 })
 export class TransportBarComponent {

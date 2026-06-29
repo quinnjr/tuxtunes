@@ -59,7 +59,7 @@ const ALL_COLUMNS: Column[] = [
 @Component({
   selector: 'app-track-list-view',
   imports: [ScrollingModule],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './track-list-view.component.html',
 })
 export class TrackListViewComponent implements OnInit {

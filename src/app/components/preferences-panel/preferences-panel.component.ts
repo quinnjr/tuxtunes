@@ -7,7 +7,7 @@ import { UiService } from '../../services/ui.service';
 @Component({
   selector: 'app-preferences-panel',
   imports: [FormsModule],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './preferences-panel.component.html',
 })
 export class PreferencesPanelComponent {

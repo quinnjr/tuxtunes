@@ -14,7 +14,7 @@ interface PathRow {
 @Component({
   selector: 'app-import-wizard',
   imports: [FormsModule],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './import-wizard.component.html',
 })
 export class ImportWizardComponent {

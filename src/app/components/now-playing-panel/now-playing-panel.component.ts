@@ -9,7 +9,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-now-playing-panel',
   imports: [CdkDropList, CdkDrag],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './now-playing-panel.component.html',
 })
 export class NowPlayingPanelComponent {

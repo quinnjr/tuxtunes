@@ -7,7 +7,7 @@ import { LibraryView, UiService } from '../../services/ui.service';
 @Component({
   selector: 'app-sidebar',
   imports: [FaIconComponent],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './sidebar.component.html',
 })
 export class SidebarComponent {

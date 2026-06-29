@@ -8,7 +8,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-album-grid-view',
   imports: [],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './album-grid-view.component.html',
 })
 export class AlbumGridViewComponent implements OnInit {

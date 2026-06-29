@@ -10,7 +10,7 @@ type SettingsTab = 'playback' | 'sync' | 'maintenance' | 'about';
 @Component({
   selector: 'app-settings-route',
   imports: [SettingsAudioComponent],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './settings-route.component.html',
 })
 export class SettingsRouteComponent implements OnInit {

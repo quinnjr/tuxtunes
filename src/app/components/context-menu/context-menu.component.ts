@@ -4,7 +4,7 @@ import { ContextMenuItem, ContextMenuService } from '../../services/context-menu
 @Component({
   selector: 'app-context-menu',
   imports: [],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './context-menu.component.html',
 })
 export class ContextMenuComponent {

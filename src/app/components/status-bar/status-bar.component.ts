@@ -6,7 +6,7 @@ import { formatByteSize, formatTotalDuration } from '../../utils/format';
 @Component({
   selector: 'app-status-bar',
   imports: [],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './status-bar.component.html',
 })
 export class StatusBarComponent {

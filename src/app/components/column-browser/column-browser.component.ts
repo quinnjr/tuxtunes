@@ -22,7 +22,7 @@ interface PaneState {
 @Component({
   selector: 'app-column-browser',
   imports: [],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './column-browser.component.html',
 })
 export class ColumnBrowserComponent implements OnInit {

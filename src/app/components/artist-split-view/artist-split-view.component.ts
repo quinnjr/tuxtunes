@@ -13,7 +13,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-artist-split-view',
   imports: [],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './artist-split-view.component.html',
 })
 export class ArtistSplitViewComponent implements OnInit {

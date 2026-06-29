@@ -19,7 +19,7 @@ interface AudioPrefsSnapshot {
 @Component({
   selector: 'app-settings-audio',
   imports: [],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './settings-audio.component.html',
 })
 export class SettingsAudioComponent implements OnInit {

@@ -16,7 +16,7 @@ import { TrackListViewComponent } from '../track-list-view/track-list-view.compo
     SettingsRouteComponent,
     TrackListViewComponent,
   ],
-  changeDetection: ChangeDetectionStrategy.Eager,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './main-content.component.html',
 })
 export class MainContentComponent {
