@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { TauriService } from '../../services/tauri.service';
 
 export interface AudioDevice {
@@ -19,6 +19,7 @@ interface AudioPrefsSnapshot {
 @Component({
   selector: 'app-settings-audio',
   imports: [],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './settings-audio.component.html',
 })
 export class SettingsAudioComponent implements OnInit {

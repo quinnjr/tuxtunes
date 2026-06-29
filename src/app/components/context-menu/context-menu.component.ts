@@ -1,9 +1,10 @@
-import { Component, HostListener, inject } from '@angular/core';
+import { Component, HostListener, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
 
 @Component({
   selector: 'app-context-menu',
   imports: [],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './context-menu.component.html',
 })
 export class ContextMenuComponent {

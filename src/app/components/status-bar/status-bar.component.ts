@@ -1,4 +1,4 @@
-import { Component, computed, inject } from '@angular/core';
+import { Component, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { formatByteSize, formatTotalDuration } from '../../utils/format';
@@ -6,6 +6,7 @@ import { formatByteSize, formatTotalDuration } from '../../utils/format';
 @Component({
   selector: 'app-status-bar',
   imports: [],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './status-bar.component.html',
 })
 export class StatusBarComponent {

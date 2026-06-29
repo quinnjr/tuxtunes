@@ -1,5 +1,12 @@
 import { ScrollingModule } from '@angular/cdk/scrolling';
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  computed,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
 import { LibraryService, SortColumn } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
@@ -52,6 +59,7 @@ const ALL_COLUMNS: Column[] = [
 @Component({
   selector: 'app-track-list-view',
   imports: [ScrollingModule],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './track-list-view.component.html',
 })
 export class TrackListViewComponent implements OnInit {

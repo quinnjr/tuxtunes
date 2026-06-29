@@ -1,4 +1,4 @@
-import { Component, inject } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
 import { LibraryView, UiService } from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
@@ -16,6 +16,7 @@ import { TrackListViewComponent } from '../track-list-view/track-list-view.compo
     SettingsRouteComponent,
     TrackListViewComponent,
   ],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './main-content.component.html',
 })
 export class MainContentComponent {

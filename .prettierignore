@@ -11,3 +11,4 @@ src/app/models/generated/
 docs/plans/
 docs/superpowers/
 **/*.lock
+pnpm-lock.yaml

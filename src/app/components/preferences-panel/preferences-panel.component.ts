@@ -1,4 +1,4 @@
-import { Component, effect, inject, signal } from '@angular/core';
+import { Component, effect, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { PreferencesService } from '../../services/preferences.service';
@@ -7,6 +7,7 @@ import { UiService } from '../../services/ui.service';
 @Component({
   selector: 'app-preferences-panel',
   imports: [FormsModule],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './preferences-panel.component.html',
 })
 export class PreferencesPanelComponent {

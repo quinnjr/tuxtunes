@@ -1,4 +1,11 @@
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  computed,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { LibraryService, AlbumSummary, ArtistSummary } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
 import { formatMmSs } from '../../utils/time';
@@ -6,6 +13,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-artist-split-view',
   imports: [],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './artist-split-view.component.html',
 })
 export class ArtistSplitViewComponent implements OnInit {

@@ -1,4 +1,4 @@
-import { Component, computed, inject } from '@angular/core';
+import { Component, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import {
   faBackwardStep,
@@ -18,6 +18,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-transport-bar',
   imports: [FaIconComponent],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './transport-bar.component.html',
 })
 export class TransportBarComponent {

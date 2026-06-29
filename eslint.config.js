@@ -55,6 +55,11 @@ export default tseslint.config(
         'error',
         { type: 'element', prefix: 'app', style: 'kebab-case' },
       ],
+      // ponytail: v22 made OnPush the default; the ng-update migration
+      // pinned every component to Eager to preserve existing behavior.
+      // Adopting OnPush is a real refactor (signals / markForCheck) that
+      // needs UI verification — do it deliberately, not as a lint fix.
+      '@angular-eslint/prefer-on-push-component-change-detection': 'off',
       'unicorn/filename-case': ['error', { cases: { kebabCase: true } }],
       'unicorn/prevent-abbreviations': 'off',
       'unicorn/no-null': 'off',

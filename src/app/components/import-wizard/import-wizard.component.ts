@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { ConflictRules, PathMapping, Strategy } from '../../models/sync';
@@ -14,6 +14,7 @@ interface PathRow {
 @Component({
   selector: 'app-import-wizard',
   imports: [FormsModule],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './import-wizard.component.html',
 })
 export class ImportWizardComponent {

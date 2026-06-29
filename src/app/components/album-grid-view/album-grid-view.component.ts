@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { ContextMenuService } from '../../services/context-menu.service';
 import { LibraryService, AlbumSummary } from '../../services/library.service';
@@ -8,6 +8,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-album-grid-view',
   imports: [],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './album-grid-view.component.html',
 })
 export class AlbumGridViewComponent implements OnInit {

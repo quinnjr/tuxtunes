@@ -1,4 +1,12 @@
-import { Component, OnInit, computed, effect, inject, signal } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  computed,
+  effect,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import {
   DistinctColumn,
   DistinctValue,
@@ -14,6 +22,7 @@ interface PaneState {
 @Component({
   selector: 'app-column-browser',
   imports: [],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './column-browser.component.html',
 })
 export class ColumnBrowserComponent implements OnInit {

@@ -1,4 +1,4 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ContextMenuComponent } from './components/context-menu/context-menu.component';
 import { ImportWizardComponent } from './components/import-wizard/import-wizard.component';
 import { MainContentComponent } from './components/main-content/main-content.component';
@@ -22,6 +22,7 @@ import { LibraryService } from './services/library.service';
     TransportBarComponent,
   ],
   templateUrl: './app.html',
+  changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './app.css',
 })
 export class App implements OnInit {

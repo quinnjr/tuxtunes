@@ -1,5 +1,5 @@
 import { CdkDrag, CdkDragDrop, CdkDropList, moveItemInArray } from '@angular/cdk/drag-drop';
-import { Component, HostListener, computed, inject } from '@angular/core';
+import { Component, HostListener, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { LibraryService } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
@@ -9,6 +9,7 @@ import { formatMmSs } from '../../utils/time';
 @Component({
   selector: 'app-now-playing-panel',
   imports: [CdkDropList, CdkDrag],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './now-playing-panel.component.html',
 })
 export class NowPlayingPanelComponent {

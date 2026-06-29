@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { TauriService } from '../../services/tauri.service';
@@ -10,6 +10,7 @@ type SettingsTab = 'playback' | 'sync' | 'maintenance' | 'about';
 @Component({
   selector: 'app-settings-route',
   imports: [SettingsAudioComponent],
+  changeDetection: ChangeDetectionStrategy.Eager,
   templateUrl: './settings-route.component.html',
 })
 export class SettingsRouteComponent implements OnInit {
