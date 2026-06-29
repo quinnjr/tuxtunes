@@ -36,6 +36,15 @@ pub enum WarningKind {
     SmartRuleDecodeFailed,
     ConflictResolved,
     UnknownField,
+    /// `auto_copy_files` is set on a source but file ingest is GUI-only
+    /// (the CLI runs reconcile with no FsCoordinator), so the copy was
+    /// skipped. Metadata still reconciled.
+    IngestSkipped,
+    /// A source entry duplicated one already imported this run — either
+    /// the same persistent_id, or the same resolved file path under a
+    /// different id (the same physical file imported twice in iTunes).
+    /// The repeat was skipped. Real iTunes libraries contain such dupes.
+    DuplicateTrack,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

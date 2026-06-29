@@ -54,6 +54,16 @@ pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<SyncSourceRow, Syn
         .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))
 }
 
+pub async fn remove(engine: &SqliteRawEngine, id: i64) -> Result<(), SyncSourcesError> {
+    let sql = "DELETE FROM sync_sources WHERE id = ?";
+    let params = vec![FilterValue::Int(id)];
+    engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map(|_| ())
+        .map_err(|e| SyncSourcesError::Query(anyhow::Error::from(e)))
+}
+
 pub async fn insert(
     engine: &SqliteRawEngine,
     name: &str,
@@ -160,6 +170,20 @@ mod tests {
         assert_eq!(row.source_path, "/tmp/a.itl");
         assert_eq!(row.path_mappings.len(), 1);
         assert!(row.auto_copy_files);
+    }
+
+    #[tokio::test]
+    async fn remove_deletes_the_row() {
+        let db = tmp().await;
+        let id = insert(&db.engine, "n", "/x.itl", &[], &default_rules(), false)
+            .await
+            .unwrap();
+        remove(&db.engine, id).await.unwrap();
+        let rows = list(&db.engine).await.unwrap();
+        assert!(
+            rows.is_empty(),
+            "expected no rows after remove, got {rows:?}"
+        );
     }
 
     #[tokio::test]
