@@ -22,6 +22,10 @@ html,
 body {
   height: 100%;
   margin: 0;
+  /* Render native controls (select/option popups, scrollbars) dark.
+     Without this WebKit paints them in its default light scheme even
+     though the surrounding app uses the dark palette above. */
+  color-scheme: dark;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
