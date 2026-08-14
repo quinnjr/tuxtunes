@@ -8,7 +8,8 @@ import { SettingsRouteComponent } from './settings-route.component';
 
 interface RouteInternals {
   tab: { (): string; set(v: 'playback' | 'sync' | 'maintenance' | 'about'): void };
-  verifyState: { (): 'idle' | 'running' | 'done' };
+  verifyState: { (): 'idle' | 'running' | 'done' | 'error' };
+  verifyError: { (): string | null };
   setTab(t: 'playback' | 'sync' | 'maintenance' | 'about'): void;
   formatLastSync(iso: string | null): string;
   runSync(id: number): Promise<void>;
@@ -93,13 +94,45 @@ describe('SettingsRouteComponent', () => {
       expect(cmp.verifyState()).toBe('done');
     });
 
-    it('falls back to idle if verify_library throws', async () => {
+    it('sets error state and message when verify_library rejects', async () => {
       const { cmp } = setup(async (cmd) => {
         if (cmd === 'verify_library') throw new Error('nope');
         return defaultInvoke(cmd);
       });
       await cmp.verify();
-      expect(cmp.verifyState()).toBe('idle');
+      expect(cmp.verifyState()).toBe('error');
+      expect(cmp.verifyError()).toBe('nope');
+    });
+
+    it('sets error state and message on fs:verify-failed event', async () => {
+      const { cmp, stub } = setup(async (cmd) => {
+        if (cmd === 'verify_library') return undefined;
+        return defaultInvoke(cmd);
+      });
+      const promise = cmp.verify();
+      await promise;
+      expect(cmp.verifyState()).toBe('running');
+      stub.emit('fs:verify-failed', { message: 'checksum mismatch' });
+      expect(cmp.verifyState()).toBe('error');
+      expect(cmp.verifyError()).toBe('checksum mismatch');
+    });
+
+    it('does not clobber an error state set by fs:verify-failed once the settle timer fires', async () => {
+      const { cmp, library, stub } = setup(async (cmd) => {
+        if (cmd === 'verify_library') return undefined;
+        return defaultInvoke(cmd);
+      });
+      const refresh = vi.spyOn(library, 'refreshStats').mockResolvedValue();
+      const promise = cmp.verify();
+      await promise;
+      expect(cmp.verifyState()).toBe('running');
+      stub.emit('fs:verify-failed', { message: 'checksum mismatch' });
+      expect(cmp.verifyState()).toBe('error');
+      vi.advanceTimersByTime(1500);
+      await Promise.resolve();
+      expect(cmp.verifyState()).toBe('error');
+      expect(cmp.verifyError()).toBe('checksum mismatch');
+      expect(refresh).not.toHaveBeenCalled();
     });
   });
 });

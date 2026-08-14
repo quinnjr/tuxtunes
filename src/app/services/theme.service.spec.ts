@@ -32,4 +32,32 @@ describe('ThemeService', () => {
     theme.set('system');
     expect(['light', 'dark']).toContain(theme.resolved());
   });
+
+  it('tracks OS prefers-color-scheme live when mode is system', () => {
+    let handler: ((event: MediaQueryListEvent) => void) | undefined;
+    const originalMatchMedia = globalThis.matchMedia;
+    globalThis.matchMedia = ((query: string) =>
+      ({
+        matches: false,
+        media: query,
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          handler = listener;
+        },
+        removeEventListener: () => {},
+      }) as unknown as MediaQueryList) as typeof globalThis.matchMedia;
+
+    try {
+      const theme = make();
+      theme.set('system');
+      expect(handler).toBeDefined();
+
+      handler?.({ matches: true } as MediaQueryListEvent);
+      expect(theme.resolved()).toBe('dark');
+
+      handler?.({ matches: false } as MediaQueryListEvent);
+      expect(theme.resolved()).toBe('light');
+    } finally {
+      globalThis.matchMedia = originalMatchMedia;
+    }
+  });
 });

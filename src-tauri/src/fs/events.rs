@@ -2,6 +2,12 @@
 
 use serde::Serialize;
 
+/// Reserved for future per-track ingest progress reporting. Not
+/// currently emitted — `fs/ingest.rs` intentionally omits per-track
+/// emits to avoid excessive IPC volume during bulk imports. Keeping
+/// the constant so consumers don't have to be rewired when it lands.
+/// Remove or wire up once a batched/throttled progress design exists
+/// for bulk imports.
 pub const INGEST_PROGRESS: &str = "fs:ingest-progress";
 pub const INGEST_COMPLETE: &str = "fs:ingest-complete";
 pub const INGEST_FAILED: &str = "fs:ingest-failed";
@@ -9,7 +15,10 @@ pub const ORGANIZE_APPLIED: &str = "fs:organize-applied";
 pub const ORGANIZE_FAILED: &str = "fs:organize-failed";
 pub const VERIFY_PROGRESS: &str = "fs:verify-progress";
 pub const VERIFY_COMPLETE: &str = "fs:verify-complete";
+pub const VERIFY_FAILED: &str = "fs:verify-failed";
 
+/// Payload for [`INGEST_PROGRESS`]. See that constant for why this
+/// event is reserved and not currently emitted.
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestProgress {
     pub track_id: i64,
@@ -59,6 +68,11 @@ pub struct VerifyComplete {
     pub mismatched: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifyFailed {
+    pub message: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,5 +86,6 @@ mod tests {
         assert_eq!(ORGANIZE_FAILED, "fs:organize-failed");
         assert_eq!(VERIFY_PROGRESS, "fs:verify-progress");
         assert_eq!(VERIFY_COMPLETE, "fs:verify-complete");
+        assert_eq!(VERIFY_FAILED, "fs:verify-failed");
     }
 }

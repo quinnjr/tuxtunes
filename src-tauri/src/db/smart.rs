@@ -1,7 +1,8 @@
 //! Smart-playlist rule model + SQL compiler.
 //!
-//! Surfaces full iTunes parity: nested condition groups (AND/OR),
-//! per-field operators, limits with selection mode. The compiler walks
+//! Surfaces field parity for fields represented in the Track schema:
+//! nested condition groups (AND/OR), per-field operators, limits with
+//! selection mode. The compiler walks
 //! the rule tree once and produces a parameterized `WHERE` clause +
 //! `ORDER BY` + `LIMIT` against the `tracks` table — no string
 //! concatenation of user input ever reaches SQL.
@@ -216,9 +217,10 @@ pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartEr
             unit: LimitUnit::Songs,
             ..
         }) => format!("LIMIT {value}"),
-        // Minutes/Hours/MB/GB caps are application-side; the compiler
-        // returns an unbounded query and the caller truncates after
-        // accumulating durations or sizes.
+        // Minutes/Hours/MB/GB caps are application-side: the compiler
+        // returns an unbounded query (preserving ORDER BY) and
+        // `evaluate()` truncates the result set with `truncate_by_cap`
+        // after accumulating durations or sizes over the ordered rows.
         _ => String::new(),
     };
 
@@ -465,7 +467,7 @@ fn escape_like(s: &str) -> String {
 // ----- Public command-layer helpers --------------------------------------
 
 const TRACK_LIST_COLUMNS: &str = "id, title, artist, album, duration_ms, file_path, file_hash, \
-     sample_rate, bit_depth, kind, play_count, skip_count";
+     sample_rate, bit_depth, kind, play_count, skip_count, size_bytes";
 
 /// Evaluate a smart rule and return matching tracks.
 pub async fn evaluate(
@@ -473,14 +475,73 @@ pub async fn evaluate(
     rule: &SmartRule,
 ) -> Result<Vec<crate::db::tracks::TrackRow>, SmartError> {
     let q = compile(rule, TRACK_LIST_COLUMNS)?;
-    let rows = engine
+    let raw_rows = engine
         .raw_sql_query(&q.sql, &q.params)
         .await
         .map_err(|e| SmartError::Query(anyhow::Error::from(e)))?;
-    rows.into_iter()
-        .map(|r| serde_json::from_value(r.into_json()))
+
+    // Keep the raw JSON alongside the typed rows: `TrackRow` doesn't
+    // carry `size_bytes` (it's not part of the track-list view), but
+    // `truncate_by_cap` needs it for Mb/Gb caps, and `size_bytes` is an
+    // extra field `TrackRow`'s deserializer simply ignores.
+    let jsons: Vec<serde_json::Value> = raw_rows.into_iter().map(|r| r.into_json()).collect();
+    let rows: Vec<crate::db::tracks::TrackRow> = jsons
+        .iter()
+        .cloned()
+        .map(serde_json::from_value)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| SmartError::Query(anyhow::Error::from(e)))
+        .map_err(|e| SmartError::Query(anyhow::Error::from(e)))?;
+
+    Ok(match rule.limit.as_ref() {
+        Some(limit) if limit.unit != LimitUnit::Songs => truncate_by_cap(rows, &jsons, limit),
+        _ => rows,
+    })
+}
+
+/// Truncate an already-ordered set of rows so the running total of the
+/// limit unit's underlying measure — duration for Minutes/Hours, size
+/// for Mb/Gb — stays within the cap. `Songs`-unit limits are applied as
+/// a SQL `LIMIT` by `compile()` and never reach this function.
+///
+/// A row is kept if adding it keeps the running total `<= cap`; the
+/// first row that would push the total past the cap — and every row
+/// after it, since `rows` preserves the compiler's `ORDER BY` — is
+/// dropped. This matches iTunes' "stop before exceeding" behavior. As a
+/// deliberate simplification, if the very first row alone exceeds the
+/// cap, the result is empty rather than always keeping at least one row.
+fn truncate_by_cap(
+    rows: Vec<crate::db::tracks::TrackRow>,
+    jsons: &[serde_json::Value],
+    limit: &Limit,
+) -> Vec<crate::db::tracks::TrackRow> {
+    let cap: i64 = match limit.unit {
+        LimitUnit::Minutes => i64::from(limit.value) * 60_000,
+        LimitUnit::Hours => i64::from(limit.value) * 3_600_000,
+        LimitUnit::Mb => i64::from(limit.value) * 1_000_000,
+        LimitUnit::Gb => i64::from(limit.value) * 1_000_000_000,
+        LimitUnit::Songs => return rows,
+    };
+    let field = match limit.unit {
+        LimitUnit::Minutes | LimitUnit::Hours => "duration_ms",
+        LimitUnit::Mb | LimitUnit::Gb => "size_bytes",
+        LimitUnit::Songs => unreachable!(),
+    };
+
+    let mut total: i64 = 0;
+    let mut out = Vec::with_capacity(rows.len());
+    for (row, json) in rows.into_iter().zip(jsons.iter()) {
+        let measure = json.get(field).and_then(|v| v.as_i64()).unwrap_or_else(|| {
+            log::warn!("smart playlist cap: missing {field} on row, treating as 0");
+            0
+        });
+        let next = total.saturating_add(measure);
+        if next > cap {
+            break;
+        }
+        total = next;
+        out.push(row);
+    }
+    out
 }
 
 /// Lightweight count for the editor's "✓ N tracks match" preview.
@@ -1012,6 +1073,205 @@ mod tests {
             },
         };
         assert_eq!(evaluate(&db.engine, &r).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn limit_minutes_truncates_by_running_duration() {
+        let db = tmp_db().await;
+        // Three tracks at 20 minutes (1_200_000 ms) each, ordered by title.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, \
+                 playlist_ids, date_added) VALUES \
+                 ('a', 1200000, 0, '/tmp/a.flac', '[]', datetime('now', '-2 days')), \
+                 ('b', 1200000, 0, '/tmp/b.flac', '[]', datetime('now', '-1 days')), \
+                 ('c', 1200000, 0, '/tmp/c.flac', '[]', datetime('now'))",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Cap at 45 minutes: a (20) + b (20) = 40 fits, + c (20) = 60 exceeds.
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: Some(Limit {
+                value: 45,
+                unit: LimitUnit::Minutes,
+                selected_by: Some(SelectionMode::SongName),
+            }),
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![],
+            },
+        };
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].title, "a");
+        assert_eq!(rows[1].title, "b");
+    }
+
+    #[tokio::test]
+    async fn limit_minutes_zero_cap_keeps_only_zero_duration_rows() {
+        let db = tmp_db().await;
+        // One zero-duration track and two with positive duration.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, \
+                 playlist_ids, date_added) VALUES \
+                 ('a', 0, 0, '/tmp/a.flac', '[]', datetime('now', '-3 days')), \
+                 ('b', 1200000, 0, '/tmp/b.flac', '[]', datetime('now', '-2 days')), \
+                 ('c', 0, 0, '/tmp/c.flac', '[]', datetime('now', '-1 days'))",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Cap at 0 minutes: zero-duration rows keep the running total at
+        // 0 (`0 > 0` is false), while any positive-duration row pushes
+        // the total past the cap and is dropped, along with everything
+        // after it in ORDER BY order.
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: Some(Limit {
+                value: 0,
+                unit: LimitUnit::Minutes,
+                selected_by: Some(SelectionMode::SongName),
+            }),
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![],
+            },
+        };
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "a");
+    }
+
+    #[tokio::test]
+    async fn limit_hours_truncates_by_running_duration() {
+        let db = tmp_db().await;
+        // Two tracks at 1 hour (3_600_000 ms) each.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, \
+                 playlist_ids) VALUES \
+                 ('a', 3600000, 0, '/tmp/a.flac', '[]'), \
+                 ('b', 3600000, 0, '/tmp/b.flac', '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Cap at 1 hour: only the first track fits.
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: Some(Limit {
+                value: 1,
+                unit: LimitUnit::Hours,
+                selected_by: Some(SelectionMode::SongName),
+            }),
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![],
+            },
+        };
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "a");
+    }
+
+    #[tokio::test]
+    async fn limit_mb_truncates_by_running_size() {
+        let db = tmp_db().await;
+        // Three tracks at 4 MB (4_000_000 bytes) each.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, \
+                 playlist_ids) VALUES \
+                 ('a', 1000, 4000000, '/tmp/a.flac', '[]'), \
+                 ('b', 1000, 4000000, '/tmp/b.flac', '[]'), \
+                 ('c', 1000, 4000000, '/tmp/c.flac', '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Cap at 10 MB: a (4) + b (4) = 8 fits, + c (4) = 12 exceeds.
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: Some(Limit {
+                value: 10,
+                unit: LimitUnit::Mb,
+                selected_by: Some(SelectionMode::SongName),
+            }),
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![],
+            },
+        };
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn limit_gb_truncates_by_running_size() {
+        let db = tmp_db().await;
+        // Two tracks at 1 GB (1_000_000_000 bytes) each.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, \
+                 playlist_ids) VALUES \
+                 ('a', 1000, 1000000000, '/tmp/a.flac', '[]'), \
+                 ('b', 1000, 1000000000, '/tmp/b.flac', '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Cap at 1 GB: only the first track fits.
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: Some(Limit {
+                value: 1,
+                unit: LimitUnit::Gb,
+                selected_by: Some(SelectionMode::SongName),
+            }),
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![],
+            },
+        };
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "a");
+    }
+
+    #[tokio::test]
+    async fn limit_below_first_row_yields_zero_rows() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, \
+                 playlist_ids) VALUES ('a', 3600000, 0, '/tmp/a.flac', '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let r = SmartRule {
+            match_all: true,
+            live_updating: true,
+            limit: Some(Limit {
+                value: 1,
+                unit: LimitUnit::Minutes,
+                selected_by: Some(SelectionMode::SongName),
+            }),
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![],
+            },
+        };
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert!(rows.is_empty());
     }
 
     #[test]

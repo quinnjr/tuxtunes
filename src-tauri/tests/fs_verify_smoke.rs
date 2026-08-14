@@ -67,6 +67,28 @@ async fn verify_walks_library_and_classifies_each_row() {
     assert_eq!(stats.verified, 1);
     assert_eq!(stats.missing, 1);
     assert_eq!(stats.mismatched, 1);
+
+    // The persisted classification must match the counters: healthy rows
+    // land on 'ok', missing and hash-mismatched rows on 'missing_source'.
+    for (title, expected) in [
+        ("h", "ok"),
+        ("missing", "missing_source"),
+        ("mismatch", "missing_source"),
+    ] {
+        let status: String = db
+            .engine
+            .raw_sql_first(
+                "SELECT import_status FROM tracks WHERE title = ?",
+                &[prax_query::filter::FilterValue::String(title.to_string())],
+            )
+            .await
+            .unwrap()
+            .into_json()
+            .get("import_status")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap();
+        assert_eq!(status, expected, "import_status for '{title}'");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

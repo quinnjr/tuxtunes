@@ -13,7 +13,7 @@
 #![cfg(unix)]
 
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Listener, Manager};
 
 use tuxtunes::commands;
 use tuxtunes::db::{self, smart::SmartRule};
@@ -498,6 +498,48 @@ async fn verify_walk_runs_against_an_empty_library() {
     let handle = app.handle().clone();
     let engine = std::sync::Arc::clone(&state.db.engine);
     let _ = tuxtunes::fs::verify::verify_all(&engine, &handle).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn verify_failure_emits_verify_failed_with_message() {
+    // verify_library itself can't be called directly under MockRuntime
+    // (see the comment on verify_walk_runs_against_an_empty_library
+    // above) — so we exercise the runtime-generic helper it spawns,
+    // `commands::library::run_verify_and_report`, which is what
+    // actually drives verify_all + the failure emit.
+    use std::sync::{Arc, Mutex};
+
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let handle = app.handle().clone();
+    let engine = Arc::clone(&state.db.engine);
+
+    // Cheaply induce verify_all's Err path: drop the tracks table so
+    // its very first query (SELECT COUNT(*) FROM tracks) fails.
+    engine
+        .raw_sql_execute("DROP TABLE tracks", &[])
+        .await
+        .unwrap();
+
+    let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let captured_clone = Arc::clone(&captured);
+    app.handle().listen(tuxtunes::fs::events::VERIFY_FAILED, move |event| {
+        let payload: serde_json::Value =
+            serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+        let message = payload
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        *captured_clone.lock().unwrap() = message;
+    });
+
+    tuxtunes::commands::library::run_verify_and_report(&engine, &handle).await;
+
+    let message = captured.lock().unwrap().clone();
+    assert!(
+        message.is_some_and(|m| !m.is_empty()),
+        "expected fs:verify-failed to be emitted with a non-empty message"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

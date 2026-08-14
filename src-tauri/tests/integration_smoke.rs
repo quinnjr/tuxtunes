@@ -171,6 +171,16 @@ async fn mpris_player_methods_route_through_emit_closure() {
     assert_eq!(snapshot.len(), 9);
     assert_eq!(snapshot[0].0, "mpris:play-pause");
     assert_eq!(snapshot[8].0, "mpris:set-volume");
+
+    // can_go_previous must advertise the same availability as
+    // can_go_next: the interface exposes a live previous() method
+    // and the tray menu offers Previous, so MPRIS clients should
+    // not be told Previous is disabled.
+    assert!(
+        _player.can_go_previous(),
+        "MPRIS Previous must be advertised as available now that previous() is wired"
+    );
+    assert_eq!(_player.can_go_previous(), _player.can_go_next());
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -2,7 +2,11 @@
   class="grid h-24 grid-cols-[240px_1fr_240px] items-center border-b border-[var(--color-border-strong)] bg-[var(--color-bg-transport)] px-4"
 >
   <div class="flex items-center gap-3 text-[var(--color-text-secondary)]">
-    <button class="text-2xl transition hover:text-[var(--color-accent)]" aria-label="Previous">
+    <button
+      class="text-2xl transition hover:text-[var(--color-accent)]"
+      (click)="previous()"
+      aria-label="Previous"
+    >
       <fa-icon [icon]="faPrev" />
     </button>
     <button

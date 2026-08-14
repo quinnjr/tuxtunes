@@ -59,6 +59,13 @@ export class PlaybackService implements OnDestroy {
   readonly volume = signal<number>(100);
 
   /**
+   * The track that played immediately before the current one, as
+   * reported by the engine on each `playback:track-changed` event.
+   * Backs `previous()` — restart-vs-go-back semantics.
+   */
+  readonly previousTrackId = signal<number | null>(null);
+
+  /**
    * Up-next queue. Plain TrackRow[] so the Now Playing panel can render
    * full metadata without re-fetching. Owned by the frontend; the
    * engine plays whatever play() is invoked with.
@@ -80,7 +87,10 @@ export class PlaybackService implements OnDestroy {
     this.unlisteners.push(
       await this.tauri.listen<{ track_id: number | null; prev_track_id: number | null }>(
         'playback:track-changed',
-        (payload) => this.currentTrackId.set(payload.track_id),
+        (payload) => {
+          this.currentTrackId.set(payload.track_id);
+          this.previousTrackId.set(payload.prev_track_id);
+        },
       ),
       await this.tauri.listen<{ state: PlaybackState }>('playback:state-changed', (payload) =>
         this.state.set(payload.state),
@@ -115,6 +125,7 @@ export class PlaybackService implements OnDestroy {
       await this.tauri.listen('mpris:pause', () => void this.pause()),
       await this.tauri.listen('mpris:stop', () => void this.stop()),
       await this.tauri.listen('mpris:next', () => void this.advanceFromQueue()),
+      await this.tauri.listen('mpris:previous', () => void this.previous()),
       await this.tauri.listen<number>('mpris:seek', (offsetUs) => {
         // MPRIS Seek is relative-microseconds; engine seeks absolute ms.
         void this.seek(this.positionMs() + Math.round(offsetUs / 1000));
@@ -202,5 +213,21 @@ export class PlaybackService implements OnDestroy {
 
   clearQueue(): void {
     this.queue.set([]);
+  }
+
+  /**
+   * Standard player semantics: past the 3-second grace window, "previous"
+   * restarts the current track rather than hopping back a track. Within
+   * the window, it goes back to whatever the engine last reported via
+   * `previousTrackId` (fed by `playback:track-changed`'s `prev_track_id`);
+   * with no such track, it falls back to restarting.
+   */
+  async previous(): Promise<void> {
+    const prevId = this.previousTrackId();
+    if (this.positionMs() <= 3000 && prevId !== null) {
+      await this.play(prevId);
+      return;
+    }
+    await this.seek(0);
   }
 }

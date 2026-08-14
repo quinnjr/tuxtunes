@@ -138,6 +138,7 @@ model Track {
     @@index([file_path])
     @@index([persistent_id])
     @@index([sync_source_id])
+    @@index([sync_source_id, persistent_id])
 }
 
 /// Playlists — regular, smart, or folder. Self-contained; no separate join or rule tables.
@@ -169,6 +170,7 @@ model Playlist {
     @@index([parent_id])
     @@index([kind])
     @@index([sync_source_id])
+    @@index([sync_source_id, persistent_id])
 }
 
 /// Syncable library source (e.g., a Windows iTunes .itl file).

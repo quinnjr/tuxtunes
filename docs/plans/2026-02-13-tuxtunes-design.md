@@ -2,7 +2,7 @@
 
 ## Overview
 
-TuxTunes is a desktop music library manager and player for Linux, designed as an iTunes replacement. It imports an existing iTunes library (XML + media files) from a Windows installation, preserving all metadata, playlists (including smart playlists with full rule parity), and folder hierarchy.
+TuxTunes is a desktop music library manager and player for Linux, designed as an iTunes replacement. It imports an existing iTunes library (XML + media files) from a Windows installation, preserving all metadata, playlists (including smart playlists, imported as point-in-time membership snapshots — see [Smart Playlist Rule Engine](#smart-playlist-rule-engine)), and folder hierarchy.
 
 ## Tech Stack
 
@@ -14,7 +14,7 @@ TuxTunes is a desktop music library manager and player for Linux, designed as an
 | Backend | Rust (Tauri commands) |
 | Database | SQLite via `rusqlite` |
 | Playback | `libmpv` via Rust FFI |
-| iTunes import | `plist` crate + custom smart playlist binary decoder |
+| iTunes import | `plist` crate + custom smart playlist binary decoder (decoder cannot yet expose smart-criteria data from the reverse-engineered .itl subtype — see [Smart Playlist Rule Engine](#smart-playlist-rule-engine)) |
 | Audio metadata | `lofty` crate |
 
 ## Architecture
@@ -225,7 +225,7 @@ PRIMARY KEY (playlist_id, track_id).
 5. Parse playlists:
    - Import folders first (resolve hierarchy by Persistent ID)
    - Import regular playlists (map iTunes Track IDs to local DB IDs)
-   - Import smart playlists: decode Smart Info + Smart Criteria binary blobs
+   - Import smart playlists: decode Smart Info + Smart Criteria binary blobs where the source format exposes them; for `.itl`-sourced libraries this currently degrades to a point-in-time track-ID snapshot (see [Smart Playlist Rule Engine](#smart-playlist-rule-engine))
 6. Progress updates via Tauri events (tracks imported, playlists done, files copied, errors)
 7. Optional verify pass: check file paths exist on disk, flag missing files
 
@@ -249,9 +249,13 @@ PRIMARY KEY (playlist_id, track_id).
 
 ## Smart Playlist Rule Engine
 
-### Binary Format Decoder
+The engine below (condition tree, SQL compiler, live updating) is native to TuxTunes and applies in full to smart playlists created in TuxTunes itself.
 
-Decodes iTunes Smart Info and Smart Criteria binary blobs:
+**Known limitation — `.itl` import:** smart playlists imported from an iTunes `.itl` library are *not* rebuilt with live rules. The upstream `itl_rs` crate cannot expose Smart Info / Smart Criteria data from the reverse-engineered `.itl` subtype, so imported smart playlists land as a point-in-time snapshot of their current track membership (no rule data is stored) and will not update when the rules change in iTunes. Decoding real rule data on import becomes possible if/when `itl_rs` exposes the raw criteria blobs.
+
+### Binary Format Decoder (aspirational — blocked on `itl_rs`)
+
+Would decode iTunes Smart Info and Smart Criteria binary blobs, once the underlying crate exposes them:
 - Smart Info: limit settings (count/size/time), sort order, live-update flag
 - Smart Criteria: starts with `SLst` magic bytes, big-endian. Contains field codes, operator codes (bitmapped), and values (string/int/date)
 

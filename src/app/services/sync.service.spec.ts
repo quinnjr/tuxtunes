@@ -126,6 +126,15 @@ describe('SyncService', () => {
     expect(invoke).toHaveBeenCalledWith('run_sync_now', { sourceId: 1 });
   });
 
+  it('runNow() sets lastError and does not throw when the invoke rejects', async () => {
+    const { svc } = build(async (cmd) => {
+      if (cmd === 'run_sync_now') throw new Error('source busy');
+      return;
+    });
+    await expect(svc.runNow(1)).resolves.toBeUndefined();
+    expect(svc.lastError()).toEqual({ sourceId: 1, error: 'source busy' });
+  });
+
   it('listens for sync events and updates signals', async () => {
     const harness = build();
     await harness.ready;

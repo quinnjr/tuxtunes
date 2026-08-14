@@ -9,6 +9,19 @@
 //! The Prax 0.7.3 CLI's `migrate dev` command hardcodes Postgres SQL regardless
 //! of datasource. This helper drives `prax_migrate::sql::SqliteGenerator` directly
 //! so we get SQLite-correct DDL. Remove when the upstream CLI gains SQLite support.
+//!
+//! ## Limitation: diffs from an empty baseline
+//!
+//! This generator always diffs the target schema against an empty baseline, so its
+//! output is a full-schema dump (`CREATE TABLE` for every model), not an incremental
+//! migration. That is safe only for a brand-new, empty `prax/migrations/` directory
+//! (e.g. generating `0001_initial`). If other migrations already exist, replaying this
+//! generator's output against a database that has already applied them is UNSAFE: it
+//! will re-create tables/indexes that already exist. In that situation the generated
+//! SQL must be hand-edited down to just the incremental DDL, as was done for
+//! `prax/migrations/0002_composite_sync_indexes/migration.sql` (see that file's header
+//! comment for details). Pass `--allow-existing` to acknowledge this and generate
+//! anyway when other migrations are already present.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,14 +31,51 @@ use prax_migrate::sql::SqliteGenerator;
 use prax_schema::validate_schema;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        eprintln!("usage: gen-migration <schema.prax> <output-dir>");
+    let raw_args: Vec<String> = std::env::args().collect();
+    let allow_existing = raw_args.iter().any(|a| a == "--allow-existing");
+    let args: Vec<&String> = raw_args
+        .iter()
+        .skip(1)
+        .filter(|a| a.as_str() != "--allow-existing")
+        .collect();
+    if args.len() != 2 {
+        eprintln!(
+            "usage: gen-migration <schema.prax> <output-dir> [--allow-existing]\n\n\
+             --allow-existing must be passed if prax/migrations/ already contains\n\
+             other migration directories; see the doc comment at the top of this\n\
+             file for why that combination is otherwise unsafe."
+        );
         return ExitCode::FAILURE;
     }
 
-    let schema_path = PathBuf::from(&args[1]);
-    let out_dir = PathBuf::from(&args[2]);
+    let schema_path = PathBuf::from(args[0]);
+    let out_dir = PathBuf::from(args[1]);
+
+    if let Some(migrations_dir) = out_dir.parent() {
+        if let Ok(entries) = std::fs::read_dir(migrations_dir) {
+            let existing_other_migrations = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir() && e.path() != out_dir)
+                .count();
+            if existing_other_migrations > 0 && !allow_existing {
+                eprintln!(
+                    "error: {} already contains {} other migration directory(ies).\n\n\
+                     gen-migration always diffs the target schema against an EMPTY baseline,\n\
+                     so its output is a full-schema dump, not an incremental migration. Its\n\
+                     output is UNSAFE to replay against a database that has already applied\n\
+                     earlier migrations \u{2014} it will attempt to re-create tables/indexes\n\
+                     that already exist. If you proceed, you MUST hand-edit the generated SQL\n\
+                     down to just the incremental DDL (see\n\
+                     prax/migrations/0002_composite_sync_indexes/migration.sql's header comment\n\
+                     for a worked example). Re-run with --allow-existing to acknowledge this\n\
+                     and generate anyway.",
+                    migrations_dir.display(),
+                    existing_other_migrations
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    }
 
     let input = match std::fs::read_to_string(&schema_path) {
         Ok(s) => s,

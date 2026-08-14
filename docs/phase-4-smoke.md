@@ -18,7 +18,7 @@ cd .worktrees/feature/phase-4-file-management
 npx tauri dev
 ```
 
-- App opens. Click the sidebar's **Preferences…** button.
+- App opens. Click **Settings ▸ Preferences…** in the menu bar.
 - Panel opens at the default state:
   - Library root: `~/Music/TuxTunes` (or wherever `$HOME/Music/TuxTunes` resolves).
   - Organize scheme: `{album_artist}/{album}/{disc:02}-{track:02} - {title}.{ext}`.
@@ -28,7 +28,7 @@ npx tauri dev
 
 ### 2. Copy-on-add (single file)
 
-- Click the sidebar's **Add Files…** button.
+- Click **File ▸ Add Files…** in the menu bar.
 - Pick a `.flac` or `.mp3` from outside `~/Music/TuxTunes/`.
 - Wait a second. Confirm:
   - The file now also exists at `~/Music/TuxTunes/<artist>/<album>/...`.
@@ -39,7 +39,7 @@ npx tauri dev
 
 ### 3. Sync with `auto_copy_files = true`
 
-- Open the iTunes import wizard (sidebar → **Import iTunes library…**).
+- Open the iTunes import wizard (**File ▸ Import iTunes library…** in the menu bar).
 - Pick `~/Music/iTunes/iTunes Library.itl`.
 - On the map step, set mappings to point at a real mount.
 - On the conflict step, verify `auto_copy_files` is implicit-true (the backend default). **Note:** the wizard currently doesn't expose the toggle explicitly; you can flip it via SQL before running sync: `sqlite3 ~/.local/share/tuxtunes/tuxtunes.db "UPDATE sync_sources SET auto_copy_files = 1 WHERE id = ?"`.

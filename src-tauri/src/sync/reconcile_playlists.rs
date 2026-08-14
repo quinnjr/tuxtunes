@@ -4,7 +4,7 @@
 //! parent linking).
 
 use crate::db::playlists::{self, PlaylistKind, PlaylistUpsert, PlaylistsError};
-use crate::db::sync_util::{self, pid_hex};
+use crate::db::sync_util;
 use crate::db::tracks::TracksError;
 use crate::sync::events::{SyncPhase, SyncProgress};
 use crate::sync::observer::SyncObserver;
@@ -39,6 +39,15 @@ pub async fn reconcile(
     let track_pid_to_local = sync_util::load_pid_to_local_id_map(engine, "tracks", source_id)
         .await
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+
+    // Pre-resolved pid → local-id map for playlists that already exist,
+    // batch-loaded once instead of a `by_persistent_id` SELECT per row.
+    // Reloaded after the loop (as `playlist_pid_to_local` below) so that
+    // newly-inserted playlists are visible for parent-link resolution.
+    let playlist_pid_to_local_initial =
+        sync_util::load_pid_to_local_id_map(engine, "playlists", source_id)
+            .await
+            .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
 
     let mut keep: Vec<u64> = Vec::with_capacity(lib.playlists().len());
     let mut pending_parent_links: Vec<(i64, u64)> = Vec::new();
@@ -85,10 +94,9 @@ pub async fn reconcile(
             smart_rule_json,
         };
 
-        let existed = playlists::by_persistent_id(engine, source_id, &pid_hex(pid))
-            .await?
-            .is_some();
-        let local_id = playlists::upsert(engine, &upsert).await?;
+        let known_local_id = playlist_pid_to_local_initial.get(&pid).copied();
+        let existed = known_local_id.is_some();
+        let local_id = playlists::upsert_with_known_id(engine, &upsert, known_local_id).await?;
         if existed {
             stats.updated += 1;
         } else {

@@ -142,11 +142,37 @@ describe('PlaybackService', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('previous() restarts the current track past the 3s grace window', async () => {
+    const { svc, invoke } = build();
+    svc.previousTrackId.set(41);
+    svc.positionMs.set(3001);
+    await svc.previous();
+    expect(invoke).toHaveBeenCalledWith('seek', { positionMs: 0 });
+    expect(invoke).not.toHaveBeenCalledWith('play_track', { trackId: 41 });
+  });
+
+  it('previous() goes to the previous track within the grace window', async () => {
+    const { svc, invoke } = build();
+    svc.previousTrackId.set(41);
+    svc.positionMs.set(1500);
+    await svc.previous();
+    expect(invoke).toHaveBeenCalledWith('play_track', { trackId: 41 });
+  });
+
+  it('previous() restarts when there is no previous track, even within the grace window', async () => {
+    const { svc, invoke } = build();
+    svc.previousTrackId.set(null);
+    svc.positionMs.set(1500);
+    await svc.previous();
+    expect(invoke).toHaveBeenCalledWith('seek', { positionMs: 0 });
+  });
+
   it('listens for engine events and updates state signals', async () => {
     const harness = build();
     await harness.ready;
-    harness.emit('playback:track-changed', { track_id: 99, prev_track_id: null });
+    harness.emit('playback:track-changed', { track_id: 99, prev_track_id: 12 });
     expect(harness.svc.currentTrackId()).toBe(99);
+    expect(harness.svc.previousTrackId()).toBe(12);
 
     harness.emit('playback:state-changed', { state: 'playing' });
     expect(harness.svc.state()).toBe('playing');
@@ -217,6 +243,14 @@ describe('PlaybackService', () => {
     harness.emit('mpris:next', null);
     for (let i = 0; i < 3; i += 1) await Promise.resolve();
     expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 101 });
+
+    // mpris:previous routes through the same restart-vs-go-back logic.
+    harness.svc.previousTrackId.set(41);
+    harness.svc.positionMs.set(500);
+    harness.invoke.mockClear();
+    harness.emit('mpris:previous', null);
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 41 });
   });
 
   it('mpris:seek translates microseconds offset to absolute ms seek', async () => {
