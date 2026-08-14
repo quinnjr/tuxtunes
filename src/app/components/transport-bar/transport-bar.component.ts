@@ -5,8 +5,6 @@ import {
   faForwardStep,
   faPause,
   faPlay,
-  faRepeat,
-  faShuffle,
   faStop,
   faVolumeUp,
 } from '@fortawesome/free-solid-svg-icons';
@@ -31,8 +29,6 @@ export class TransportBarComponent {
   protected readonly faStop = faStop;
   protected readonly faPrev = faBackwardStep;
   protected readonly faNext = faForwardStep;
-  protected readonly faShuffle = faShuffle;
-  protected readonly faRepeat = faRepeat;
   protected readonly faVolumeUp = faVolumeUp;
 
   /** O(1) lookup via LibraryService.tracksById — constant-time at any library size. */
@@ -87,6 +83,10 @@ export class TransportBarComponent {
 
   protected async stop(): Promise<void> {
     await this.playback.stop();
+  }
+
+  protected async previous(): Promise<void> {
+    await this.playback.previous();
   }
 
   protected async onVolumeInput(event: Event): Promise<void> {

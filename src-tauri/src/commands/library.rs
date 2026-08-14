@@ -126,6 +126,29 @@ pub async fn pick_and_add_track(
     Ok(Some(row))
 }
 
+/// Runs the verify walk and reports failures on the `fs:verify-failed`
+/// channel. Runtime-generic (rather than pinned to `tauri::Wry`) so it
+/// can be exercised directly under `tauri::test::mock_app()` — the
+/// `verify_library` command itself can't be, since the `#[tauri::command]`
+/// macro binds its `AppHandle` parameter to the real Wry runtime.
+pub async fn run_verify_and_report<R: tauri::Runtime>(
+    engine: &std::sync::Arc<prax_sqlite::raw::SqliteRawEngine>,
+    app: &tauri::AppHandle<R>,
+) {
+    if let Err(e) = crate::fs::verify::verify_all(engine, app).await {
+        log::warn!("verify_library failed: {e}");
+        if let Err(emit_err) = tauri::Emitter::emit(
+            app,
+            crate::fs::events::VERIFY_FAILED,
+            crate::fs::events::VerifyFailed {
+                message: e.to_string(),
+            },
+        ) {
+            log::warn!("failed to notify frontend of verify failure: {emit_err}");
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn verify_library(
     state: tauri::State<'_, AppState>,
@@ -133,7 +156,7 @@ pub async fn verify_library(
 ) -> Result<(), String> {
     let engine = std::sync::Arc::clone(&state.db.engine);
     tokio::spawn(async move {
-        let _ = crate::fs::verify::verify_all(&engine, &app).await;
+        run_verify_and_report(&engine, &app).await;
     });
     Ok(())
 }

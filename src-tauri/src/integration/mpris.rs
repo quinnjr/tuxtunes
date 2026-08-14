@@ -261,13 +261,13 @@ impl Player {
     }
 
     #[zbus(property)]
-    fn can_go_next(&self) -> bool {
+    pub fn can_go_next(&self) -> bool {
         true
     }
 
     #[zbus(property)]
-    fn can_go_previous(&self) -> bool {
-        false
+    pub fn can_go_previous(&self) -> bool {
+        true
     }
 
     #[zbus(property)]

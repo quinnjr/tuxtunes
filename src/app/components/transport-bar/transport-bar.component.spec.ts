@@ -9,6 +9,7 @@ import { TransportBarComponent } from './transport-bar.component';
 interface TransportInternals {
   togglePlay(): Promise<void>;
   stop(): Promise<void>;
+  previous(): Promise<void>;
   next(): Promise<void>;
   onVolumeInput(event: Event): Promise<void>;
   onSeek(event: Event): Promise<void>;
@@ -107,16 +108,19 @@ describe('TransportBarComponent', () => {
     expect(cmp.isLossless()).toBe(false);
   });
 
-  it('togglePlay() / stop() / next() forward to PlaybackService', async () => {
+  it('togglePlay() / stop() / previous() / next() forward to PlaybackService', async () => {
     const { cmp, playback } = setup();
     const t = vi.spyOn(playback, 'togglePlay').mockResolvedValue();
     const s = vi.spyOn(playback, 'stop').mockResolvedValue();
+    const p = vi.spyOn(playback, 'previous').mockResolvedValue();
     const a = vi.spyOn(playback, 'advanceFromQueue').mockResolvedValue(null);
     await cmp.togglePlay();
     await cmp.stop();
+    await cmp.previous();
     await cmp.next();
     expect(t).toHaveBeenCalled();
     expect(s).toHaveBeenCalled();
+    expect(p).toHaveBeenCalled();
     expect(a).toHaveBeenCalled();
   });
 

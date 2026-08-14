@@ -66,6 +66,19 @@ pub async fn upsert(
 ) -> Result<i64, PlaylistsError> {
     let pid_hex = sync_util::pid_hex(p.persistent_id);
     let existing = by_persistent_id(engine, p.sync_source_id, &pid_hex).await?;
+    upsert_with_known_id(engine, p, existing).await
+}
+
+/// Same as `upsert`, but skips the `by_persistent_id` SELECT when the
+/// caller has already resolved the local id (e.g. via a batch-loaded
+/// pid→local-id map). Pass `None` when no matching row is known to
+/// exist so the row is inserted.
+pub async fn upsert_with_known_id(
+    engine: &SqliteRawEngine,
+    p: &PlaylistUpsert<'_>,
+    existing: Option<i64>,
+) -> Result<i64, PlaylistsError> {
+    let pid_hex = sync_util::pid_hex(p.persistent_id);
 
     let entries_json = serde_json::to_string(p.track_entries)
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
@@ -327,6 +340,41 @@ mod tests {
         };
         let id2 = upsert(&db.engine, &u2).await.unwrap();
         assert_eq!(id1, id2, "upsert should reuse the row");
+    }
+
+    #[tokio::test]
+    async fn upsert_with_known_id_inserts_when_none_and_updates_when_some() {
+        let db = tmp().await;
+        let u = PlaylistUpsert {
+            persistent_id: 0xABCD_ABCD_ABCD_ABCD,
+            sync_source_id: 1,
+            name: "Known",
+            kind: PlaylistKind::Regular,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &[1, 2],
+            smart_rule_json: None,
+        };
+        // Pre-resolved id of None → behaves like an insert.
+        let id1 = upsert_with_known_id(&db.engine, &u, None).await.unwrap();
+
+        // Pre-resolved id of Some(id1) → behaves like an update, and
+        // must not touch the row's id.
+        let u2 = PlaylistUpsert {
+            name: "Known Updated",
+            track_entries: &[1, 2, 3],
+            ..u
+        };
+        let id2 = upsert_with_known_id(&db.engine, &u2, Some(id1))
+            .await
+            .unwrap();
+        assert_eq!(id1, id2, "known-id path should update the same row");
+
+        // Confirm the update actually landed and no duplicate row was
+        // created via the pre-resolved-id path.
+        let rows = list_all(&db.engine).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "Known Updated");
     }
 
     #[tokio::test]

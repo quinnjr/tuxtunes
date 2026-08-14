@@ -1,6 +1,7 @@
 import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriService } from './tauri.service';
+import { toErrorMessage } from '../utils/errors';
 import {
   ConflictRules,
   PathMapping,
@@ -134,6 +135,13 @@ export class SyncService implements OnDestroy {
     this.lastComplete.set(null);
     this.lastError.set(null);
     this.logLines.set([]);
-    await this.tauri.invoke<void>('run_sync_now', { sourceId });
+    try {
+      await this.tauri.invoke<void>('run_sync_now', { sourceId });
+    } catch (error) {
+      this.lastError.set({
+        sourceId,
+        error: toErrorMessage(error),
+      });
+    }
   }
 }
