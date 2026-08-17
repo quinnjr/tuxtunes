@@ -1,6 +1,6 @@
 <div class="flex h-full flex-col">
   <header
-    class="relative flex h-7 shrink-0 items-center border-b border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] px-4 text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]"
+    class="hairline-b sticky top-0 z-10 flex h-7 shrink-0 items-center bg-bg-surface px-4 text-caption uppercase tracking-wide text-text-secondary"
   >
     @for (col of visibleColumns(); track col.id) {
       <button
@@ -11,8 +11,8 @@
           ' ' +
           (col.numeric ? 'text-right' : 'text-left') +
           ' ' +
-          (isSortColumn(col.id) ? 'text-[var(--color-text-primary)]' : '') +
-          ' truncate transition hover:text-[var(--color-accent)]'
+          (isSortColumn(col.id) ? 'text-text-primary' : '') +
+          ' truncate transition hover:text-accent'
         "
       >
         {{ col.label }}
@@ -23,7 +23,7 @@
       type="button"
       (click)="togglePicker($event)"
       aria-label="Choose columns"
-      class="ml-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+      class="mac-btn ml-2 h-6 w-6 text-sm"
     >
       ⚙
     </button>
@@ -37,15 +37,13 @@
         <div
           (click)="$event.stopPropagation()"
           (keydown)="$event.stopPropagation()"
-          class="absolute right-4 top-7 z-40 min-w-[180px] rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] p-2 shadow-xl"
+          class="absolute right-4 top-7 z-40 min-w-[180px] rounded-lg border border-border-strong bg-bg-surface p-2 shadow-2xl"
           role="dialog"
         >
-          <div class="mb-1 text-[10px] uppercase tracking-wider text-[var(--color-text-muted)]">
-            Columns
-          </div>
+          <div class="mb-1 text-caption2 uppercase tracking-wide text-text-muted">Columns</div>
           @for (col of allColumns; track col.id) {
             <label
-              class="flex cursor-pointer items-center gap-2 px-1 py-0.5 text-xs normal-case tracking-normal text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)]"
+              class="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 text-body normal-case tracking-normal text-text-primary hover:bg-bg-elevated"
             >
               <input
                 type="checkbox"
@@ -59,7 +57,7 @@
       </div>
     }
   </header>
-  <cdk-virtual-scroll-viewport itemSize="36" class="flex-1">
+  <cdk-virtual-scroll-viewport itemSize="30" class="flex-1">
     <div
       *cdkVirtualFor="let track of library.tracks(); let i = index; trackBy: trackById"
       (click)="onRowClick(i, track, $event)"
@@ -67,12 +65,10 @@
       (dblclick)="play(track)"
       (contextmenu)="onRowContextMenu(track, $event)"
       [class]="
-        'flex h-9 cursor-pointer items-center border-b border-[var(--color-border)] px-4 text-sm ' +
+        'flex h-[30px] cursor-pointer items-center px-4 text-body ' +
         (isSelected(track)
-          ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text-primary)]'
-          : isCurrent(track)
-            ? 'bg-[var(--color-bg-elevated)]'
-            : 'hover:bg-[var(--color-bg-elevated)]')
+          ? 'mac-row-selected'
+          : 'hover:bg-bg-elevated ' + (isCurrent(track) ? 'text-accent' : ''))
       "
       role="row"
       tabindex="0"
@@ -82,14 +78,19 @@
           [class]="
             (col.widthClass ?? 'flex-1') +
             ' ' +
-            (col.numeric ? 'text-right' : '') +
-            ' truncate ' +
+            (col.numeric ? 'text-right tnum' : '') +
+            ' truncate flex items-center gap-1.5 ' +
             (col.id === 'title'
-              ? 'text-[var(--color-text-primary)]'
-              : 'text-[var(--color-text-secondary)]')
+              ? isCurrent(track)
+                ? 'text-accent'
+                : 'text-text-primary'
+              : 'text-text-secondary')
           "
         >
-          {{ col.format(track) }}
+          @if (col.id === 'title' && isCurrent(track)) {
+            <span aria-hidden="true" class="text-caption2 leading-none text-accent">♫</span>
+          }
+          <span class="truncate">{{ col.format(track) }}</span>
         </span>
       }
     </div>

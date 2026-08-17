@@ -1,40 +1,30 @@
 @if (open()) {
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-    <div
-      class="flex max-h-[90vh] w-[640px] flex-col gap-4 overflow-auto rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] p-6 shadow-xl"
-    >
-      <header class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-[var(--color-text-primary)]">
-          Import iTunes library
-        </h2>
-        <button
-          type="button"
-          class="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
-          (click)="hide()"
-        >
-          Close
-        </button>
+  <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
+    <div class="mac-sheet flex max-h-[90vh] w-[640px] flex-col gap-4 overflow-auto p-6">
+      <header class="hairline-b flex items-center justify-between pb-3">
+        <h2 class="text-headline font-semibold text-text-primary">Import iTunes library</h2>
+        <button type="button" class="mac-btn h-7 w-7 text-body" (click)="hide()">Close</button>
       </header>
 
       @switch (step()) {
         @case ('pick') {
           <div class="flex flex-col gap-3">
-            <label class="flex flex-col gap-1 text-sm">
-              <span class="text-[var(--color-text-secondary)]">Source name</span>
+            <label class="flex flex-col gap-1 text-body">
+              <span class="text-text-secondary">Source name</span>
               <input
-                class="rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 text-[var(--color-text-primary)]"
+                class="rounded-md border border-border bg-bg-primary px-2 py-1 text-body text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                 [ngModel]="name()"
                 (ngModelChange)="name.set($event)"
               />
             </label>
             <div class="flex items-center gap-2">
-              <span class="flex-1 truncate font-mono text-xs text-[var(--color-text-muted)]">
+              <span class="tnum flex-1 truncate text-footnote text-text-muted">
                 {{ filePath() || 'no file picked' }}
               </span>
               <button
                 type="button"
                 (click)="pickFile()"
-                class="rounded bg-[var(--color-bg-elevated)] px-3 py-1 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"
+                class="rounded-md bg-bg-elevated px-3 py-1 text-body text-text-primary hover:bg-bg-tertiary"
               >
                 Pick .itl…
               </button>
@@ -45,9 +35,10 @@
                 (click)="submitFile()"
                 [disabled]="!filePath()"
                 [class]="
-                  filePath()
-                    ? 'rounded bg-[var(--color-accent)] px-4 py-1 text-sm text-white'
-                    : 'rounded bg-[var(--color-bg-elevated)] px-4 py-1 text-sm text-[var(--color-text-muted)]'
+                  'rounded-md px-4 py-1 text-body ' +
+                  (filePath()
+                    ? 'bg-accent font-medium text-white hover:bg-accent-hover'
+                    : 'bg-bg-elevated text-text-muted')
                 "
               >
                 Next
@@ -58,21 +49,21 @@
 
         @case ('map') {
           <div class="flex flex-col gap-3">
-            <p class="text-sm text-[var(--color-text-secondary)]">
+            <p class="text-body text-text-secondary">
               Map Windows drive paths from the iTunes library to your Linux mount points.
               Longest-prefix match wins.
             </p>
             @for (row of pathRows(); track $index) {
-              <div class="flex items-center gap-2 font-mono text-xs">
+              <div class="flex items-center gap-2 text-footnote">
                 <input
-                  class="w-[180px] rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 text-[var(--color-text-primary)]"
+                  class="tnum w-[180px] rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   [ngModel]="row.from"
                   (ngModelChange)="updatePathRow($index, 'from', $event)"
                   placeholder="D:/"
                 />
-                <span class="text-[var(--color-text-muted)]">→</span>
+                <span class="text-text-muted">→</span>
                 <input
-                  class="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 text-[var(--color-text-primary)]"
+                  class="tnum flex-1 rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   [ngModel]="row.to"
                   (ngModelChange)="updatePathRow($index, 'to', $event)"
                   placeholder="/mnt/d/"
@@ -80,7 +71,7 @@
                 <button
                   type="button"
                   (click)="removePathRow($index)"
-                  class="text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
+                  class="mac-btn h-6 w-6 text-text-muted hover:text-accent"
                 >
                   ×
                 </button>
@@ -89,11 +80,11 @@
             <button
               type="button"
               (click)="addPathRow()"
-              class="self-start text-sm text-[var(--color-accent)] hover:text-[var(--color-accent-hover)]"
+              class="self-start text-body text-accent hover:text-accent-hover"
             >
               + add mapping
             </button>
-            <label class="flex items-center gap-2 text-sm text-[var(--color-text-primary)]">
+            <label class="flex items-center gap-2 text-body text-text-primary">
               <input type="checkbox" [checked]="autoCopy()" (change)="toggleAutoCopy()" />
               Copy media files into managed library during sync
             </label>
@@ -101,7 +92,7 @@
               <button
                 type="button"
                 (click)="submitMap()"
-                class="rounded bg-[var(--color-accent)] px-4 py-1 text-sm text-white"
+                class="rounded-md bg-accent px-4 py-1 text-body font-medium text-white hover:bg-accent-hover"
               >
                 Next
               </button>
@@ -111,14 +102,14 @@
 
         @case ('conflict') {
           <div class="flex flex-col gap-3">
-            <p class="text-sm text-[var(--color-text-secondary)]">
+            <p class="text-body text-text-secondary">
               How should re-runs resolve conflicts on user-state fields?
             </p>
             @for (key of conflictKeys; track key) {
-              <label class="flex items-center justify-between text-sm">
-                <span class="text-[var(--color-text-primary)]">{{ key }}</span>
+              <label class="flex items-center justify-between text-body">
+                <span class="text-text-primary">{{ key }}</span>
                 <select
-                  class="rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 text-[var(--color-text-primary)]"
+                  class="rounded-md border border-border bg-bg-primary px-2 py-1 text-body text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                   [value]="rules()[key]"
                   (change)="onSelectChange(key, $event)"
                 >
@@ -132,7 +123,7 @@
               <button
                 type="button"
                 (click)="submitConflict()"
-                class="rounded bg-[var(--color-accent)] px-4 py-1 text-sm text-white"
+                class="rounded-md bg-accent px-4 py-1 text-body font-medium text-white hover:bg-accent-hover"
               >
                 Sync now
               </button>
@@ -143,30 +134,28 @@
         @case ('progress') {
           <div class="flex flex-col gap-3">
             @if (sync.progress(); as p) {
-              <div class="text-sm text-[var(--color-text-primary)]">
+              <div class="tnum text-body text-text-primary">
                 {{ p.phase }}: {{ p.current }} / {{ p.total }} — {{ p.message }}
               </div>
               @if (p.total > 0) {
-                <div class="h-2 overflow-hidden rounded bg-[var(--color-bg-tertiary)]">
+                <div class="h-1.5 overflow-hidden rounded-full bg-bg-tertiary">
                   <div
-                    class="h-full bg-[var(--color-accent)] transition-all"
+                    class="h-full rounded-full bg-accent transition-all"
                     [style.width.%]="(p.current / p.total) * 100"
                   ></div>
                 </div>
               }
             } @else {
-              <div class="text-sm text-[var(--color-text-muted)]">working…</div>
+              <div class="text-body text-text-muted">working…</div>
             }
 
             @if (sync.lastComplete(); as c) {
-              <div
-                class="mt-4 rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 text-sm"
-              >
-                <div class="font-semibold text-[var(--color-text-primary)]">Done.</div>
-                <div class="text-[var(--color-text-secondary)]">
+              <div class="mt-4 rounded-md border border-border bg-bg-primary p-3 text-body">
+                <div class="font-semibold text-text-primary">Done.</div>
+                <div class="tnum text-text-secondary">
                   tracks — +{{ c.insertedTracks }} / ~{{ c.updatedTracks }} / -{{ c.deletedTracks }}
                 </div>
-                <div class="text-[var(--color-text-secondary)]">
+                <div class="tnum text-text-secondary">
                   playlists — +{{ c.insertedPlaylists }} / ~{{ c.updatedPlaylists }} / -{{
                     c.deletedPlaylists
                   }}
@@ -176,7 +165,7 @@
 
             @if (sync.lastError(); as e) {
               <div
-                class="mt-4 rounded border border-red-500 bg-red-950/40 p-3 text-sm text-red-300"
+                class="mt-4 rounded-md border border-accent/40 bg-accent/10 p-3 text-body text-accent"
               >
                 Sync failed: {{ e.error }}
               </div>
@@ -189,7 +178,7 @@
                 aria-label="Import log"
                 aria-live="polite"
                 (scroll)="onLogScroll()"
-                class="max-h-64 overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 font-mono text-xs leading-relaxed text-[var(--color-text-secondary)]"
+                class="tnum max-h-64 overflow-auto rounded-md border border-border bg-bg-primary p-3 text-footnote leading-relaxed text-text-secondary"
               >
                 @for (line of sync.logLines(); track $index) {
                   <div class="whitespace-pre-wrap">{{ line }}</div>
@@ -201,7 +190,7 @@
               <button
                 type="button"
                 (click)="hide()"
-                class="rounded bg-[var(--color-bg-elevated)] px-4 py-1 text-sm text-[var(--color-text-primary)]"
+                class="rounded-md bg-bg-elevated px-4 py-1 text-body text-text-primary hover:bg-bg-tertiary"
               >
                 Close
               </button>

@@ -1,5 +1,5 @@
 <nav
-  class="relative z-40 flex h-8 shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-[var(--color-bg-surface)] px-2 text-sm text-[var(--color-text-secondary)]"
+  class="mac-toolbar relative z-40 flex h-8 shrink-0 items-center gap-1 px-2 text-body text-text-secondary"
 >
   <!-- Outside-click / Escape catcher; only mounted while a menu is open. -->
   @if (openMenu() !== null) {
@@ -16,23 +16,21 @@
       type="button"
       (click)="toggle('file')"
       [class]="
-        (openMenu() === 'file'
-          ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] '
-          : '') +
-        'rounded px-3 py-1 transition hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
+        (openMenu() === 'file' ? 'bg-bg-elevated text-text-primary ' : '') +
+        'mac-btn h-6 px-3 text-body'
       "
     >
       File
     </button>
     @if (openMenu() === 'file') {
       <div
-        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] p-1 shadow-xl"
+        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
         role="menu"
       >
         <button
           type="button"
           (click)="addFiles()"
-          class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-elevated)]"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
           <fa-icon [icon]="faPlus" />
           Add Files…
@@ -40,7 +38,7 @@
         <button
           type="button"
           (click)="importItunes()"
-          class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-elevated)]"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
           <fa-icon [icon]="faFileImport" />
           Import iTunes library…
@@ -54,23 +52,21 @@
       type="button"
       (click)="toggle('settings')"
       [class]="
-        (openMenu() === 'settings'
-          ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] '
-          : '') +
-        'rounded px-3 py-1 transition hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
+        (openMenu() === 'settings' ? 'bg-bg-elevated text-text-primary ' : '') +
+        'mac-btn h-6 px-3 text-body'
       "
     >
       Settings
     </button>
     @if (openMenu() === 'settings') {
       <div
-        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] p-1 shadow-xl"
+        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
         role="menu"
       >
         <button
           type="button"
           (click)="openPreferences()"
-          class="flex w-full items-center gap-2 rounded px-3 py-1.5 text-left text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-elevated)]"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
           <fa-icon [icon]="faGear" />
           Preferences…

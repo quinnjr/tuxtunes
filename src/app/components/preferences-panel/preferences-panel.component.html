@@ -1,38 +1,23 @@
 @if (open()) {
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-    <div
-      class="flex max-h-[90vh] w-[560px] flex-col gap-4 overflow-auto rounded border border-[var(--color-border-strong)] bg-[var(--color-bg-surface)] p-6 shadow-xl"
-    >
-      <header class="flex items-center justify-between">
-        <h2 class="text-lg font-semibold text-[var(--color-text-primary)]">Preferences</h2>
-        <button
-          type="button"
-          class="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-accent)]"
-          (click)="hide()"
-        >
-          Close
+  <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
+    <div class="mac-sheet flex max-h-[90vh] w-[560px] flex-col gap-4 overflow-auto p-6">
+      <header class="hairline-b flex items-center justify-between pb-3">
+        <h2 class="text-headline font-semibold text-text-primary">Preferences</h2>
+        <button type="button" class="mac-btn h-7 w-7" (click)="hide()">
+          <span class="text-body">✕</span>
         </button>
       </header>
 
-      <div class="flex flex-col gap-1 text-sm">
-        <span class="text-[var(--color-text-secondary)]">Color mode</span>
-        <div
-          class="inline-flex w-fit rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-0.5"
-          role="radiogroup"
-          aria-label="Color mode"
-        >
+      <div class="flex flex-col gap-1.5 text-body">
+        <span class="text-text-secondary">Color mode</span>
+        <div class="mac-segmented w-fit" role="radiogroup" aria-label="Color mode">
           @for (m of colorModes; track m) {
             <button
               type="button"
               role="radio"
               [attr.aria-checked]="theme.mode() === m"
               (click)="theme.set(m)"
-              [class]="
-                'rounded px-3 py-1 text-sm capitalize transition ' +
-                (theme.mode() === m
-                  ? 'bg-[var(--color-accent)] text-white'
-                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]')
-              "
+              [class]="'mac-segment capitalize ' + (theme.mode() === m ? 'selected' : '')"
             >
               {{ m }}
             </button>
@@ -40,53 +25,50 @@
         </div>
       </div>
 
-      <div class="flex flex-col gap-1 text-sm">
-        <span class="text-[var(--color-text-secondary)]">Library root</span>
+      <div class="flex flex-col gap-1.5 text-body">
+        <span class="text-text-secondary">Library root</span>
         <div class="flex items-center gap-2">
           <span
-            class="flex-1 truncate rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 font-mono text-xs text-[var(--color-text-primary)]"
+            class="flex-1 truncate rounded-md border border-border bg-bg-primary px-2 py-1.5 tnum text-footnote text-text-primary"
           >
             {{ draftRoot() || '(not set)' }}
           </span>
-          <button
-            type="button"
-            (click)="pickRoot()"
-            class="rounded bg-[var(--color-bg-elevated)] px-3 py-1 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)]"
-          >
+          <button type="button" (click)="pickRoot()" class="mac-btn h-8 px-3 bg-bg-elevated">
             Pick…
           </button>
         </div>
       </div>
 
-      <label class="flex flex-col gap-1 text-sm">
-        <span class="text-[var(--color-text-secondary)]">Organize scheme</span>
+      <label class="flex flex-col gap-1.5 text-body">
+        <span class="text-text-secondary">Organize scheme</span>
         <input
-          class="rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1 font-mono text-xs text-[var(--color-text-primary)]"
+          class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-footnote tnum text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           [ngModel]="draftScheme()"
           (ngModelChange)="draftScheme.set($event)"
         />
-        <span class="text-[11px] text-[var(--color-text-muted)]">
-          Preview: <span class="font-mono">{{ preview() }}</span>
+        <span class="text-caption text-text-muted">
+          Preview: <span class="tnum">{{ preview() }}</span>
         </span>
       </label>
 
-      <label class="flex items-center gap-2 text-sm text-[var(--color-text-primary)]">
-        <input type="checkbox" [checked]="draftKeep()" (change)="toggleKeep()" />
+      <label class="flex items-center gap-2 text-body text-text-primary">
+        <input
+          type="checkbox"
+          [checked]="draftKeep()"
+          (change)="toggleKeep()"
+          class="accent-accent"
+        />
         Keep library organized (rename on metadata edit)
       </label>
 
-      <footer class="mt-2 flex justify-end gap-2">
-        <button
-          type="button"
-          (click)="hide()"
-          class="rounded bg-[var(--color-bg-elevated)] px-4 py-1 text-sm text-[var(--color-text-primary)]"
-        >
+      <footer class="hairline-t mt-2 flex justify-end gap-2 pt-3">
+        <button type="button" (click)="hide()" class="mac-btn h-8 px-4 bg-bg-elevated">
           Cancel
         </button>
         <button
           type="button"
           (click)="save()"
-          class="rounded bg-[var(--color-accent)] px-4 py-1 text-sm text-white"
+          class="rounded-md bg-accent px-4 py-1.5 text-body font-medium text-white hover:bg-accent-hover"
         >
           Save
         </button>

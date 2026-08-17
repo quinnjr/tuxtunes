@@ -29,6 +29,9 @@ importers:
       '@angular/router':
         specifier: ^22.0.4
         version: 22.0.4(@angular/common@22.0.4(@angular/core@22.0.4(@angular/compiler@22.0.4)(rxjs@7.8.2)(zone.js@0.16.2))(rxjs@7.8.2))(@angular/core@22.0.4(@angular/compiler@22.0.4)(rxjs@7.8.2)(zone.js@0.16.2))(@angular/platform-browser@22.0.4(@angular/common@22.0.4(@angular/core@22.0.4(@angular/compiler@22.0.4)(rxjs@7.8.2)(zone.js@0.16.2))(rxjs@7.8.2))(@angular/core@22.0.4(@angular/compiler@22.0.4)(rxjs@7.8.2)(zone.js@0.16.2)))(rxjs@7.8.2)
+      '@fontsource/inter':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@fortawesome/angular-fontawesome':
         specifier: ^4.0.0
         version: 4.0.0(@angular/core@22.0.4(@angular/compiler@22.0.4)(rxjs@7.8.2)(zone.js@0.16.2))
@@ -958,6 +961,9 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@fontsource/inter@5.3.0':
+    resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
 
   '@fortawesome/angular-fontawesome@4.0.0':
     resolution: {integrity: sha512-TCqHqT5ovFY1A4RgMpoBUgS+RX3OVs39+CzHFgzDhbCPAopOa26J748TZJcuZwJAvGAk9tbWeVEmWuLByINAeg==}
@@ -4968,6 +4974,8 @@ snapshots:
       levn: 0.4.1
 
   '@exodus/bytes@1.15.1': {}
+
+  '@fontsource/inter@5.3.0': {}
 
   '@fortawesome/angular-fontawesome@4.0.0(@angular/core@22.0.4(@angular/compiler@22.0.4)(rxjs@7.8.2)(zone.js@0.16.2))':
     dependencies:

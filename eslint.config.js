@@ -19,6 +19,7 @@ export default tseslint.config(
       'src/app/models/generated/**',
       'docs/plans/**',
       'docs/superpowers/**',
+      '.remember/**',
     ],
   },
   {
