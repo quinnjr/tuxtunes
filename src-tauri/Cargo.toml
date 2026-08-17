@@ -34,6 +34,7 @@ byteorder = "1"
 trash = "5.2.5"
 zbus = { version = "5", features = ["tokio"], default-features = false }
 notify-rust = "4"
+libc = "0.2.189"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

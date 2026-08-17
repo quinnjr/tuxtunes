@@ -66,12 +66,19 @@ pub async fn load_pid_to_local_id_map(
 }
 
 /// Delete rows in `table` under `sync_source_id` whose `persistent_id`
-/// is not in `keep`. Stages the keep set in a temp table to side-step
-/// SQLite's per-statement parameter limit — important at real iTunes
-/// scale (~50K tracks).
+/// is not in `keep`. Stages the keep set in a `_sync_keep` TEMP table
+/// to side-step SQLite's per-statement parameter limit — important at
+/// real iTunes scale (~50K tracks).
 ///
-/// The staging inserts are wrapped in a single transaction via
-/// `raw_sql_batch` so WAL is fsync'd once rather than once per batch.
+/// The whole sequence runs on ONE checked-out connection as ONE
+/// `BEGIN IMMEDIATE` transaction. Both halves of that matter: the temp
+/// table is per-connection (a second `pool.get()` may return a
+/// different connection that cannot see it), and the GUI sync worker
+/// only serializes runs within its own process — `tuxtunes-cli` hits
+/// the same database file, so the staging + final DELETE must be atomic
+/// across processes, not just across tasks. IMMEDIATE takes the write
+/// lock up front; a concurrent writer waits on busy_timeout instead of
+/// interleaving.
 pub async fn delete_by_keep_set(
     engine: &SqliteRawEngine,
     table: &'static str,
@@ -85,23 +92,18 @@ pub async fn delete_by_keep_set(
             .await;
     }
 
-    engine
-        .raw_sql_execute(
-            "CREATE TEMP TABLE IF NOT EXISTS _sync_keep \
-             (persistent_id TEXT PRIMARY KEY) WITHOUT ROWID",
-            &[],
-        )
-        .await?;
-    engine
-        .raw_sql_execute("DELETE FROM _sync_keep", &[])
-        .await?;
-
-    // Build one SQL string: BEGIN; N multi-row INSERTs; COMMIT. Inlining
-    // the hex values is safe because they come from `pid_hex`
-    // (always 16 chars of [0-9a-f]); there is no user-supplied input.
+    // Build one SQL string: BEGIN IMMEDIATE; staging; final DELETE;
+    // COMMIT. Inlining the hex values is safe because they come from
+    // `pid_hex` (always 16 chars of [0-9a-f]), and `sync_source_id` is
+    // an i64; there is no user-supplied input.
     const BATCH: usize = 500;
-    let mut batch_sql = String::with_capacity(keep.len() * 20 + 64);
-    batch_sql.push_str("BEGIN;\n");
+    let mut batch_sql = String::with_capacity(keep.len() * 20 + 256);
+    batch_sql.push_str("BEGIN IMMEDIATE;\n");
+    batch_sql.push_str(
+        "CREATE TEMP TABLE IF NOT EXISTS _sync_keep \
+         (persistent_id TEXT PRIMARY KEY) WITHOUT ROWID;\n",
+    );
+    batch_sql.push_str("DELETE FROM _sync_keep;\n");
     for chunk in keep.chunks(BATCH) {
         batch_sql.push_str("INSERT INTO _sync_keep (persistent_id) VALUES ");
         for (i, pid) in chunk.iter().enumerate() {
@@ -112,16 +114,25 @@ pub async fn delete_by_keep_set(
         }
         batch_sql.push_str(";\n");
     }
+    batch_sql.push_str(&format!(
+        "DELETE FROM {table} WHERE sync_source_id = {sync_source_id} \
+         AND persistent_id NOT IN (SELECT persistent_id FROM _sync_keep);\n"
+    ));
     batch_sql.push_str("COMMIT;");
-    engine.raw_sql_batch(&batch_sql).await?;
 
-    let sql = format!(
-        "DELETE FROM {table} WHERE sync_source_id = ? \
-         AND persistent_id NOT IN (SELECT persistent_id FROM _sync_keep)"
-    );
-    engine
-        .raw_sql_execute(&sql, &[FilterValue::Int(sync_source_id)])
-        .await
+    let conn = engine.pool().get().await?;
+    conn.execute_batch(&batch_sql).await?;
+    // sqlite3_changes() is per-connection and reflects the last DML run
+    // on it — the final DELETE above — even after COMMIT. Reading it on
+    // the same connection is what makes the count trustworthy.
+    let rows = conn.query("SELECT changes()").await?;
+    let deleted = rows
+        .first()
+        .and_then(|r| r.as_object())
+        .and_then(|o| o.values().next())
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    Ok(deleted)
 }
 
 #[cfg(test)]

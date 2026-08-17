@@ -367,6 +367,14 @@ pub fn run() {
                 });
             }
 
+            // Keep the tokio runtime alive for the app's lifetime. Tauri
+            // drops the setup closure (and everything it captured) as soon
+            // as it returns — see `app.setup.take()` in tauri's App::run —
+            // which would tear down this runtime and cancel every task
+            // spawned on it: the sync worker loop, the tracking consumer,
+            // and the preference-restore tasks above.
+            app.manage(runtime);
+
             Ok(())
         })
         .run(tauri::generate_context!())

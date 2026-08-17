@@ -101,6 +101,14 @@ impl PlaybackEngine {
         let thread = thread::Builder::new()
             .name("mpv-event-loop".into())
             .spawn(move || {
+                // libmpv refuses to initialize unless LC_NUMERIC is "C"
+                // (mpv_create/initialize fail with a "Non-C locale" error).
+                // GTK — initialized by Tauri before we get here — calls
+                // setlocale(LC_ALL, "") and applies the user's locale
+                // process-wide, so restore the one category mpv requires.
+                unsafe {
+                    libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
+                }
                 let mut mpv = match init_mpv() {
                     Ok(m) => {
                         let _ = init_tx.send(Ok(()));
