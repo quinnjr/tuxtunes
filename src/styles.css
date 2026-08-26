@@ -257,10 +257,8 @@ input[type='range'] {
     background-color: var(--color-accent);
     color: #ffffff;
   }
-
-  :focus-within > .mac-row-selected .text-text-secondary {
-    color: color-mix(in srgb, #ffffff 78%, transparent);
-  }
+  /* Cell text colors for the red state live in the unlayered block at
+     the bottom of this file — see the note there. */
 
   /* Album cards. The inset ring keeps light artwork from bleeding into
      a light background without drawing an outline around dark artwork;
@@ -385,4 +383,23 @@ input[type='range'] {
 
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Unlayered on purpose. The track-list cells carry their own color
+   utilities (text-text-primary / text-text-secondary / text-accent),
+   and Tailwind's utilities layer is declared after @layer components,
+   so a layered override never applies — white-on-red selection ended
+   up as dark-on-red. Unlayered rules beat every layer regardless of
+   specificity, which is exactly the "selection state wins" semantics
+   this needs. */
+:focus-within > .mac-row-selected .text-text-primary,
+:focus-within > .mac-row-selected .text-accent,
+.mac-row-selected:focus .text-text-primary,
+.mac-row-selected:focus .text-accent {
+  color: #ffffff;
+}
+
+:focus-within > .mac-row-selected .text-text-secondary,
+.mac-row-selected:focus .text-text-secondary {
+  color: color-mix(in srgb, #ffffff 78%, transparent);
 }
