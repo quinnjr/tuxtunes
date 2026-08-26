@@ -36,9 +36,11 @@ export class SyncService implements OnDestroy {
   readonly logLines = signal<string[]>([]);
 
   /**
-   * Coarse run state derived from the event signals. `running` while a
-   * progress event is the latest signal, `error` if a failure outranks
-   * the most recent completion, otherwise `idle`.
+   * Coarse run state derived from the event signals. `runNow()` resets
+   * all four signals before invoking, so a present `progress` with
+   * neither `lastComplete` nor `lastError` set unambiguously means the
+   * current run is still in flight (`running`); a present `lastError`
+   * means it ended in failure (`error`); otherwise `idle`.
    */
   readonly runState = computed<'idle' | 'running' | 'error'>(this.#computeRunState.bind(this));
 

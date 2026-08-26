@@ -54,10 +54,18 @@ export class AlbumGridViewComponent implements OnInit {
       this.artworkQueue.length > 0
     ) {
       const a = this.artworkQueue.shift()!;
+      const key = this.trackByAlbum(0, a);
       this.artworkInFlight += 1;
       void this.library
         .resolveAlbumArtwork(a.albumArtist, a.album)
-        .catch(() => null)
+        .catch(() => {
+          // A transient failure shouldn't permanently blackhole this
+          // album — drop the "attempted" mark so it retries on the
+          // next scroll-into-view. A settled `null` (a genuine miss)
+          // leaves the mark in place.
+          this.artworkAttempted.delete(key);
+          return null;
+        })
         .finally(() => {
           this.artworkInFlight -= 1;
           this.pumpArtworkQueue();

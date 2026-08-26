@@ -26,6 +26,7 @@ const TRACK: TrackRow = {
   title: 'T',
   artist: 'A',
   album: 'Al',
+  albumArtist: null,
   durationMs: 180_000,
   filePath: '/tmp/a.flac',
   sampleRate: 96_000,

@@ -64,6 +64,7 @@ const TRACK: TrackRow = {
   title: 'T',
   artist: 'A',
   album: 'Al',
+  albumArtist: null,
   durationMs: 180_000,
   filePath: '/tmp/a.flac',
   sampleRate: 44_100,
@@ -488,6 +489,57 @@ describe('PlaybackService', () => {
 
     await expect(svc.setVolume(50)).resolves.toBeUndefined();
     expect(svc.lastError()).toBe('engine down');
+  });
+
+  it('playback:warning reports a human message through UiService', async () => {
+    const harness = build();
+    await harness.ready;
+    harness.emit('playback:warning', {
+      kind: 'sample_rate_mismatch',
+      detail: 'requested 96000, got 48000',
+    });
+    expect(harness.svc.lastError()).toBe('Sample rate mismatch: requested 96000, got 48000');
+  });
+
+  it('playback:device-changed updates currentDevice', async () => {
+    const harness = build();
+    await harness.ready;
+    expect(harness.svc.currentDevice()).toBeNull();
+    harness.emit('playback:device-changed', {
+      device_id: 'hw:0,0',
+      sample_rate: 96_000,
+      bit_depth: 24,
+      exclusive: true,
+    });
+    expect(harness.svc.currentDevice()).toEqual({
+      deviceId: 'hw:0,0',
+      sampleRate: 96_000,
+      bitDepth: 24,
+      exclusive: true,
+    });
+  });
+
+  it('currentArtworkPath falls back to a resolved lookup for rows not in library.tracks, and does not re-invoke on a repeat track-changed', async () => {
+    const harness = build(async (cmd, args) => {
+      if (cmd === 'resolve_track_artwork') {
+        return (args as { trackId: number }).trackId === 7 ? '/cache/queue.jpg' : null;
+      }
+      return [];
+    });
+    await harness.ready;
+    // Not loaded into library.tracks — as with queue / album-grid playback.
+    expect(harness.library.tracks()).toEqual([]);
+
+    harness.emit('playback:track-changed', { track_id: 7, prev_track_id: null });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('resolve_track_artwork', { trackId: 7 });
+    expect(harness.svc.currentArtworkPath()).toBe('/cache/queue.jpg');
+
+    harness.invoke.mockClear();
+    harness.emit('playback:track-changed', { track_id: 7, prev_track_id: null });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).not.toHaveBeenCalledWith('resolve_track_artwork', expect.anything());
+    expect(harness.svc.currentArtworkPath()).toBe('/cache/queue.jpg');
   });
 
   it('reorderQueue() is a no-op for out-of-range indices', () => {

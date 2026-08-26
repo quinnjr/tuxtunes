@@ -22,23 +22,22 @@ pub struct TrackFields<'a> {
 }
 
 impl<'a> TrackFields<'a> {
-    /// Build from the columns `TrackRow` currently carries + a file
-    /// path to derive the extension and fallback stem from. All
-    /// extended metadata fields (album_artist, genre, track/disc
-    /// number + count, year) are `None` because `TrackRow` doesn't
-    /// surface them yet — the renderer falls back per spec.
+    /// Build from the columns `TrackRow` carries + a file path to
+    /// derive the extension and fallback stem from. `track_count` /
+    /// `disc_count` stay `None` — the schema doesn't store total
+    /// counts, only the current track/disc numbers.
     pub fn from_track_row(row: &'a crate::db::tracks::TrackRow, source: &'a Path) -> Self {
         Self {
             title: &row.title,
             artist: row.artist.as_deref(),
-            album_artist: None,
+            album_artist: row.album_artist.as_deref(),
             album: row.album.as_deref(),
-            genre: None,
-            track_number: None,
+            genre: row.genre.as_deref(),
+            track_number: row.track_number.and_then(|n| u16::try_from(n).ok()),
             track_count: None,
-            disc_number: None,
+            disc_number: row.disc_number.and_then(|n| u16::try_from(n).ok()),
             disc_count: None,
-            year: None,
+            year: row.year.and_then(|y| u16::try_from(y).ok()),
             ext: source.extension().and_then(|s| s.to_str()).unwrap_or(""),
             fallback_stem: source.file_stem().and_then(|s| s.to_str()).unwrap_or(""),
         }
@@ -410,6 +409,11 @@ mod tests {
             title: "T".into(),
             artist: Some("A".into()),
             album: Some("Al".into()),
+            album_artist: None,
+            genre: None,
+            year: None,
+            track_number: None,
+            disc_number: None,
             duration_ms: 0,
             file_path: "/tmp/source-name.flac".into(),
             file_hash: None,
@@ -428,6 +432,49 @@ mod tests {
         assert_eq!(tf.title, "T");
         assert_eq!(tf.artist, Some("A"));
         assert_eq!(tf.album, Some("Al"));
+    }
+
+    #[test]
+    fn from_track_row_populates_extended_metadata() {
+        let row = crate::db::tracks::TrackRow {
+            id: 1,
+            title: "Something".into(),
+            artist: Some("The Beatles".into()),
+            album: Some("Abbey Road".into()),
+            album_artist: Some("AA".into()),
+            genre: Some("Rock".into()),
+            year: Some(1969),
+            track_number: Some(3),
+            // disc_number: 2 (not 1) so the render actually surfaces
+            // the disc digits — `{disc:02}` intentionally renders empty
+            // for disc_number <= 1 (single-disc tidiness, see
+            // `render_token`), which would otherwise mask whether
+            // `from_track_row` populated the field at all.
+            disc_number: Some(2),
+            duration_ms: 0,
+            file_path: "/tmp/source-name.flac".into(),
+            file_hash: None,
+            sample_rate: None,
+            bit_depth: None,
+            kind: None,
+            play_count: 0,
+            skip_count: 0,
+            import_status: "ok".to_string(),
+            artwork_path: None,
+        };
+        let source = std::path::Path::new(&row.file_path);
+        let tf = TrackFields::from_track_row(&row, source);
+        assert_eq!(tf.album_artist, Some("AA"));
+        assert_eq!(tf.genre, Some("Rock"));
+        assert_eq!(tf.year, Some(1969));
+        assert_eq!(tf.track_number, Some(3));
+        assert_eq!(tf.disc_number, Some(2));
+        let p = render(
+            "{album_artist}/{album}/{disc:02}-{track:02} - {title}.{ext}",
+            &tf,
+        )
+        .unwrap();
+        assert_eq!(p.to_str().unwrap(), "AA/Abbey Road/02-03 - Something.flac");
     }
 
     #[test]

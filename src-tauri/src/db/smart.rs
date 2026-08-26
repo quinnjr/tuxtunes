@@ -28,8 +28,10 @@ pub enum SmartError {
 
 // ----- Rule shape ---------------------------------------------------------
 
-/// Top-level smart-playlist rule. `match_all=true` produces an AND root,
-/// `false` produces an OR root.
+/// Top-level smart-playlist rule. `match_all` is authoritative for the
+/// ROOT group's joiner (AND when true, OR when false) — it overrides
+/// `root.match_all` for that one group. Nested groups under `root` keep
+/// using their own `match_all` as always.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SmartRule {
     #[serde(default = "default_true")]
@@ -203,7 +205,9 @@ pub struct CompiledQuery {
 /// against the `tracks` table. Order is determined by `selected_by`.
 pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartError> {
     let mut params: Vec<FV> = Vec::new();
-    let where_sql = compile_group(&rule.root, &mut params, rule.match_all)?;
+    // `rule.match_all` is authoritative for the root group's joiner,
+    // overriding `root.match_all` for this one call only.
+    let where_sql = compile_group(&rule.root, &mut params, Some(rule.match_all))?;
 
     let order = rule
         .limit
@@ -230,20 +234,26 @@ pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartEr
     Ok(CompiledQuery { sql, params })
 }
 
+/// Compile one condition group. `match_all_override`, when `Some`, wins
+/// over `group.match_all` for this call only — used once, by `compile`,
+/// to make the top-level `SmartRule::match_all` authoritative for the
+/// root group. Nested groups always pass `None` and use their own
+/// `match_all`.
 fn compile_group(
     group: &ConditionGroup,
     params: &mut Vec<FV>,
-    _outer_match_all: bool,
+    match_all_override: Option<bool>,
 ) -> Result<String, SmartError> {
     if group.children.is_empty() {
         return Ok("1=1".to_string());
     }
-    let joiner = if group.match_all { " AND " } else { " OR " };
+    let match_all = match_all_override.unwrap_or(group.match_all);
+    let joiner = if match_all { " AND " } else { " OR " };
     let parts: Vec<String> = group
         .children
         .iter()
         .map(|child| match child {
-            Condition::Group(g) => Ok(format!("({})", compile_group(g, params, group.match_all)?)),
+            Condition::Group(g) => Ok(format!("({})", compile_group(g, params, None)?)),
             Condition::Leaf(l) => compile_leaf(l, params),
         })
         .collect::<Result<Vec<_>, SmartError>>()?;
@@ -466,15 +476,18 @@ fn escape_like(s: &str) -> String {
 
 // ----- Public command-layer helpers --------------------------------------
 
-const TRACK_LIST_COLUMNS: &str = "id, title, artist, album, duration_ms, file_path, file_hash, \
-     sample_rate, bit_depth, kind, play_count, skip_count, size_bytes, import_status, artwork_path";
+/// `TrackRow`'s columns plus `size_bytes`, which `TrackRow` doesn't
+/// carry but `truncate_by_cap` needs for Mb/Gb caps (see `evaluate`).
+fn track_list_columns() -> String {
+    format!("{}, size_bytes", crate::db::tracks::TRACK_ROW_COLUMNS)
+}
 
 /// Evaluate a smart rule and return matching tracks.
 pub async fn evaluate(
     engine: &SqliteRawEngine,
     rule: &SmartRule,
 ) -> Result<Vec<crate::db::tracks::TrackRow>, SmartError> {
-    let q = compile(rule, TRACK_LIST_COLUMNS)?;
+    let q = compile(rule, &track_list_columns())?;
     let raw_rows = engine
         .raw_sql_query(&q.sql, &q.params)
         .await
@@ -1288,6 +1301,42 @@ mod tests {
         assert!(s.contains("f") && s.contains("Op"));
         let m = SmartError::Malformed("nope".into());
         assert!(m.to_string().contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn top_level_match_all_overrides_root_group_joiner() {
+        let db = tmp_db().await;
+        seed(
+            &db.engine,
+            &[
+                ("a", "Rock", 2000, 0),
+                ("b", "Jazz", 2020, 0),
+                ("c", "Pop", 2020, 0),
+            ],
+        )
+        .await;
+        // rule.match_all=false (OR) must win over root.match_all=true
+        // (AND): no row is both Rock and Jazz, so AND would match
+        // nothing, while OR matches "a" (Rock) and "b" (Jazz).
+        let r = SmartRule {
+            match_all: false,
+            live_updating: true,
+            limit: None,
+            root: ConditionGroup {
+                match_all: true,
+                children: vec![
+                    leaf("genre", Op::Is, Value::Text("Rock".into())),
+                    leaf("genre", Op::Is, Value::Text("Jazz".into())),
+                ],
+            },
+        };
+        // Under AND (root.match_all as-is) this would match nothing —
+        // no row is both Rock and Jazz. Under OR (rule.match_all,
+        // authoritative) it matches "a" and "b".
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.title == "a"));
+        assert!(rows.iter().any(|r| r.title == "b"));
     }
 
     #[test]

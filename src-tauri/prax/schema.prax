@@ -117,7 +117,7 @@ model Track {
     // Artwork
     artwork_path    String?
 
-    // Membership (JSON array of playlist IDs; initialized to [] by the DB client on insert).
+    /// Reserved and currently unused — always `[]`. Playlist membership is maintained on `Playlist.track_entries`.
     playlist_ids    Json
 
     // Source + health

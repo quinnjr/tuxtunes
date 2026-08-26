@@ -23,7 +23,7 @@ npx tauri dev
   - Library root: `~/Music/TuxTunes` (or wherever `$HOME/Music/TuxTunes` resolves).
   - Organize scheme: `{album_artist}/{album}/{disc:02}-{track:02} - {title}.{ext}`.
   - Keep library organized: checked.
-- Confirm the live preview shows `The Beatles/Abbey Road/03 - Something.flac`.
+- Confirm the live preview shows `The Beatles/Abbey Road/01-03 - Something.flac`.
 - Leave defaults; close the panel.
 
 ### 2. Copy-on-add (single file)
@@ -41,8 +41,7 @@ npx tauri dev
 
 - Open the iTunes import wizard (**File ▸ Import iTunes library…** in the menu bar).
 - Pick `~/Music/iTunes/iTunes Library.itl`.
-- On the map step, set mappings to point at a real mount.
-- On the conflict step, verify `auto_copy_files` is implicit-true (the backend default). **Note:** the wizard currently doesn't expose the toggle explicitly; you can flip it via SQL before running sync: `sqlite3 ~/.local/share/tuxtunes/tuxtunes.db "UPDATE sync_sources SET auto_copy_files = 1 WHERE id = ?"`.
+- On the map step, set mappings to point at a real mount. Check **Copy media files into managed library during sync** (this is the `auto_copy_files` toggle; it defaults to unchecked/off).
 - Click **Sync now**. Watch the progress panel cycle through decoding → applying_tracks → applying_playlists → finalizing.
 - After completion, the sync emits individual `fs:ingest-*` events per track — DevTools → Network/Events panel should show them streaming.
 - After a few minutes, confirm `ls ~/Music/TuxTunes/` starts filling up with artist folders.

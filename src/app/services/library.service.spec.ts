@@ -287,16 +287,51 @@ describe('LibraryService.resolveTrackArtwork', () => {
     );
     svc.tracks.set(
       [
-        { ...RAW_TRACK, id: 1, album: 'Same', artist: 'X' },
-        { ...RAW_TRACK, id: 2, album: 'Same', artist: 'X' },
-        { ...RAW_TRACK, id: 3, album: 'Other', artist: 'X' },
+        { ...RAW_TRACK, id: 1, album: 'Same', artist: 'X', album_artist: 'X' },
+        { ...RAW_TRACK, id: 2, album: 'Same', artist: 'X', album_artist: 'X' },
+        { ...RAW_TRACK, id: 3, album: 'Other', artist: 'X', album_artist: 'X' },
       ].map((r) => mapTrack(r)),
     );
+    svc.albums.set([
+      {
+        album: 'Same',
+        albumArtist: 'X',
+        year: null,
+        trackCount: 2,
+        totalDurationMs: 0,
+        artworkPath: null,
+      },
+      {
+        album: 'Other',
+        albumArtist: 'X',
+        year: null,
+        trackCount: 1,
+        totalDurationMs: 0,
+        artworkPath: null,
+      },
+    ]);
     expect(await svc.resolveTrackArtwork(1)).toBe('/cache/a.jpg');
     expect(invoke).toHaveBeenCalledWith('resolve_track_artwork', { trackId: 1 });
     expect(svc.tracks().map((t) => t.artworkPath)).toEqual(['/cache/a.jpg', '/cache/a.jpg', null]);
+    expect(svc.albums().map((a) => a.artworkPath)).toEqual(['/cache/a.jpg', null]);
     expect(await svc.resolveTrackArtwork(3)).toBeNull();
     expect(svc.tracks()[2].artworkPath).toBeNull();
+  });
+
+  it('does not fan out onto other untagged rows', async () => {
+    const { svc } = build(async (cmd, args) =>
+      cmd === 'resolve_track_artwork' && (args as { trackId: number }).trackId === 1
+        ? '/cache/a.jpg'
+        : null,
+    );
+    svc.tracks.set(
+      [
+        { ...RAW_TRACK, id: 1, album: null, artist: null, album_artist: null },
+        { ...RAW_TRACK, id: 2, album: null, artist: null, album_artist: null },
+      ].map((r) => mapTrack(r)),
+    );
+    expect(await svc.resolveTrackArtwork(1)).toBe('/cache/a.jpg');
+    expect(svc.tracks().map((t) => t.artworkPath)).toEqual(['/cache/a.jpg', null]);
   });
 
   it('addFolderFromPicker returns null on cancel and refreshes on success', async () => {

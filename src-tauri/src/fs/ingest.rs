@@ -88,7 +88,8 @@ async fn ingest_one<R: Runtime>(
 
     let target_abs = resolve_collision(&root.join(&rel));
     if let Some(parent) = target_abs.parent() {
-        std::fs::create_dir_all(parent)?;
+        let parent = parent.to_path_buf();
+        tokio::task::spawn_blocking(move || std::fs::create_dir_all(parent)).await??;
     }
 
     tokio::task::spawn_blocking({

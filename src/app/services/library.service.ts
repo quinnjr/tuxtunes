@@ -386,8 +386,13 @@ export class LibraryService {
 
   /**
    * Resolve cover art for the album a track belongs to and patch the
-   * result onto every loaded row of that album (tracks list and album
-   * summaries), so the player and the grid update without a refetch.
+   * result onto every loaded row of that album — both `tracks` rows
+   * that share the source's `(album, artist)` and the matching
+   * `albums` summary (keyed by `(albumArtist, album)`, falling back to
+   * `artist` the way the backend's `COALESCE(album_artist, artist)`
+   * does) — so the player and the grid update without a refetch. Rows
+   * with no album/artist tag never fan out, so one untagged file's
+   * cover can't smear onto every other untagged row.
    */
   async resolveTrackArtwork(trackId: number): Promise<string | null> {
     const path =
@@ -398,12 +403,22 @@ export class LibraryService {
     const source = this.tracksById().get(trackId);
     this.tracks.update((rows) =>
       rows.map((t) =>
-        (t.id === trackId || (t.album === source?.album && t.artist === source.artist)) &&
-        t.artworkPath !== path
+        (t.id === trackId || isAlbumMate(t, source)) && t.artworkPath !== path
           ? { ...t, artworkPath: path }
           : t,
       ),
     );
+    const albumArtist = source?.albumArtist ?? source?.artist ?? null;
+    if (source?.album != null && albumArtist !== null) {
+      const album = source.album;
+      this.albums.update((all) =>
+        all.map((a) =>
+          a.albumArtist === albumArtist && a.album === album && a.artworkPath !== path
+            ? { ...a, artworkPath: path }
+            : a,
+        ),
+      );
+    }
     return path;
   }
 
@@ -418,6 +433,16 @@ export class LibraryService {
 
 function toPlaylistKind(kind: string): PlaylistKind {
   return kind === 'smart' || kind === 'folder' ? kind : 'regular';
+}
+
+/**
+ * Whether `t` shares `source`'s `(album, artist)` and should therefore be
+ * patched alongside it. Requires both fields non-null on the source so
+ * untagged tracks (`album === null`) never fan out onto one another.
+ */
+function isAlbumMate(t: TrackRow, source: TrackRow | undefined): boolean {
+  if (source?.album == null || source.artist === null) return false;
+  return t.album === source.album && t.artist === source.artist;
 }
 
 /** Comparable value for a sort column; only the columns a TrackRow carries. */

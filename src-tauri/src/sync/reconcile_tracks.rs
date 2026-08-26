@@ -94,6 +94,13 @@ pub async fn reconcile(
     // violation on `tracks.file_path`.
     let mut deferred: Vec<(usize, String, String)> = Vec::new();
 
+    // Pass 1 (pure, no fs access): filter out pid==0 / duplicate / unmappable
+    // entries and resolve each survivor's mapped path. Collected instead of
+    // applied immediately so the filesystem probing needed to detect
+    // collision-suffix entries (`dedupe_suffix_candidate`) can be batched
+    // into a single `spawn_blocking` below rather than stat-ing twice per
+    // track on the async executor.
+    let mut resolved: Vec<(usize, String, String)> = Vec::with_capacity(lib.tracks().len());
     for (idx, t) in lib.tracks().iter().enumerate() {
         if idx % 250 == 0 {
             obs.progress(&SyncProgress {
@@ -147,21 +154,43 @@ pub async fn reconcile(
             }
         };
 
-        if let Some(base) = crate::fs::relink::dedupe_suffix_candidate(Path::new(&mapped)) {
-            deferred.push((
-                idx,
-                raw_path.to_string(),
-                base.to_string_lossy().into_owned(),
-            ));
+        resolved.push((idx, raw_path.to_string(), mapped));
+    }
+
+    // One blocking hop over every resolved entry, instead of one per track
+    // on the async executor.
+    let candidates: Vec<Option<PathBuf>> = tokio::task::spawn_blocking({
+        let resolved = resolved
+            .iter()
+            .map(|(_, _, mapped)| mapped.clone())
+            .collect::<Vec<_>>();
+        move || {
+            resolved
+                .into_iter()
+                .map(|mapped| crate::fs::relink::dedupe_suffix_candidate(Path::new(&mapped)))
+                .collect()
+        }
+    })
+    .await
+    .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+
+    // Pass 2: apply in original order. Direct entries (no collision-suffix
+    // candidate) go first at their original position; entries whose base
+    // file needs recovery are pushed to `deferred` and applied afterward,
+    // exactly as before.
+    for ((idx, raw_path, mapped), candidate) in resolved.into_iter().zip(candidates) {
+        if let Some(base) = candidate {
+            deferred.push((idx, raw_path, base.to_string_lossy().into_owned()));
             continue;
         }
 
+        let t = &lib.tracks()[idx];
         apply_entry(
             engine,
             obs,
             source_id,
             t,
-            raw_path,
+            &raw_path,
             mapped,
             rules,
             &local_map,

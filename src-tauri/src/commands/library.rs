@@ -20,25 +20,22 @@ pub struct LibraryStats {
 pub async fn get_library_stats(state: tauri::State<'_, AppState>) -> Result<LibraryStats, String> {
     let engine = &state.db.engine;
 
-    let track_count: i64 = engine
-        .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
+    let row = engine
+        .raw_sql_first(
+            "SELECT COUNT(*) AS track_count, \
+                    COALESCE(SUM(duration_ms), 0) AS total_duration_ms, \
+                    COALESCE(SUM(size_bytes), 0) AS total_size_bytes \
+             FROM tracks",
+            &[],
+        )
         .await
         .map_err(|e| e.to_string())?;
 
-    let total_duration_ms: i64 = engine
-        .raw_sql_scalar("SELECT COALESCE(SUM(duration_ms), 0) FROM tracks", &[])
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let total_size_bytes: i64 = engine
-        .raw_sql_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM tracks", &[])
-        .await
-        .map_err(|e| e.to_string())?;
-
+    let v = row.into_json();
     Ok(LibraryStats {
-        track_count,
-        total_duration_ms,
-        total_size_bytes,
+        track_count: v["track_count"].as_i64().unwrap_or(0),
+        total_duration_ms: v["total_duration_ms"].as_i64().unwrap_or(0),
+        total_size_bytes: v["total_size_bytes"].as_i64().unwrap_or(0),
     })
 }
 
@@ -114,9 +111,16 @@ async fn resolve_artwork_for_album(
     let tracks = albums::tracks_for_album(engine, album_artist, album)
         .await
         .map_err(|e| e.to_string())?;
-    // Already resolved for this album (by another track's lookup)?
+    // Already resolved for this album (by another track's lookup)? Only
+    // trust a path that lives under our own artwork cache: the asset
+    // protocol scope is pinned to `$APPDATA/artwork/**`, so a stale
+    // path pointing at a managed-library sidecar (e.g. a `cover.jpg`
+    // written by fs/artwork.rs, outside that scope) would 403 in the
+    // webview. Anything else falls through to `resolve_for_files`,
+    // which re-derives and copies the art into the cache.
     if let Some(existing) = tracks.iter().find_map(|t| t.artwork_path.clone()) {
-        if std::path::Path::new(&existing).is_file() {
+        let existing_path = std::path::Path::new(&existing);
+        if existing_path.is_file() && existing_path.starts_with(&cache_dir) {
             return Ok(Some(existing));
         }
     }
@@ -330,21 +334,24 @@ mod tests {
         let db = Db::open(tmp.path()).await.unwrap();
         let engine = &db.engine;
 
-        let track_count: i64 = engine
-            .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
+        let row = engine
+            .raw_sql_first(
+                "SELECT COUNT(*) AS track_count, \
+                        COALESCE(SUM(duration_ms), 0) AS total_duration_ms, \
+                        COALESCE(SUM(size_bytes), 0) AS total_size_bytes \
+                 FROM tracks",
+                &[],
+            )
             .await
             .unwrap();
-        let total_duration_ms: i64 = engine
-            .raw_sql_scalar("SELECT COALESCE(SUM(duration_ms), 0) FROM tracks", &[])
-            .await
-            .unwrap();
-        let total_size_bytes: i64 = engine
-            .raw_sql_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM tracks", &[])
-            .await
-            .unwrap();
+        let v = row.into_json();
 
         assert_eq!(
-            (track_count, total_duration_ms, total_size_bytes),
+            (
+                v["track_count"].as_i64().unwrap(),
+                v["total_duration_ms"].as_i64().unwrap(),
+                v["total_size_bytes"].as_i64().unwrap(),
+            ),
             (0, 0, 0),
         );
     }

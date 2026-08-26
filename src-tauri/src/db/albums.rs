@@ -130,9 +130,9 @@ pub async fn tracks_for_album(
     album: &str,
 ) -> Result<Vec<crate::db::tracks::TrackRow>, AlbumsError> {
     let (where_clause, params) = album_match(album_artist, album);
+    let columns = crate::db::tracks::TRACK_ROW_COLUMNS;
     let sql = format!(
-        "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-         sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
+        "SELECT {columns} \
          FROM tracks \
          WHERE {where_clause} \
          ORDER BY disc_number ASC NULLS LAST, track_number ASC NULLS LAST, \
@@ -149,9 +149,11 @@ pub async fn tracks_for_album(
         .map_err(|e| AlbumsError::Query(anyhow::Error::from(e)))
 }
 
-/// Stamp `artwork_path` on every track of the album that doesn't have
-/// one yet, so `list_albums`' `MIN(artwork_path)` picks it up on the
-/// next load. Returns the number of rows updated.
+/// Stamp `artwork_path` on every track of the album, unconditionally
+/// overwriting any existing value (including a stale/dead cached path
+/// that would otherwise keep winning `list_albums`' `MIN(artwork_path)`
+/// forever), so the next load picks up the freshly-resolved art.
+/// Returns the number of rows updated.
 pub async fn set_album_artwork(
     engine: &SqliteRawEngine,
     album_artist: &str,
@@ -159,10 +161,7 @@ pub async fn set_album_artwork(
     artwork_path: &str,
 ) -> Result<u64, AlbumsError> {
     let (where_clause, mut params) = album_match(album_artist, album);
-    let sql = format!(
-        "UPDATE tracks SET artwork_path = ? \
-         WHERE {where_clause} AND (artwork_path IS NULL OR artwork_path = '')"
-    );
+    let sql = format!("UPDATE tracks SET artwork_path = ? WHERE {where_clause}");
     params.insert(0, FV::String(artwork_path.to_string()));
     engine
         .raw_sql_execute(&sql, &params)
@@ -202,7 +201,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_album_artwork_stamps_only_the_album_and_only_when_missing() {
+    async fn set_album_artwork_stamps_only_the_album_and_overwrites_stale_art() {
         let db = tmp_db().await;
         seed(
             &db.engine,
@@ -214,7 +213,8 @@ mod tests {
             ],
         )
         .await;
-        // Pre-existing art on one track must be left alone.
+        // Pre-existing (possibly stale) art on one track must now be
+        // overwritten, not preserved.
         db.engine
             .raw_sql_execute(
                 "UPDATE tracks SET artwork_path = '/keep.jpg' WHERE title = 'One B'",
@@ -226,11 +226,11 @@ mod tests {
         let n = set_album_artwork(&db.engine, "Artist", "One", "/new.jpg")
             .await
             .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(n, 2);
         let albums = list_albums(&db.engine).await.unwrap();
         let one = albums.iter().find(|a| a.album == "One").unwrap();
-        // MIN() over {'/new.jpg', '/keep.jpg'}.
-        assert_eq!(one.artwork_path.as_deref(), Some("/keep.jpg"));
+        // MIN() over {'/new.jpg', '/new.jpg'} — '/keep.jpg' was overwritten.
+        assert_eq!(one.artwork_path.as_deref(), Some("/new.jpg"));
         let two = albums.iter().find(|a| a.album == "Two").unwrap();
         assert_eq!(two.artwork_path, None);
 

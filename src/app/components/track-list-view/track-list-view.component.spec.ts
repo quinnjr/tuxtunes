@@ -38,6 +38,7 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   title: `Track ${id}`,
   artist: 'A',
   album: 'Al',
+  albumArtist: null,
   durationMs: 60_000,
   filePath: `/tmp/${id}.flac`,
   sampleRate: 44_100,

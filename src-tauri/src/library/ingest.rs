@@ -166,6 +166,32 @@ pub struct AddFolderSummary {
     pub failed: Vec<String>,
 }
 
+/// Every `file_path` already registered under `dir`, loaded once so
+/// `add_folder` can check membership in memory instead of issuing a
+/// `path_in_use` SELECT per file.
+async fn known_paths(
+    engine: &SqliteRawEngine,
+    dir: &Path,
+) -> Result<std::collections::HashSet<String>, IngestError> {
+    let prefix = format!("{}%", dir.display());
+    let rows = engine
+        .raw_sql_query(
+            "SELECT file_path FROM tracks WHERE file_path LIKE ?",
+            &[FilterValue::String(prefix)],
+        )
+        .await
+        .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.into_json()
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .collect())
+}
+
 /// Add every audio file under `dir` that the library doesn't already
 /// reference. Per-file probe failures are recorded, not fatal.
 pub async fn add_folder(
@@ -179,12 +205,12 @@ pub async fn add_folder(
     .await
     .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
 
+    let known = known_paths(engine, dir).await?;
+
     let mut summary = AddFolderSummary::default();
     for path in files {
-        let in_use = crate::db::tracks::path_in_use(engine, &path.to_string_lossy())
-            .await
-            .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
-        if in_use {
+        let path_str = path.to_string_lossy().into_owned();
+        if known.contains(&path_str) {
             summary.skipped += 1;
             continue;
         }

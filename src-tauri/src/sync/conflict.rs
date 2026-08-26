@@ -20,14 +20,30 @@ impl Default for Strategy {
     }
 }
 
+/// Per-field strategy for reconciling ITL source values against local
+/// (TuxTunes) state on sync.
+///
+/// Only `rating` and `play_count` are actually applied today — itl-rs
+/// exposes no source value for `skip_count`, `last_played`, `last_skipped`,
+/// or `loved`, so those four fields are accepted here for forward
+/// compatibility (and because the shape is shared with the frontend) but
+/// are currently no-ops in sync reconciliation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct ConflictRules {
     pub rating: Strategy,
     pub play_count: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `skip_count` value to reconcile against.
     pub skip_count: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `last_played` value to reconcile against.
     pub last_played: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `last_skipped` value to reconcile against.
     pub last_skipped: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `loved` value to reconcile against.
     pub loved: Strategy,
     /// What to do with tracks that exist locally but not in the source.
     pub deletes: DeleteStrategy,

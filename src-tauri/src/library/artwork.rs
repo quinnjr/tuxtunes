@@ -150,7 +150,9 @@ pub fn resolve_for_files(cache_dir: &Path, track_paths: &[PathBuf]) -> io::Resul
             return cache_image(cache_dir, &img).map(Some);
         }
         if let Some(sidecar) = find_sidecar(path) {
-            let data = std::fs::read(&sidecar)?;
+            let Ok(data) = std::fs::read(&sidecar) else {
+                continue;
+            };
             let ext = ext_from_magic(&data).or_else(|| {
                 match sidecar.extension().and_then(|e| e.to_str()) {
                     Some("png") => Some("png"),
@@ -319,6 +321,41 @@ mod tests {
             .expect("sidecar");
         assert!(side.starts_with(&cache));
         assert_eq!(std::fs::read(side).unwrap(), PNG);
+    }
+
+    #[test]
+    fn resolve_for_files_skips_unreadable_sidecar_and_falls_through() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("artwork");
+
+        // Track 1: a bare file next to an unreadable `cover.jpg`.
+        let track1 = dir.path().join("01.wav");
+        write_minimal_wav(&track1);
+        let sidecar = dir.path().join("cover.jpg");
+        std::fs::write(&sidecar, JPG).unwrap();
+        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read(&sidecar).is_err();
+
+        // Track 2: has embedded art.
+        let track2 = dir.path().join("02.wav");
+        write_wav_with_cover(&track2, PictureType::CoverFront, PNG);
+
+        let result = resolve_for_files(&cache, &[track1, track2]);
+
+        // Restore permissions so tempdir cleanup can remove the file.
+        std::fs::set_permissions(&sidecar, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        if !unreadable {
+            // Running as root (or on a fs that ignores mode bits):
+            // the sidecar read succeeds after all, so either art is a
+            // valid outcome — just don't assert on which.
+            return;
+        }
+
+        let hit = result.unwrap().expect("falls through to track 2's art");
+        assert_eq!(std::fs::read(hit).unwrap(), PNG);
     }
 
     #[test]

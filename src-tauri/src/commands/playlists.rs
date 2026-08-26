@@ -86,6 +86,24 @@ pub async fn delete_playlist(
         .map_err(|e| e.to_string())
 }
 
+/// Evaluate a smart playlist's rule against the current library and
+/// refresh its cached count for the sidebar. Shared by
+/// `open_smart_playlist` and the smart branch of `open_playlist`.
+async fn evaluate_and_cache(
+    engine: &prax_sqlite::raw::SqliteRawEngine,
+    playlist_id: i64,
+    rule_json: &str,
+) -> Result<Vec<TrackRow>, String> {
+    let rule: SmartRule = serde_json::from_str(rule_json).map_err(|e| e.to_string())?;
+    let rows = smart::evaluate(engine, &rule)
+        .await
+        .map_err(|e| e.to_string())?;
+    if let Err(e) = playlists::set_cached_count(engine, playlist_id, rows.len() as i64).await {
+        log::warn!("set_cached_count for {playlist_id} failed: {e}");
+    }
+    Ok(rows)
+}
+
 /// Open a smart playlist: load its rule, evaluate it against the
 /// current library, refresh the cached count for the sidebar, return
 /// the matching tracks.
@@ -98,16 +116,7 @@ pub async fn open_smart_playlist(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("playlist {playlist_id} is not a smart playlist"))?;
-    let rule: SmartRule = serde_json::from_str(&rule_json).map_err(|e| e.to_string())?;
-    let rows = smart::evaluate(&state.db.engine, &rule)
-        .await
-        .map_err(|e| e.to_string())?;
-    if let Err(e) =
-        playlists::set_cached_count(&state.db.engine, playlist_id, rows.len() as i64).await
-    {
-        log::warn!("set_cached_count for {playlist_id} failed: {e}");
-    }
-    Ok(rows)
+    evaluate_and_cache(&state.db.engine, playlist_id, &rule_json).await
 }
 
 /// Open any playlist by id and return its tracks: smart playlists are
@@ -123,19 +132,18 @@ pub async fn open_playlist(
     let rule_json = playlists::get_smart_rule(engine, playlist_id)
         .await
         .map_err(|e| e.to_string())?;
-    let rows = match rule_json {
-        Some(json) => {
-            let rule: SmartRule = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            smart::evaluate(engine, &rule)
+    match rule_json {
+        Some(json) => evaluate_and_cache(engine, playlist_id, &json).await,
+        None => {
+            let rows = playlists::tracks_for_regular(engine, playlist_id)
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+            if let Err(e) =
+                playlists::set_cached_count(engine, playlist_id, rows.len() as i64).await
+            {
+                log::warn!("set_cached_count for {playlist_id} failed: {e}");
+            }
+            Ok(rows)
         }
-        None => playlists::tracks_for_regular(engine, playlist_id)
-            .await
-            .map_err(|e| e.to_string())?,
-    };
-    if let Err(e) = playlists::set_cached_count(engine, playlist_id, rows.len() as i64).await {
-        log::warn!("set_cached_count for {playlist_id} failed: {e}");
     }
-    Ok(rows)
 }

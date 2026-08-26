@@ -9,6 +9,19 @@ pub struct TrackRow {
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// Album-level artist, distinct from the per-track `artist` (e.g.
+    /// "Various Artists" compilations). Falls back to `artist` when
+    /// absent — see `fs::path::TrackFields::from_track_row`.
+    #[serde(default)]
+    pub album_artist: Option<String>,
+    #[serde(default)]
+    pub genre: Option<String>,
+    #[serde(default)]
+    pub year: Option<i64>,
+    #[serde(default)]
+    pub track_number: Option<i64>,
+    #[serde(default)]
+    pub disc_number: Option<i64>,
     pub duration_ms: i64,
     pub file_path: String,
     pub file_hash: Option<String>,
@@ -30,6 +43,13 @@ pub struct TrackRow {
 fn default_import_status() -> String {
     "ok".to_string()
 }
+
+/// Every column backing `TrackRow`, in declaration order. Shared by
+/// every SELECT that hydrates `TrackRow`s (see `db::albums`,
+/// `db::playlists`, `db::smart`) so the column list lives in one place.
+pub const TRACK_ROW_COLUMNS: &str = "id, title, artist, album, album_artist, genre, year, \
+     track_number, disc_number, duration_ms, file_path, file_hash, sample_rate, bit_depth, \
+     kind, play_count, skip_count, import_status, artwork_path";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TracksError {
@@ -107,8 +127,7 @@ pub async fn list(
         .unwrap_or_else(|| "date_added DESC, id DESC".to_string());
 
     let sql = format!(
-        "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-         sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
+        "SELECT {TRACK_ROW_COLUMNS} \
          FROM tracks {where_clause} \
          ORDER BY {order_expr} \
          LIMIT ? OFFSET ?"
@@ -129,12 +148,10 @@ pub async fn list(
 }
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
-    let sql = "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-               sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
-               FROM tracks WHERE id = ?";
+    let sql = format!("SELECT {TRACK_ROW_COLUMNS} FROM tracks WHERE id = ?");
     let params = vec![prax_query::filter::FilterValue::Int(id)];
     let json_row = engine
-        .raw_sql_first(sql, &params)
+        .raw_sql_first(&sql, &params)
         .await
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
     serde_json::from_value(json_row.into_json())
@@ -674,6 +691,11 @@ mod tests {
             title: "Test Track".into(),
             artist: Some("Test Artist".into()),
             album: Some("Test Album".into()),
+            album_artist: Some("Test Album Artist".into()),
+            genre: Some("Rock".into()),
+            year: Some(1999),
+            track_number: Some(3),
+            disc_number: Some(1),
             duration_ms: 180_000,
             file_path: "/test/path.flac".into(),
             file_hash: Some("deadbeefdeadbeef".into()),

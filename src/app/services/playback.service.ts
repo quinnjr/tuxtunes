@@ -10,6 +10,12 @@ export interface TrackRow {
   title: string;
   artist: string | null;
   album: string | null;
+  /**
+   * Album-level artist, distinct from the per-track `artist` (e.g.
+   * "Various Artists" compilations). Falls back to `artist` server-side
+   * when absent — see `src-tauri/src/db/tracks.rs`.
+   */
+  albumArtist: string | null;
   durationMs: number;
   filePath: string;
   sampleRate: number | null;
@@ -28,6 +34,7 @@ export interface TrackRowRaw {
   title: string;
   artist: string | null;
   album: string | null;
+  album_artist?: string | null;
   duration_ms: number;
   file_path: string;
   sample_rate: number | null;
@@ -45,6 +52,7 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
     title: raw.title,
     artist: raw.artist,
     album: raw.album,
+    albumArtist: raw.album_artist ?? null,
     durationMs: raw.duration_ms,
     filePath: raw.file_path,
     sampleRate: raw.sample_rate,
@@ -58,6 +66,25 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
 }
 
 export type PlaybackState = 'playing' | 'paused' | 'stopped' | 'loading';
+
+export interface CurrentDevice {
+  deviceId: string | null;
+  sampleRate: number | null;
+  bitDepth: number | null;
+  exclusive: boolean;
+}
+
+/** `WarningKind` variants from `src-tauri/src/playback/events.rs`, snake_case on the wire. */
+const WARNING_LABELS: Record<string, string> = {
+  dsd_downgraded: 'DSD downgraded',
+  exclusive_mode_failed: 'Exclusive mode failed',
+  sample_rate_mismatch: 'Sample rate mismatch',
+  load_failed: 'Load failed',
+};
+
+function describeWarning(kind: string, detail: string): string {
+  return `${WARNING_LABELS[kind] ?? kind}: ${detail}`;
+}
 
 @Injectable({ providedIn: 'root' })
 export class PlaybackService implements OnDestroy {
@@ -84,6 +111,21 @@ export class PlaybackService implements OnDestroy {
    * engine plays whatever play() is invoked with.
    */
   readonly queue = signal<TrackRow[]>([]);
+
+  /**
+   * Output device the engine last reported via `playback:device-changed`
+   * (e.g. after a hardware switch or an exclusive-mode handoff).
+   */
+  readonly currentDevice = signal<CurrentDevice | null>(null);
+
+  /**
+   * Artwork resolved for a track not present in `library.tracks` (queue /
+   * album-grid playback). Written by `ensureArtwork` on success and
+   * consulted first so a repeat `track-changed` for the same id doesn't
+   * re-invoke the backend. `#computeCurrentArtworkPath` falls back to it
+   * when the row isn't loaded into the library.
+   */
+  private readonly resolvedArtwork = signal<{ id: number; path: string } | null>(null);
 
   /**
    * Last user-facing failure (e.g. "File not found"). Shared with the
@@ -125,6 +167,22 @@ export class PlaybackService implements OnDestroy {
       ),
       await this.tauri.listen<{ volume: number }>('playback:volume-changed', (payload) =>
         this.volume.set(payload.volume),
+      ),
+      await this.tauri.listen<{ kind: string; detail: string }>('playback:warning', (payload) =>
+        this.ui.reportError(describeWarning(payload.kind, payload.detail)),
+      ),
+      await this.tauri.listen<{
+        device_id: string | null;
+        sample_rate: number | null;
+        bit_depth: number | null;
+        exclusive: boolean;
+      }>('playback:device-changed', (payload) =>
+        this.currentDevice.set({
+          deviceId: payload.device_id,
+          sampleRate: payload.sample_rate,
+          bitDepth: payload.bit_depth,
+          exclusive: payload.exclusive,
+        }),
       ),
       // Auto-advance only fires for natural EOF — the engine
       // distinguishes user-stop / shutdown / redirect upstream and
@@ -202,15 +260,25 @@ export class PlaybackService implements OnDestroy {
   #computeCurrentArtworkPath(): string | null {
     const id = this.currentTrackId();
     if (id === null) return null;
-    return this.library.tracksById().get(id)?.artworkPath ?? null;
+    const fromLibrary = this.library.tracksById().get(id)?.artworkPath ?? null;
+    if (fromLibrary !== null) return fromLibrary;
+    const resolved = this.resolvedArtwork();
+    return resolved !== null && resolved.id === id ? resolved.path : null;
   }
 
-  /** Kick off a cover lookup for a track that has none cached yet. */
+  /**
+   * Kick off a cover lookup for a track that has none cached yet — either
+   * in `library.tracks` or in `resolvedArtwork` (rows played from the
+   * queue / album grid never land in `library.tracks`).
+   */
   private async ensureArtwork(trackId: number): Promise<void> {
     const row = this.library.tracksById().get(trackId);
     if (row?.artworkPath) return;
+    const cached = this.resolvedArtwork();
+    if (cached !== null && cached.id === trackId) return;
     try {
-      await this.library.resolveTrackArtwork(trackId);
+      const path = await this.library.resolveTrackArtwork(trackId);
+      if (path !== null) this.resolvedArtwork.set({ id: trackId, path });
     } catch {
       // Artwork is decorative; never surface lookup failures.
     }

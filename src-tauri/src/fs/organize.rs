@@ -67,32 +67,42 @@ async fn organize_one<R: Runtime>(
     }
 
     if let Some(parent) = new_abs.parent() {
-        std::fs::create_dir_all(parent)?;
+        let parent = parent.to_path_buf();
+        tokio::task::spawn_blocking(move || std::fs::create_dir_all(parent)).await??;
     }
     // Suffix mode (matches ingest). Future work: add an `error` mode
     // per the v1 design for user-initiated edits.
     let new_abs = resolve_collision(&new_abs);
-    std::fs::rename(&old_path, &new_abs)?;
+    {
+        let old_path = old_path.clone();
+        let new_abs = new_abs.clone();
+        tokio::task::spawn_blocking(move || std::fs::rename(&old_path, &new_abs)).await??;
+    }
 
     // Prune now-empty parent dirs up to library_root.
     if let Some(parent) = old_path.parent() {
-        let mut cur = Some(parent.to_path_buf());
-        while let Some(p) = cur {
-            if p == root || !p.starts_with(&root) {
-                break;
-            }
-            match std::fs::read_dir(&p) {
-                Ok(mut it) => {
-                    if it.next().is_none() {
-                        let _ = std::fs::remove_dir(&p);
-                        cur = p.parent().map(std::path::Path::to_path_buf);
-                    } else {
-                        break;
-                    }
+        let parent = parent.to_path_buf();
+        let root = root.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut cur = Some(parent);
+            while let Some(p) = cur {
+                if p == root || !p.starts_with(&root) {
+                    break;
                 }
-                Err(_) => break,
+                match std::fs::read_dir(&p) {
+                    Ok(mut it) => {
+                        if it.next().is_none() {
+                            let _ = std::fs::remove_dir(&p);
+                            cur = p.parent().map(std::path::Path::to_path_buf);
+                        } else {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
-        }
+        })
+        .await?;
     }
 
     let sql = "UPDATE tracks SET file_path = ? WHERE id = ?";

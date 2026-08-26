@@ -37,6 +37,7 @@ const TRACK = (id: number): TrackRow => ({
   title: `T${id}`,
   artist: null,
   album: null,
+  albumArtist: null,
   durationMs: 1000,
   filePath: '/x',
   sampleRate: null,

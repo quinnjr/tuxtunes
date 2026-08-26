@@ -325,11 +325,8 @@ pub async fn tracks_for_regular(
     unique.dedup();
     for chunk in unique.chunks(CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
-        let sql = format!(
-            "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-             sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
-             FROM tracks WHERE id IN ({placeholders})"
-        );
+        let columns = crate::db::tracks::TRACK_ROW_COLUMNS;
+        let sql = format!("SELECT {columns} FROM tracks WHERE id IN ({placeholders})");
         let params: Vec<FilterValue> = chunk.iter().map(|id| FilterValue::Int(*id)).collect();
         let rows = engine
             .raw_sql_query(&sql, &params)

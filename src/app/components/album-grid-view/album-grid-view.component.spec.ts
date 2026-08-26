@@ -27,6 +27,7 @@ const TRACK = (id: number): TrackRow => ({
   title: `T${id}`,
   artist: null,
   album: null,
+  albumArtist: null,
   durationMs: 1000,
   filePath: '/tmp/x.flac',
   sampleRate: null,
@@ -142,6 +143,26 @@ describe('AlbumGridViewComponent', () => {
     pending[2](null);
     await flush();
     expect(started()).toHaveLength(6);
+  });
+
+  it('a failed lookup is not cached as a permanent miss — the next scroll-into-view retries it', async () => {
+    let fail = true;
+    const { cmp, stub } = setup(async (cmd) => {
+      if (cmd === 'resolve_album_artwork') {
+        if (fail) throw new Error('transient');
+        return null;
+      }
+      return [];
+    });
+    const a = ALBUM({ album: 'Retry', artworkPath: null });
+    cmp.onCardVisible(a);
+    await flush();
+    expect(stub.invoke.mock.calls.filter((c) => c[0] === 'resolve_album_artwork')).toHaveLength(1);
+
+    fail = false;
+    cmp.onCardVisible(a);
+    await flush();
+    expect(stub.invoke.mock.calls.filter((c) => c[0] === 'resolve_album_artwork')).toHaveLength(2);
   });
 
   it('a failed artwork lookup frees its slot', async () => {
