@@ -414,17 +414,8 @@ async fn play_track_loads_existing_row_and_drives_loadandplay() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 }
 
-/// A file that plays to its natural end must produce `playback:track-ended`
-/// — that event is the only thing that drives auto-advance. Regression for
-/// `keep-open=always`, which parked mpv at EOF without ever unloading.
-#[tokio::test(flavor = "multi_thread")]
-async fn natural_eof_emits_track_ended() {
-    use tauri::Listener;
-    let (app, tmp) = fixture().await;
-    let state = app.state::<AppState>();
-
-    // 8 kHz, 8-bit mono, 400 samples = 50 ms of silence.
-    let samples = 400u32;
+/// 8 kHz, 8-bit mono PCM WAV of `samples` silent samples (400 = 50 ms).
+fn short_wav(samples: u32) -> Vec<u8> {
     let mut wav = Vec::new();
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&(36 + samples).to_le_bytes());
@@ -439,8 +430,84 @@ async fn natural_eof_emits_track_ended() {
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&samples.to_le_bytes());
     wav.resize(wav.len() + samples as usize, 0x80);
+    wav
+}
+
+/// After a natural EOF the engine must accept the next `play_track` and
+/// report it as loaded — this is the auto-advance chain end to end.
+#[tokio::test(flavor = "multi_thread")]
+async fn play_after_eof_loads_next_track() {
+    use tauri::Listener;
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    let mut ids = Vec::new();
+    for name in ["a.wav", "b.wav"] {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, short_wav(400)).unwrap();
+        let id: i64 = state
+            .db
+            .engine
+            .raw_sql_scalar(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+                 VALUES (?, 50, 0, ?, '[]') RETURNING id",
+                &[
+                    prax_query::filter::FilterValue::String(name.to_string()),
+                    prax_query::filter::FilterValue::String(path.display().to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let tx_ended = tx.clone();
+    app.handle()
+        .listen(tuxtunes::playback::events::TRACK_ENDED, move |e| {
+            let _ = tx_ended.send(format!("ended:{}", e.payload()));
+        });
+    app.handle()
+        .listen(tuxtunes::playback::events::TRACK_CHANGED, move |e| {
+            let _ = tx.send(format!("changed:{}", e.payload()));
+        });
+
+    commands::playback::play_track(state.clone(), ids[0])
+        .await
+        .unwrap();
+    async fn wait(rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>, needle: String) -> String {
+        loop {
+            let msg = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("event within 5s")
+                .expect("channel open");
+            if msg.contains(&needle) {
+                return msg;
+            }
+        }
+    }
+    wait(&mut rx, format!("ended:{{\"track_id\":{}", ids[0])).await;
+
+    // The frontend reacts to track-ended by starting the next row.
+    commands::playback::play_track(state.clone(), ids[1])
+        .await
+        .unwrap();
+    let msg = wait(&mut rx, format!("\"track_id\":{}", ids[1])).await;
+    assert!(msg.starts_with("changed:"), "{msg}");
+    wait(&mut rx, format!("ended:{{\"track_id\":{}", ids[1])).await;
+}
+
+/// A file that plays to its natural end must produce `playback:track-ended`
+/// — that event is the only thing that drives auto-advance. Regression for
+/// `keep-open=always`, which parked mpv at EOF without ever unloading.
+#[tokio::test(flavor = "multi_thread")]
+async fn natural_eof_emits_track_ended() {
+    use tauri::Listener;
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
     let path = tmp.path().join("short.wav");
-    std::fs::write(&path, wav).unwrap();
+    std::fs::write(&path, short_wav(400)).unwrap();
 
     let id: i64 = state
         .db

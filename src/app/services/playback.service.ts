@@ -129,8 +129,8 @@ export class PlaybackService implements OnDestroy {
       // Auto-advance only fires for natural EOF — the engine
       // distinguishes user-stop / shutdown / redirect upstream and
       // doesn't emit `track-ended` for those.
-      await this.tauri.listen<{ track_id: number }>('playback:track-ended', () => {
-        void this.next();
+      await this.tauri.listen<{ track_id: number }>('playback:track-ended', (payload) => {
+        void this.next(payload.track_id);
       }),
       // Tray menu actions route through the frontend so the
       // state-machine logic (toggle on current state, advance from
@@ -181,14 +181,7 @@ export class PlaybackService implements OnDestroy {
   }
 
   async play(trackId: number): Promise<void> {
-    try {
-      await this.tauri.invoke<void>('play_track', { trackId });
-      this.ui.clearError();
-    } catch (error) {
-      const message = toErrorMessage(error);
-      this.ui.reportError(message);
-      this.markMissing(trackId, message);
-    }
+    await this.tryPlay(trackId);
   }
 
   /**
@@ -295,22 +288,42 @@ export class PlaybackService implements OnDestroy {
   }
 
   /**
-   * "Next": the queue head if any, otherwise the row after the current
-   * track in the list on screen (All Songs, or the open playlist) —
-   * skipping rows already flagged missing. Returns the track started,
-   * or null at the end of the list.
+   * "Next": the queue head if any, otherwise the row after `afterId`
+   * (default: the current track) in the list on screen (All Songs, or
+   * the open playlist). Rows flagged missing are skipped, and a row
+   * that fails to start (file gone but not yet flagged) is skipped too,
+   * so one bad file never stops the playlist. Returns the track that
+   * started, or null at the end of the list.
+   *
+   * `afterId` exists because the engine sends `track-changed: null`
+   * right after `track-ended`; by the time an awaited step resumes,
+   * `currentTrackId` may already be null.
    */
-  async next(): Promise<TrackRow | null> {
+  async next(afterId: number | null = this.currentTrackId()): Promise<TrackRow | null> {
     const fromQueue = await this.advanceFromQueue();
     if (fromQueue !== null) return fromQueue;
     const rows = this.library.tracks();
-    const currentId = this.currentTrackId();
-    const start = currentId === null ? -1 : rows.findIndex((t) => t.id === currentId);
-    if (start === -1 && currentId !== null) return null;
-    const candidate = rows.slice(start + 1).find((t) => !t.missing);
-    if (!candidate) return null;
-    await this.play(candidate.id);
-    return candidate;
+    const start = afterId === null ? -1 : rows.findIndex((t) => t.id === afterId);
+    if (start === -1 && afterId !== null) return null;
+    for (const candidate of rows.slice(start + 1)) {
+      if (candidate.missing) continue;
+      if (await this.tryPlay(candidate.id)) return candidate;
+    }
+    return null;
+  }
+
+  /** play(), reporting whether the engine accepted the track. */
+  private async tryPlay(trackId: number): Promise<boolean> {
+    try {
+      await this.tauri.invoke<void>('play_track', { trackId });
+      this.ui.clearError();
+      return true;
+    } catch (error) {
+      const message = toErrorMessage(error);
+      this.ui.reportError(message);
+      this.markMissing(trackId, message);
+      return false;
+    }
   }
 
   clearQueue(): void {

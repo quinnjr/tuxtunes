@@ -278,6 +278,43 @@ describe('PlaybackService', () => {
     expect(fromQueue?.id).toBe(50);
   });
 
+  it('track-ended still advances when track-changed:null lands before next() resumes', async () => {
+    const harness = build();
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+    ]);
+    harness.svc.currentTrackId.set(1);
+    // The engine's exact EOF sequence, delivered back-to-back.
+    harness.emit('playback:track-ended', { track_id: 1 });
+    harness.emit('playback:state-changed', { state: 'stopped' });
+    harness.emit('playback:track-changed', { track_id: null, prev_track_id: 1 });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 2 });
+  });
+
+  it('next() skips rows whose file fails to start and keeps going', async () => {
+    const harness = build(async (cmd, args) => {
+      if (cmd === 'play_track' && (args as { trackId: number }).trackId === 2) {
+        throw new Error('File not found: /gone.mp3');
+      }
+      return [];
+    });
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+      { ...TRACK, id: 3 },
+    ]);
+    const started = await harness.svc.next(1);
+    expect(started?.id).toBe(3);
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 2 });
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 3 });
+    expect(harness.library.tracks()[1].missing).toBe(true);
+    expect(harness.svc.lastError()).toBeNull(); // cleared by the successful start
+  });
+
   it('track-ended continues down the list when the queue is empty', async () => {
     const harness = build();
     await harness.ready;

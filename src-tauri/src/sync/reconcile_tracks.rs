@@ -70,6 +70,10 @@ pub async fn reconcile(
 
     // One SELECT up-front replaces N per-track by_persistent_id SELECTs.
     let local_map = tracks::load_local_state_map(engine, source_id).await?;
+    // Rows keyed by file path, so an entry whose persistent id changed
+    // (parser fix upstream, iTunes rebuild) is re-adopted instead of
+    // inserted on top of itself.
+    let local_by_path = tracks::load_local_ids_by_path(engine, source_id).await?;
     let mut keep: Vec<u64> = Vec::with_capacity(lib.tracks().len());
 
     // persistent_ids and resolved file paths handled this run. `local_map`
@@ -161,6 +165,7 @@ pub async fn reconcile(
             mapped,
             rules,
             &local_map,
+            &local_by_path,
             &mut seen_paths,
             &mut keep,
             &mut aliases,
@@ -201,6 +206,7 @@ pub async fn reconcile(
             base,
             rules,
             &local_map,
+            &local_by_path,
             &mut seen_paths,
             &mut keep,
             &mut aliases,
@@ -275,6 +281,7 @@ async fn apply_entry(
     mapped: String,
     rules: &ConflictRules,
     local_map: &std::collections::HashMap<u64, LocalTrackForSync>,
+    local_by_path: &std::collections::HashMap<String, i64>,
     seen_paths: &mut HashMap<String, u64>,
     keep: &mut Vec<u64>,
     aliases: &mut HashMap<u64, u64>,
@@ -306,7 +313,7 @@ async fn apply_entry(
     let upsert = ItlTrackUpsert {
         persistent_id: pid,
         sync_source_id: source_id,
-        title: t.title().unwrap_or(""),
+        title: title_or_filename(t.title(), &mapped),
         artist: t.artist(),
         album: t.album(),
         album_artist: t.album_artist(),
@@ -330,12 +337,32 @@ async fn apply_entry(
 
     match local_map.get(&pid) {
         None => {
-            let track_id = tracks::insert_from_itl(engine, &upsert).await?;
-            stats.inserted += 1;
-            ingest_candidates.push(IngestCandidate {
-                track_id,
-                source_path: PathBuf::from(raw_path),
-            });
+            if let Some(&existing_id) = local_by_path.get(&mapped) {
+                // Same file already imported under another persistent
+                // id: re-key it rather than trip UNIQUE(file_path).
+                tracks::set_persistent_id(engine, existing_id, &crate::db::sync_util::pid_hex(pid))
+                    .await?;
+                tracks::update_descriptive_fields(
+                    engine,
+                    existing_id,
+                    &upsert,
+                    upsert.rating,
+                    upsert.play_count,
+                )
+                .await?;
+                stats.updated += 1;
+                ingest_candidates.push(IngestCandidate {
+                    track_id: existing_id,
+                    source_path: PathBuf::from(raw_path),
+                });
+            } else {
+                let track_id = tracks::insert_from_itl(engine, &upsert).await?;
+                stats.inserted += 1;
+                ingest_candidates.push(IngestCandidate {
+                    track_id,
+                    source_path: PathBuf::from(raw_path),
+                });
+            }
         }
         Some(local) => {
             let (resolved_rating, resolved_play_count) = resolve_user_state(&upsert, local, rules);
@@ -481,5 +508,35 @@ mod tests {
         assert_eq!(nz(0), None);
         assert_eq!(nz(-1), None);
         assert_eq!(nz(7), Some(7));
+    }
+}
+
+/// iTunes entries with an undecodable title used to import as "" — show
+/// the file name instead so the row is at least identifiable.
+fn title_or_filename<'a>(title: Option<&'a str>, mapped_path: &'a str) -> &'a str {
+    match title {
+        Some(t) if !t.trim().is_empty() => t,
+        _ => Path::new(mapped_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(""),
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::title_or_filename;
+
+    #[test]
+    fn falls_back_to_file_stem_for_missing_or_blank_titles() {
+        assert_eq!(
+            title_or_filename(Some("Façade"), "/m/12 Façade.m4p"),
+            "Façade"
+        );
+        assert_eq!(
+            title_or_filename(Some("  "), "/m/12 Façade.m4p"),
+            "12 Façade"
+        );
+        assert_eq!(title_or_filename(None, "/m/13 Outro.m4a"), "13 Outro");
     }
 }

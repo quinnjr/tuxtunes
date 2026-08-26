@@ -415,6 +415,52 @@ pub async fn set_file_paths(
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
+/// `file_path → local id` for every track of a sync source. Lets the
+/// reconciler re-adopt rows whose persistent id changed (a parser fix
+/// upstream, or an iTunes rebuild) instead of tripping the UNIQUE
+/// constraint on `file_path`.
+pub async fn load_local_ids_by_path(
+    engine: &SqliteRawEngine,
+    sync_source_id: i64,
+) -> Result<std::collections::HashMap<String, i64>, TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    let rows = engine
+        .raw_sql_query(
+            "SELECT id, file_path FROM tracks WHERE sync_source_id = ?",
+            &[FV::Int(sync_source_id)],
+        )
+        .await
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    let mut out = std::collections::HashMap::with_capacity(rows.len());
+    for r in rows {
+        let v = r.into_json();
+        if let (Some(id), Some(p)) = (
+            v.get("id").and_then(|x| x.as_i64()),
+            v.get("file_path").and_then(|x| x.as_str()),
+        ) {
+            out.insert(p.to_string(), id);
+        }
+    }
+    Ok(out)
+}
+
+/// Re-key a row to a new persistent id (see `load_local_ids_by_path`).
+pub async fn set_persistent_id(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+    pid_hex: &str,
+) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    engine
+        .raw_sql_execute(
+            "UPDATE tracks SET persistent_id = ? WHERE id = ?",
+            &[FV::String(pid_hex.to_string()), FV::Int(local_id)],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
 /// Mark a track as `missing_source` (file not reachable). Preserves
 /// `file_path` so the user can diagnose the mapping.
 pub async fn mark_missing_source(
