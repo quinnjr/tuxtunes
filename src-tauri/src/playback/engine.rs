@@ -193,7 +193,14 @@ fn init_mpv() -> Result<Mpv, libmpv2::Error> {
         for (name, value) in [
             ("gapless-audio", "yes"),
             ("audio-pitch-correction", "no"),
-            ("keep-open", "always"),
+            // The player owns the queue: a file must actually *end* so
+            // mpv raises EndFile(EOF) and the frontend advances.
+            // `keep-open=always` (a video-player habit) instead parks
+            // playback paused at the last sample and never unloads, so
+            // `track-ended` never fires and nothing auto-advances.
+            ("keep-open", "no"),
+            // Stay alive between files instead of terminating the core.
+            ("idle", "yes"),
         ] {
             if let Err(e) = init.set_property(name, value) {
                 log::warn!("mpv init: skipping {name}={value}: {e}");

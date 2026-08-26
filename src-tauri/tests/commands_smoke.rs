@@ -414,6 +414,62 @@ async fn play_track_loads_existing_row_and_drives_loadandplay() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 }
 
+/// A file that plays to its natural end must produce `playback:track-ended`
+/// — that event is the only thing that drives auto-advance. Regression for
+/// `keep-open=always`, which parked mpv at EOF without ever unloading.
+#[tokio::test(flavor = "multi_thread")]
+async fn natural_eof_emits_track_ended() {
+    use tauri::Listener;
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    // 8 kHz, 8-bit mono, 400 samples = 50 ms of silence.
+    let samples = 400u32;
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + samples).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&8000u32.to_le_bytes());
+    wav.extend_from_slice(&8000u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&8u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&samples.to_le_bytes());
+    wav.resize(wav.len() + samples as usize, 0x80);
+    let path = tmp.path().join("short.wav");
+    std::fs::write(&path, wav).unwrap();
+
+    let id: i64 = state
+        .db
+        .engine
+        .raw_sql_scalar(
+            "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('short', 50, 0, ?, '[]') RETURNING id",
+            &[prax_query::filter::FilterValue::String(
+                path.display().to_string(),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.handle()
+        .listen(tuxtunes::playback::events::TRACK_ENDED, move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+    commands::playback::play_track(state, id).await.unwrap();
+
+    let payload = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("track-ended within 5s of a 50 ms file finishing")
+        .expect("channel open");
+    assert!(payload.contains(&format!("\"track_id\":{id}")), "{payload}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn playback_command_surface_runs_through_engine() {
     let (app, _tmp) = fixture().await;
