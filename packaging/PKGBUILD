@@ -1,6 +1,6 @@
 # Maintainer: Joseph R. Quinn <quinn.josephr@gmail.com>
 pkgname=tuxtunes-git
-pkgver=0.1.0.r157.g71151bd
+pkgver=0.1.0.r162.gcc166a2
 pkgrel=1
 pkgdesc="Music library manager and player (Tauri + Angular)"
 arch=('x86_64' 'aarch64')
