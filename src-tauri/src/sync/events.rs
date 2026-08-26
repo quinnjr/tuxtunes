@@ -34,6 +34,10 @@ pub enum WarningKind {
     MissingSourceFile,
     UnmappablePath,
     SmartRuleDecodeFailed,
+    /// The criteria decoded, but rules TuxTunes cannot evaluate (media
+    /// kind, playlist membership, …) were dropped; the imported rule may
+    /// match a superset of iTunes' list.
+    SmartRulePartial,
     ConflictResolved,
     UnknownField,
     /// `auto_copy_files` is set on a source but file ingest is GUI-only

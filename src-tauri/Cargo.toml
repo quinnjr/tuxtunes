@@ -19,7 +19,7 @@ prax-migrate = "0.8"
 prax-codegen = "0.8"
 prax-schema = "0.8"
 prax-query = "0.8"
-itl-rs = "0.2"
+itl-rs = "1.1"
 lofty = "0.22"
 plist = "1"
 libmpv2 = { version = "5", default-features = false }

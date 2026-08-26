@@ -1980,7 +1980,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.56.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -2207,9 +2207,9 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itl-rs"
-version = "0.2.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06b64da8f509e5d64f43f73fc779f1969ef1f105dcce560704f74f564188b9a4"
+checksum = "54b42a94ddc37124cd6da1b5f4b246be5e9e79226b8bbed13c694e7313213088"
 dependencies = [
  "aes",
  "flate2",

@@ -6,7 +6,7 @@
 use crate::db::playlists::{self, PlaylistKind, PlaylistUpsert, PlaylistsError};
 use crate::db::sync_util;
 use crate::db::tracks::TracksError;
-use crate::sync::events::{SyncPhase, SyncProgress};
+use crate::sync::events::{SyncPhase, SyncProgress, SyncWarning, WarningKind};
 use crate::sync::observer::SyncObserver;
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
@@ -17,6 +17,8 @@ pub struct PlaylistReconcileStats {
     pub updated: u64,
     pub deleted: u64,
     pub warnings: u64,
+    /// Smart playlists whose iTunes criteria decoded into a live rule.
+    pub smart_decoded: u64,
 }
 
 pub async fn reconcile(
@@ -50,10 +52,10 @@ pub async fn reconcile(
             .await
             .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
 
-    // Folder-ness is derived from structure, not from itl-rs's
-    // `is_folder()` heuristic ("has no tracks"): iTunes folders carry
-    // the union of their children's tracks, and genuinely empty
-    // playlists exist, so that heuristic inverts both cases.
+    // itl-rs ≥ 1.1 reads the folder flag from the miph header. Keep the
+    // structural check as a fallback for libraries whose headers are too
+    // short to carry the flag: anything another playlist calls its
+    // parent is a folder regardless.
     let parent_pids: std::collections::HashSet<u64> = lib
         .playlists()
         .iter()
@@ -82,7 +84,42 @@ pub async fn reconcile(
         }
         keep.push(pid);
 
-        let (kind, smart_rule_json) = classify(p.is_smart(), parent_pids.contains(&pid));
+        let is_folder = p.is_folder() || parent_pids.contains(&pid);
+        let (mut kind, mut smart_rule_json) = classify(p.is_smart(), is_folder);
+        if kind == PlaylistKind::Smart {
+            match p
+                .smart_criteria()
+                .map(|c| crate::sync::slst::decode(c, p.smart_info()))
+            {
+                Some(Ok(decoded)) => {
+                    if !decoded.dropped.is_empty() {
+                        stats.warnings += 1;
+                        obs.warning(&SyncWarning {
+                            source_id,
+                            kind: WarningKind::SmartRulePartial,
+                            detail: format!(
+                                "{:?}: dropped rules TuxTunes cannot evaluate: {}",
+                                p.title(),
+                                decoded.dropped.join(", ")
+                            ),
+                        });
+                    }
+                    smart_rule_json = serde_json::to_string(&decoded.rule).ok();
+                    stats.smart_decoded += 1;
+                }
+                Some(Err(e)) => {
+                    // Keep the snapshot iTunes resolved as a static list.
+                    stats.warnings += 1;
+                    obs.warning(&SyncWarning {
+                        source_id,
+                        kind: WarningKind::SmartRuleDecodeFailed,
+                        detail: format!("{:?}: {e}; imported as a static playlist", p.title()),
+                    });
+                    kind = PlaylistKind::Regular;
+                }
+                None => kind = PlaylistKind::Regular,
+            }
+        }
 
         // Translate ITL track IDs to local row IDs; skip any track we
         // didn't import (zero pid, unmappable path, etc.).
