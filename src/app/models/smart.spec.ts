@@ -4,10 +4,12 @@ import {
   SMART_FIELDS,
   SmartFieldKind,
   SmartOp,
+  SmartRule,
   defaultLeaf,
   defaultRule,
   defaultValue,
   fieldById,
+  normalizeForEditor,
 } from './smart';
 
 describe('SMART_FIELDS', () => {
@@ -78,5 +80,39 @@ describe('fieldById', () => {
 
   it('falls back to the first field for an unknown id', () => {
     expect(fieldById('not_a_real_field')).toEqual(SMART_FIELDS[0]);
+  });
+});
+
+describe('normalizeForEditor', () => {
+  it('unwraps a single wrapper group under root', () => {
+    const leaf = { field: 'artist', op: 'contains' as const, value: '10 Years' };
+    const rule: SmartRule = {
+      ...defaultRule(),
+      root: { match_all: true, children: [{ match_all: false, children: [leaf] }] },
+    };
+    expect(normalizeForEditor(rule).root).toEqual({ match_all: false, children: [leaf] });
+  });
+
+  it('unwraps repeatedly for double-nested wrapper groups', () => {
+    const leaf = defaultLeaf();
+    const rule: SmartRule = {
+      ...defaultRule(),
+      root: {
+        match_all: true,
+        children: [{ match_all: true, children: [{ match_all: false, children: [leaf] }] }],
+      },
+    };
+    expect(normalizeForEditor(rule).root).toEqual({ match_all: false, children: [leaf] });
+  });
+
+  it('leaves a mixed root untouched', () => {
+    const leafX = defaultLeaf();
+    const leafY = { field: 'genre', op: 'is' as const, value: 'Jazz' };
+    const group = { match_all: true, children: [defaultLeaf()] };
+    const rule: SmartRule = {
+      ...defaultRule(),
+      root: { match_all: true, children: [leafX, group, leafY] },
+    };
+    expect(normalizeForEditor(rule).root).toEqual(rule.root);
   });
 });

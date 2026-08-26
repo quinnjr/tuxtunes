@@ -23,6 +23,11 @@ pub struct TrackReconcileStats {
     /// that already owns it (see `TrackReconcileOutcome::aliases`).
     pub relinked: u64,
     pub merged: u64,
+    /// Rows adopted by file path because their persistent id changed
+    /// upstream (an iTunes rebuild, or a parser fix like itl-rs 1.2
+    /// which re-keyed every entry). Conflict rules still apply, so the
+    /// local rating / play count survive the re-key.
+    pub rekeyed: u64,
 }
 
 /// Everything the playlist pass needs from the track pass.
@@ -72,8 +77,9 @@ pub async fn reconcile(
     let local_map = tracks::load_local_state_map(engine, source_id).await?;
     // Rows keyed by file path, so an entry whose persistent id changed
     // (parser fix upstream, iTunes rebuild) is re-adopted instead of
-    // inserted on top of itself.
-    let local_by_path = tracks::load_local_ids_by_path(engine, source_id).await?;
+    // inserted on top of itself. Covers *every* row, not just this
+    // source's, because `tracks.file_path` is globally UNIQUE.
+    let mut index = PathIndex::new(tracks::load_local_state_by_path(engine).await?);
     let mut keep: Vec<u64> = Vec::with_capacity(lib.tracks().len());
 
     // persistent_ids and resolved file paths handled this run. `local_map`
@@ -92,7 +98,7 @@ pub async fn reconcile(
     // so the entry that genuinely owns the base file always claims it
     // first and the suffixed one becomes an alias rather than a UNIQUE
     // violation on `tracks.file_path`.
-    let mut deferred: Vec<(usize, String, String)> = Vec::new();
+    let mut deferred: Vec<DeferredEntry> = Vec::new();
 
     // Pass 1 (pure, no fs access): filter out pid==0 / duplicate / unmappable
     // entries and resolve each survivor's mapped path. Collected instead of
@@ -160,14 +166,28 @@ pub async fn reconcile(
     // One blocking hop over every resolved entry, instead of one per track
     // on the async executor.
     let candidates: Vec<Option<PathBuf>> = tokio::task::spawn_blocking({
-        let resolved = resolved
+        // (mapped path, expected duration, expected size) — the latter
+        // two let `candidate_matches` reject a same-shaped filename that
+        // holds a different recording ("Intro 2.mp3" → "Intro.mp3").
+        let probes = resolved
             .iter()
-            .map(|(_, _, mapped)| mapped.clone())
+            .map(|(idx, _, mapped)| {
+                let t = &lib.tracks()[*idx];
+                (
+                    mapped.clone(),
+                    i64::from(t.duration_ms()),
+                    i64::from(t.size_bytes()),
+                )
+            })
             .collect::<Vec<_>>();
         move || {
-            resolved
+            probes
                 .into_iter()
-                .map(|mapped| crate::fs::relink::dedupe_suffix_candidate(Path::new(&mapped)))
+                .map(|(mapped, duration_ms, size_bytes)| {
+                    let base = crate::fs::relink::dedupe_suffix_candidate(Path::new(&mapped))?;
+                    crate::fs::relink::candidate_matches(&base, Some(duration_ms), Some(size_bytes))
+                        .then_some(base)
+                })
                 .collect()
         }
     })
@@ -180,7 +200,12 @@ pub async fn reconcile(
     // exactly as before.
     for ((idx, raw_path, mapped), candidate) in resolved.into_iter().zip(candidates) {
         if let Some(base) = candidate {
-            deferred.push((idx, raw_path, base.to_string_lossy().into_owned()));
+            deferred.push(DeferredEntry {
+                idx,
+                raw_path,
+                mapped,
+                base: base.to_string_lossy().into_owned(),
+            });
             continue;
         }
 
@@ -194,7 +219,7 @@ pub async fn reconcile(
             mapped,
             rules,
             &local_map,
-            &local_by_path,
+            &mut index,
             &mut seen_paths,
             &mut keep,
             &mut aliases,
@@ -215,7 +240,13 @@ pub async fn reconcile(
             ),
         );
     }
-    for (idx, raw_path, base) in deferred {
+    for DeferredEntry {
+        idx,
+        raw_path,
+        mapped,
+        base,
+    } in deferred
+    {
         let t = &lib.tracks()[idx];
         let pid = t.persistent_id();
         if let Some(&owner) = seen_paths.get(&base) {
@@ -225,17 +256,56 @@ pub async fn reconcile(
             stats.merged += 1;
             continue;
         }
-        stats.relinked += 1;
+        // No .itl entry claimed the base file this run, but a *database*
+        // row may still own it (a row from a previous sync whose entry
+        // is gone, an Add Folder row, another source). Relinking onto it
+        // would trip UNIQUE(file_path) and abort the whole import, so
+        // decide here instead of letting the UPDATE fail.
+        let (target, relinked) = match index.owner_of(&base) {
+            None => (base, true),
+            Some(owner) => {
+                let owner_pid = parse_pid(owner.persistent_id.as_deref());
+                if local_map.contains_key(&pid) {
+                    // We already own a row under this persistent id;
+                    // adopting the base file's row would collide on
+                    // UNIQUE(persistent_id). Apply in place — the entry
+                    // stays missing, exactly as before the recovery
+                    // attempt, rather than aborting the sync.
+                    log(
+                        LogLevel::Info,
+                        &format!(
+                            "track {pid:016x}: base file {base:?} owned by another row; \
+                             leaving path unchanged"
+                        ),
+                    );
+                    (mapped, false)
+                } else if owner_pid.is_some_and(|op| op != pid && local_map.contains_key(&op)) {
+                    // The owner is a live row of this source whose own
+                    // entry simply resolved elsewhere: merge into it so
+                    // playlists keep the song.
+                    aliases.insert(pid, owner_pid.expect("checked above"));
+                    stats.merged += 1;
+                    continue;
+                } else {
+                    // Stale or foreign row: `apply_entry` adopts it via
+                    // the by-path branch instead of inserting.
+                    (base, true)
+                }
+            }
+        };
+        if relinked {
+            stats.relinked += 1;
+        }
         apply_entry(
             engine,
             obs,
             source_id,
             t,
             &raw_path,
-            base,
+            target,
             rules,
             &local_map,
-            &local_by_path,
+            &mut index,
             &mut seen_paths,
             &mut keep,
             &mut aliases,
@@ -285,6 +355,17 @@ pub async fn reconcile(
         log(LogLevel::Warn, &detail);
     }
 
+    if stats.rekeyed > 0 {
+        log(
+            LogLevel::Info,
+            &format!(
+                "{} rows re-adopted by file path (persistent id changed upstream); \
+                 local ratings and play counts resolved by conflict rules",
+                stats.rekeyed
+            ),
+        );
+    }
+
     if rules.deletes == crate::sync::conflict::DeleteStrategy::Respect {
         let deleted = tracks::delete_missing(engine, source_id, &keep).await?;
         stats.deleted = deleted;
@@ -310,7 +391,7 @@ async fn apply_entry(
     mapped: String,
     rules: &ConflictRules,
     local_map: &std::collections::HashMap<u64, LocalTrackForSync>,
-    local_by_path: &std::collections::HashMap<String, i64>,
+    index: &mut PathIndex,
     seen_paths: &mut HashMap<String, u64>,
     keep: &mut Vec<u64>,
     aliases: &mut HashMap<u64, u64>,
@@ -366,20 +447,37 @@ async fn apply_entry(
 
     match local_map.get(&pid) {
         None => {
-            if let Some(&existing_id) = local_by_path.get(&mapped) {
+            if let Some(existing) = index.owner_of(&mapped) {
                 // Same file already imported under another persistent
                 // id: re-key it rather than trip UNIQUE(file_path).
-                tracks::set_persistent_id(engine, existing_id, &crate::db::sync_util::pid_hex(pid))
-                    .await?;
+                // itl-rs 1.2 re-keyed every entry, so on the first sync
+                // after that upgrade this is the *whole* library — the
+                // local rating and play count must survive it, which
+                // means running the same conflict rules as a pid match
+                // rather than taking the iTunes values wholesale.
+                let existing_id = existing.id;
+                let foreign = existing.sync_source_id != Some(source_id);
+                let (resolved_rating, resolved_play_count) =
+                    resolve_user_state(&upsert, existing, rules);
+                let hex = crate::db::sync_util::pid_hex(pid);
+                if foreign {
+                    // Added by "Add Folder" (NULL source) or by another
+                    // sync source: claim it for this one as we re-key.
+                    tracks::adopt_into_source(engine, existing_id, source_id, &hex).await?;
+                } else {
+                    tracks::set_persistent_id(engine, existing_id, &hex).await?;
+                }
                 tracks::update_descriptive_fields(
                     engine,
                     existing_id,
                     &upsert,
-                    upsert.rating,
-                    upsert.play_count,
+                    resolved_rating,
+                    resolved_play_count,
                 )
                 .await?;
+                index.claim(existing_id, &mapped);
                 stats.updated += 1;
+                stats.rekeyed += 1;
                 ingest_candidates.push(IngestCandidate {
                     track_id: existing_id,
                     source_path: PathBuf::from(raw_path),
@@ -403,6 +501,10 @@ async fn apply_entry(
                 resolved_play_count,
             )
             .await?;
+            // The row's path may have just moved; keep the by-path
+            // index in step so a later entry can't re-claim the path it
+            // vacated (and overwrite this row through it).
+            index.claim(local.id, &mapped);
             stats.updated += 1;
             ingest_candidates.push(IngestCandidate {
                 track_id: local.id,
@@ -411,6 +513,60 @@ async fn apply_entry(
         }
     }
     Ok(())
+}
+
+/// One entry held back for collision-suffix recovery: its mapped file
+/// is gone but the un-suffixed `base` next to it exists and passed
+/// `relink::candidate_matches`.
+struct DeferredEntry {
+    idx: usize,
+    raw_path: String,
+    mapped: String,
+    base: String,
+}
+
+/// `file_path → local row`, kept in step with the writes this run makes.
+///
+/// The DB snapshot goes stale the moment a row is repointed at a new
+/// file: without maintenance a later entry could adopt the row through
+/// the path it just vacated and overwrite it (destroying the first
+/// track and its playlist slots).
+struct PathIndex {
+    by_path: HashMap<String, LocalTrackForSync>,
+    path_of_id: HashMap<i64, String>,
+}
+
+impl PathIndex {
+    fn new(by_path: HashMap<String, LocalTrackForSync>) -> Self {
+        let path_of_id = by_path.iter().map(|(p, t)| (t.id, p.clone())).collect();
+        Self {
+            by_path,
+            path_of_id,
+        }
+    }
+
+    /// The row that owned `path` at the start of the run and has not yet
+    /// been claimed by an entry in it.
+    fn owner_of(&self, path: &str) -> Option<&LocalTrackForSync> {
+        self.by_path.get(path)
+    }
+
+    /// Row `id` now owns `new_path`: drop the key it vacated and take
+    /// `new_path` out of circulation so nothing else adopts it (the
+    /// second claimant hits `seen_paths` and becomes an alias instead).
+    fn claim(&mut self, id: i64, new_path: &str) {
+        if let Some(old) = self.path_of_id.remove(&id) {
+            self.by_path.remove(&old);
+        }
+        if let Some(prev) = self.by_path.remove(new_path) {
+            self.path_of_id.remove(&prev.id);
+        }
+    }
+}
+
+/// `"0123abcd..."` → the persistent id it encodes.
+fn parse_pid(hex: Option<&str>) -> Option<u64> {
+    u64::from_str_radix(hex?, 16).ok()
 }
 
 /// Bounds how many individual warnings of one category are surfaced per run.
@@ -530,6 +686,72 @@ mod tests {
         assert!(!t.allow());
         assert!(!t.allow());
         assert_eq!(t.suppressed(), 2);
+    }
+
+    fn local(id: i64, pid: Option<&str>) -> LocalTrackForSync {
+        LocalTrackForSync {
+            id,
+            rating: 0,
+            play_count: 0,
+            skip_count: 0,
+            last_played: None,
+            last_skipped: None,
+            loved: false,
+            original_path: None,
+            sync_source_id: Some(1),
+            persistent_id: pid.map(str::to_string),
+        }
+    }
+
+    fn index_of(entries: &[(&str, i64)]) -> PathIndex {
+        PathIndex::new(
+            entries
+                .iter()
+                .map(|(p, id)| ((*p).to_string(), local(*id, None)))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn path_index_claim_drops_the_vacated_key() {
+        let mut idx = index_of(&[("/m/a.mp3", 1), ("/m/b.mp3", 2)]);
+        // Row 1 moves from a.mp3 to c.mp3.
+        idx.claim(1, "/m/c.mp3");
+        assert!(
+            idx.owner_of("/m/a.mp3").is_none(),
+            "a later entry must not adopt row 1 through the path it vacated"
+        );
+        assert!(idx.owner_of("/m/c.mp3").is_none(), "claimed this run");
+        assert_eq!(idx.owner_of("/m/b.mp3").unwrap().id, 2);
+    }
+
+    #[test]
+    fn path_index_claim_evicts_a_previous_owner_of_the_new_path() {
+        let mut idx = index_of(&[("/m/a.mp3", 1), ("/m/b.mp3", 2)]);
+        // Row 1 takes over b.mp3, which row 2 held.
+        idx.claim(1, "/m/b.mp3");
+        assert!(idx.owner_of("/m/b.mp3").is_none());
+        assert!(idx.owner_of("/m/a.mp3").is_none());
+        // Row 2 is now pathless; re-claiming for it must not resurrect
+        // the key row 1 took.
+        idx.claim(2, "/m/d.mp3");
+        assert!(idx.owner_of("/m/b.mp3").is_none());
+    }
+
+    #[test]
+    fn path_index_claim_on_an_unknown_row_only_takes_the_path() {
+        // The insert branch never claims, but a freshly-adopted foreign
+        // row has no prior key in the index either.
+        let mut idx = index_of(&[("/m/a.mp3", 1)]);
+        idx.claim(99, "/m/a.mp3");
+        assert!(idx.owner_of("/m/a.mp3").is_none());
+    }
+
+    #[test]
+    fn parse_pid_reads_hex_only() {
+        assert_eq!(parse_pid(Some("00000000deadbeef")), Some(0xDEAD_BEEF));
+        assert_eq!(parse_pid(Some("NOT_HEX")), None);
+        assert_eq!(parse_pid(None), None);
     }
 
     #[test]

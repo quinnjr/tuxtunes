@@ -136,6 +136,15 @@ export class PlaybackService implements OnDestroy {
 
   private readonly unlisteners: UnlistenFn[] = [];
 
+  /**
+   * Generation counter for user-initiated playback starts. Bumped by
+   * `play()`, `next()`, `previous()` and `advanceFromQueue()` so an
+   * in-flight `next()` skip-walk (see below) can detect that a newer
+   * start superseded it and abort instead of racing to play a stale
+   * candidate over whatever the user just started.
+   */
+  private playSeq = 0;
+
   constructor() {
     void this.subscribeEvents();
   }
@@ -239,6 +248,7 @@ export class PlaybackService implements OnDestroy {
   }
 
   async play(trackId: number): Promise<void> {
+    this.playSeq++;
     await this.tryPlay(trackId);
   }
 
@@ -345,14 +355,22 @@ export class PlaybackService implements OnDestroy {
     });
   }
 
-  /** Pop the head of the queue and start playing it. */
+  /**
+   * Pop the head of the queue and start playing it. Keeps popping and
+   * discarding on failure — via `tryPlay`, which reports and flags the
+   * track itself — until one starts or the queue drains, so a single
+   * bad queued file doesn't get reported as "started" and stall
+   * `next()` before it falls through to the on-screen list.
+   */
   async advanceFromQueue(): Promise<TrackRow | null> {
-    const q = this.queue();
-    if (q.length === 0) return null;
-    const [head, ...rest] = q;
-    this.queue.set(rest);
-    await this.play(head.id);
-    return head;
+    this.playSeq++;
+    for (;;) {
+      const q = this.queue();
+      if (q.length === 0) return null;
+      const [head, ...rest] = q;
+      this.queue.set(rest);
+      if (await this.tryPlay(head.id)) return head;
+    }
   }
 
   /**
@@ -363,6 +381,14 @@ export class PlaybackService implements OnDestroy {
    * so one bad file never stops the playlist. Returns the track that
    * started, or null at the end of the list.
    *
+   * The skip-walk is bounded (25 consecutive failures) and cancellable:
+   * `playSeq` is snapshotted once `advanceFromQueue()` has settled, and
+   * re-checked after every awaited `tryPlay` so a walk grinding through
+   * an unmounted drive backs off the moment a newer user-initiated start
+   * (`play()`, `next()`, `previous()`, `advanceFromQueue()`) supersedes
+   * it, rather than racing an IPC call + DB write + list re-render per
+   * row against whatever the user just started.
+   *
    * `afterId` exists because the engine sends `track-changed: null`
    * right after `track-ended`; by the time an awaited step resumes,
    * `currentTrackId` may already be null.
@@ -370,12 +396,22 @@ export class PlaybackService implements OnDestroy {
   async next(afterId: number | null = this.currentTrackId()): Promise<TrackRow | null> {
     const fromQueue = await this.advanceFromQueue();
     if (fromQueue !== null) return fromQueue;
+    const seq = this.playSeq;
     const rows = this.library.tracks();
     const start = afterId === null ? -1 : rows.findIndex((t) => t.id === afterId);
     if (start === -1 && afterId !== null) return null;
+    let failCount = 0;
     for (const candidate of rows.slice(start + 1)) {
       if (candidate.missing) continue;
-      if (await this.tryPlay(candidate.id)) return candidate;
+      if (seq !== this.playSeq) return null;
+      const started = await this.tryPlay(candidate.id);
+      if (seq !== this.playSeq) return null;
+      if (started) return candidate;
+      failCount++;
+      if (failCount >= 25) {
+        this.ui.reportError(`Stopped: ${failCount} tracks in a row could not be played`);
+        return null;
+      }
     }
     return null;
   }
@@ -406,6 +442,7 @@ export class PlaybackService implements OnDestroy {
    * with no such track, it falls back to restarting.
    */
   async previous(): Promise<void> {
+    this.playSeq++;
     const prevId = this.previousTrackId();
     if (this.positionMs() <= 3000 && prevId !== null) {
       await this.play(prevId);

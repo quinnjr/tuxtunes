@@ -155,6 +155,30 @@ pub async fn link_parent(
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
 }
 
+/// Snapshot of every playlist's current `parent_id`, keyed by local id.
+/// Used by the sync reconciler to detect a `parent_id` cycle before
+/// committing a link (`link_parent`), without a round-trip per row.
+pub async fn parent_id_map(
+    engine: &SqliteRawEngine,
+) -> Result<std::collections::HashMap<i64, Option<i64>>, PlaylistsError> {
+    let sql = "SELECT id, parent_id FROM playlists";
+    let rows = engine
+        .raw_sql_query(sql, &[])
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    let mut map = std::collections::HashMap::with_capacity(rows.len());
+    for r in rows {
+        let json = r.into_json();
+        let id = json
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| PlaylistsError::Query(anyhow::anyhow!("row missing id")))?;
+        let parent_id = json.get("parent_id").and_then(|v| v.as_i64());
+        map.insert(id, parent_id);
+    }
+    Ok(map)
+}
+
 /// User-side playlist row used by the sidebar. Excludes the rule JSON
 /// from the projection so the sidebar query stays cheap; the editor
 /// fetches the full rule via `get_smart_rule` when opening one.
@@ -584,6 +608,104 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(check, parent);
+    }
+
+    #[tokio::test]
+    async fn link_parent_none_clears_the_column() {
+        let db = tmp().await;
+        let child = upsert(
+            &db.engine,
+            &PlaylistUpsert {
+                persistent_id: 1,
+                sync_source_id: 1,
+                name: "Child",
+                kind: PlaylistKind::Smart,
+                parent_persistent_id: Some(2),
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: Some(r#"{"x":1}"#.into()),
+            },
+        )
+        .await
+        .unwrap();
+        let parent = upsert(
+            &db.engine,
+            &PlaylistUpsert {
+                persistent_id: 2,
+                sync_source_id: 1,
+                name: "Folder",
+                kind: PlaylistKind::Folder,
+                parent_persistent_id: None,
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: None,
+            },
+        )
+        .await
+        .unwrap();
+        link_parent(&db.engine, child, Some(parent)).await.unwrap();
+        let before: Option<i64> = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT parent_id FROM playlists WHERE id = ?",
+                &[FilterValue::Int(child)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(before, Some(parent));
+
+        // Clearing a stale parent link (e.g. the source no longer
+        // reports a parent for this playlist).
+        link_parent(&db.engine, child, None).await.unwrap();
+        let after: Option<i64> = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT parent_id FROM playlists WHERE id = ?",
+                &[FilterValue::Int(child)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(after, None);
+    }
+
+    #[tokio::test]
+    async fn parent_id_map_reflects_current_links() {
+        let db = tmp().await;
+        let parent = upsert(
+            &db.engine,
+            &PlaylistUpsert {
+                persistent_id: 1,
+                sync_source_id: 1,
+                name: "Folder",
+                kind: PlaylistKind::Folder,
+                parent_persistent_id: None,
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: None,
+            },
+        )
+        .await
+        .unwrap();
+        let child = upsert(
+            &db.engine,
+            &PlaylistUpsert {
+                persistent_id: 2,
+                sync_source_id: 1,
+                name: "Child",
+                kind: PlaylistKind::Regular,
+                parent_persistent_id: None,
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: None,
+            },
+        )
+        .await
+        .unwrap();
+        link_parent(&db.engine, child, Some(parent)).await.unwrap();
+
+        let map = parent_id_map(&db.engine).await.unwrap();
+        assert_eq!(map.get(&parent).copied(), Some(None));
+        assert_eq!(map.get(&child).copied(), Some(Some(parent)));
     }
 
     #[tokio::test]

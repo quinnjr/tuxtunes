@@ -24,6 +24,15 @@ export interface PlaylistNode {
  * backend's order (sort_order, then name). A playlist whose parent is
  * missing is promoted to the root rather than dropped, so a stale
  * parent link never hides a playlist.
+ *
+ * A `parent_id` cycle of length >= 2 (A -> B -> A, or longer) leaves
+ * every node in it — and anything hanging off it — unreachable from
+ * `roots`, since each is only ever linked as some other cycle member's
+ * child. `promoteCycles` finds those unreached nodes, tells cycle
+ * members apart from nodes merely hanging off a cycle, and promotes
+ * just the cycle members to root (unlinking each from whichever
+ * sibling was holding it) so the cycle renders as top-level folders
+ * instead of silently vanishing.
  */
 export function buildPlaylistTree(playlists: readonly Playlist[]): PlaylistNode[] {
   const nodes = new Map<number, PlaylistNode>();
@@ -35,7 +44,48 @@ export function buildPlaylistTree(playlists: readonly Playlist[]): PlaylistNode[
     if (parent && parent !== node) parent.children.push(node);
     else roots.push(node);
   }
+  promoteCycles(nodes, roots);
   return roots;
+}
+
+function promoteCycles(nodes: Map<number, PlaylistNode>, roots: PlaylistNode[]): void {
+  const reachedFromRoot = new Set<number>();
+  const visit = (list: PlaylistNode[]): void => {
+    for (const node of list) {
+      if (reachedFromRoot.has(node.playlist.id)) continue;
+      reachedFromRoot.add(node.playlist.id);
+      visit(node.children);
+    }
+  };
+  visit(roots);
+
+  for (const node of nodes.values()) {
+    if (reachedFromRoot.has(node.playlist.id)) continue;
+    if (!isCycleMember(node, nodes, reachedFromRoot)) continue;
+    const parentId = node.playlist.parentId;
+    const parent = parentId === null ? undefined : nodes.get(parentId);
+    if (parent) {
+      const idx = parent.children.indexOf(node);
+      if (idx !== -1) parent.children.splice(idx, 1);
+    }
+    roots.push(node);
+  }
+}
+
+/** Walks `node`'s parent chain; true if it leads back to `node` itself. */
+function isCycleMember(
+  node: PlaylistNode,
+  nodes: Map<number, PlaylistNode>,
+  reachedFromRoot: ReadonlySet<number>,
+): boolean {
+  let cursor: PlaylistNode | undefined = node;
+  for (let i = 0; i < nodes.size; i++) {
+    const parentId: number | null = cursor?.playlist.parentId ?? null;
+    cursor = parentId === null ? undefined : nodes.get(parentId);
+    if (cursor === node) return true;
+    if (cursor === undefined || reachedFromRoot.has(cursor.playlist.id)) return false;
+  }
+  return false;
 }
 
 @Component({

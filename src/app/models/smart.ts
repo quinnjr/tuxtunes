@@ -147,3 +147,18 @@ export function defaultRule(): SmartRule {
     root: { match_all: true, children: [defaultLeaf()] },
   };
 }
+
+/**
+ * Prepare a rule for the (one-level-deep) row editor. Imported iTunes rules
+ * are often shaped as a single wrapper group under root (or nested wrapper
+ * groups); unwrap those so the editor shows real rows. If root still
+ * contains group children afterwards, they carry distinct all/any semantics
+ * and are left alone — the editor renders them as read-only rows.
+ */
+export function normalizeForEditor(rule: SmartRule): SmartRule {
+  let root = rule.root;
+  while (root.children.length === 1 && isGroup(root.children[0])) {
+    root = root.children[0];
+  }
+  return root === rule.root ? rule : { ...rule, root };
+}

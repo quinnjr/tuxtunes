@@ -1,7 +1,7 @@
 //! Playback Tauri commands.
 
 use crate::db::tracks;
-use crate::playback::config::{PlaybackPrefs, TrackAudioFormat};
+use crate::playback::config::TrackAudioFormat;
 use crate::playback::{EngineCommand, EngineError};
 use crate::runtime::AppState;
 
@@ -27,7 +27,10 @@ pub async fn play_track(state: tauri::State<'_, AppState>, track_id: i64) -> Res
         return Err(format!("File not found: {}", track.file_path));
     }
 
-    let prefs = PlaybackPrefs::default();
+    // Must be the persisted prefs, not defaults: `build_properties`
+    // re-applies audio-device / audio-exclusive / replaygain before every
+    // loadfile, so defaults here would clobber what ApplyDevice set.
+    let prefs = crate::commands::audio::load_playback_prefs(&state.db.engine).await;
 
     let fmt = TrackAudioFormat {
         sample_rate: track.sample_rate.map(|r| r as u32),

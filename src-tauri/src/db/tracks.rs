@@ -229,10 +229,19 @@ pub struct LocalTrackForSync {
     #[serde(deserialize_with = "crate::db::sync_util::sqlite_bool")]
     pub loved: bool,
     pub original_path: Option<String>,
+    /// Owning sync source, or `None` for rows added by "Add Folder".
+    /// `load_local_state_by_path` scans every row regardless of source
+    /// (`file_path` is globally UNIQUE), so the reconciler needs this to
+    /// know when adopting a row also means claiming it for its source.
+    #[serde(default)]
+    pub sync_source_id: Option<i64>,
+    /// Present only in `load_local_state_by_path` results.
+    #[serde(default)]
+    pub persistent_id: Option<String>,
 }
 
 const SELECT_LOCAL_TRACK_FIELDS: &str = "id, rating, play_count, skip_count, last_played, \
-     last_skipped, loved, original_path";
+     last_skipped, loved, original_path, sync_source_id";
 
 /// Bulk-load every synced track's user-state into a `persistent_id
 /// (u64) → LocalTrackForSync` map. Replaces per-track
@@ -347,6 +356,14 @@ pub async fn insert_from_itl(
 /// Update an existing track's descriptive fields plus the two
 /// already-resolved user-state fields. User-state not listed here
 /// (skip_count, last_played, last_skipped, loved) is preserved as-is.
+///
+/// When `t.file_path` differs from the row's current path the row has
+/// been relinked (collision-suffix recovery, a changed path mapping), so
+/// the stale verification state is reset too: `import_status` back to
+/// `'ok'`, `file_hash` cleared so the next Verify re-canonicalises the
+/// new file, and `verified_at` refreshed. SQLite evaluates every SET
+/// expression against the pre-UPDATE row, so the `file_path = ?`
+/// comparisons below see the old value.
 pub async fn update_descriptive_fields(
     engine: &SqliteRawEngine,
     local_id: i64,
@@ -360,7 +377,10 @@ pub async fn update_descriptive_fields(
         title = ?, artist = ?, album = ?, album_artist = ?, composer = ?, \
         genre = ?, kind = ?, duration_ms = ?, size_bytes = ?, bit_rate = ?, \
         sample_rate = ?, track_number = ?, disc_number = ?, year = ?, bpm = ?, \
-        rating = ?, play_count = ?, file_path = ? \
+        rating = ?, play_count = ?, file_path = ?, \
+        import_status = CASE WHEN file_path = ? THEN import_status ELSE 'ok' END, \
+        file_hash = CASE WHEN file_path = ? THEN file_hash ELSE NULL END, \
+        verified_at = CASE WHEN file_path = ? THEN verified_at ELSE CURRENT_TIMESTAMP END \
         WHERE id = ?";
     let params = vec![
         FV::String(t.title.to_string()),
@@ -380,6 +400,9 @@ pub async fn update_descriptive_fields(
         opt_int(t.bpm),
         FV::Int(resolved_rating),
         FV::Int(resolved_play_count),
+        FV::String(t.file_path.to_string()),
+        FV::String(t.file_path.to_string()),
+        FV::String(t.file_path.to_string()),
         FV::String(t.file_path.to_string()),
         FV::Int(local_id),
     ];
@@ -432,36 +455,67 @@ pub async fn set_file_paths(
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
-/// `file_path → local id` for every track of a sync source. Lets the
-/// reconciler re-adopt rows whose persistent id changed (a parser fix
-/// upstream, or an iTunes rebuild) instead of tripping the UNIQUE
-/// constraint on `file_path`.
-pub async fn load_local_ids_by_path(
+/// `file_path → local state` for **every** track row, whatever sync
+/// source owns it (including "Add Folder" rows with a NULL
+/// `sync_source_id`). Lets the reconciler re-adopt rows whose
+/// persistent id changed (a parser fix upstream, or an iTunes rebuild)
+/// instead of tripping the UNIQUE constraint on `file_path` — which is
+/// global, so scoping this to one source made foreign rows invisible
+/// and turned every such collision into an aborted sync.
+///
+/// The value carries the row's user state so the reconciler can run the
+/// same conflict rules it uses on a pid match, rather than blindly
+/// overwriting local ratings and play counts.
+pub async fn load_local_state_by_path(
     engine: &SqliteRawEngine,
-    sync_source_id: i64,
-) -> Result<std::collections::HashMap<String, i64>, TracksError> {
-    use prax_query::filter::FilterValue as FV;
+) -> Result<std::collections::HashMap<String, LocalTrackForSync>, TracksError> {
+    let sql = format!("SELECT {SELECT_LOCAL_TRACK_FIELDS}, persistent_id, file_path FROM tracks");
     let rows = engine
-        .raw_sql_query(
-            "SELECT id, file_path FROM tracks WHERE sync_source_id = ?",
-            &[FV::Int(sync_source_id)],
-        )
+        .raw_sql_query(&sql, &[])
         .await
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
     let mut out = std::collections::HashMap::with_capacity(rows.len());
     for r in rows {
-        let v = r.into_json();
-        if let (Some(id), Some(p)) = (
-            v.get("id").and_then(|x| x.as_i64()),
-            v.get("file_path").and_then(|x| x.as_str()),
-        ) {
-            out.insert(p.to_string(), id);
-        }
+        let mut v = r.into_json();
+        let Some(path) = v
+            .as_object_mut()
+            .and_then(|o| o.remove("file_path"))
+            .and_then(|v| v.as_str().map(str::to_string))
+        else {
+            continue;
+        };
+        let t: LocalTrackForSync =
+            serde_json::from_value(v).map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+        out.insert(path, t);
     }
     Ok(out)
 }
 
-/// Re-key a row to a new persistent id (see `load_local_ids_by_path`).
+/// Claim a row for `sync_source_id` while re-keying it to `pid_hex`.
+/// Used when the reconciler adopts a row that "Add Folder" (NULL
+/// source) or another sync source created at the same path.
+pub async fn adopt_into_source(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+    sync_source_id: i64,
+    pid_hex: &str,
+) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    engine
+        .raw_sql_execute(
+            "UPDATE tracks SET persistent_id = ?, sync_source_id = ? WHERE id = ?",
+            &[
+                FV::String(pid_hex.to_string()),
+                FV::Int(sync_source_id),
+                FV::Int(local_id),
+            ],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
+/// Re-key a row to a new persistent id (see `load_local_state_by_path`).
 pub async fn set_persistent_id(
     engine: &SqliteRawEngine,
     local_id: i64,
@@ -1122,5 +1176,136 @@ mod tests {
 
         let row = get(&db.engine, b).await.unwrap();
         assert_eq!(row.file_path, "/music/base 2.flac");
+    }
+
+    /// `file_path` is globally UNIQUE, so the by-path map must see rows
+    /// that belong to no sync source (Add Folder) or to another one —
+    /// otherwise the reconciler INSERTs on top of them and the UNIQUE
+    /// violation aborts the whole sync.
+    #[tokio::test]
+    async fn load_local_state_by_path_covers_rows_of_every_source() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 's', '/s', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        // One synced row, one Add Folder row (NULL sync_source_id).
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO tracks (sync_source_id, persistent_id, title, duration_ms, \
+                 size_bytes, file_path, playlist_ids, rating, play_count, loved) VALUES \
+                 (1, '00000000deadbeef', 'synced', 0, 0, '/music/a.mp3', '[]', 80, 5, 0)",
+                &[],
+            )
+            .await
+            .unwrap();
+        let free_id = insert_fixture(&db.engine, "added", "/music/b.mp3").await;
+
+        let map = load_local_state_by_path(&db.engine).await.unwrap();
+        assert_eq!(map.len(), 2);
+
+        let synced = map.get("/music/a.mp3").expect("synced row present");
+        assert_eq!(synced.sync_source_id, Some(1));
+        assert_eq!(synced.persistent_id.as_deref(), Some("00000000deadbeef"));
+        assert_eq!(synced.rating, 80);
+        assert_eq!(synced.play_count, 5);
+
+        let free = map.get("/music/b.mp3").expect("NULL-source row present");
+        assert_eq!(free.id, free_id);
+        assert_eq!(free.sync_source_id, None);
+        assert_eq!(free.persistent_id, None);
+    }
+
+    #[tokio::test]
+    async fn adopt_into_source_claims_a_null_source_row() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 's', '/s', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let id = insert_fixture(&db.engine, "added", "/music/b.mp3").await;
+        adopt_into_source(&db.engine, id, 1, "00000000feedface")
+            .await
+            .unwrap();
+        let map = load_local_state_by_path(&db.engine).await.unwrap();
+        let row = map.get("/music/b.mp3").unwrap();
+        assert_eq!(row.sync_source_id, Some(1));
+        assert_eq!(row.persistent_id.as_deref(), Some("00000000feedface"));
+    }
+
+    /// A relink through `update_descriptive_fields` must clear the stale
+    /// verification state, or the next Verify canonicalises the old
+    /// file's hash against the new file and flags it as modified.
+    #[tokio::test]
+    async fn update_descriptive_fields_resets_verify_state_when_the_path_moves() {
+        let db = tmp_db().await;
+        let id = insert_fixture(&db.engine, "t", "/music/old 2.mp3").await;
+        db.engine
+            .raw_sql_execute(
+                "UPDATE tracks SET import_status = 'missing_source', file_hash = 'abc123' \
+                 WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap();
+
+        let mut upsert = ItlTrackUpsert {
+            persistent_id: 0xDEAD_BEEF,
+            sync_source_id: 1,
+            title: "t",
+            artist: None,
+            album: None,
+            album_artist: None,
+            composer: None,
+            genre: None,
+            kind: None,
+            duration_ms: 0,
+            size_bytes: 0,
+            bit_rate: None,
+            sample_rate: None,
+            track_number: None,
+            disc_number: None,
+            year: None,
+            bpm: None,
+            rating: 0,
+            play_count: 0,
+            date_added_unix: 0,
+            file_path: "/music/old.mp3",
+            original_path: None,
+        };
+        update_descriptive_fields(&db.engine, id, &upsert, 0, 0)
+            .await
+            .unwrap();
+        let row = get(&db.engine, id).await.unwrap();
+        assert_eq!(row.file_path, "/music/old.mp3");
+        assert_eq!(row.import_status, "ok");
+        assert_eq!(row.file_hash, None);
+
+        // An update that leaves the path alone must not resurrect a row
+        // Verify legitimately flagged.
+        db.engine
+            .raw_sql_execute(
+                "UPDATE tracks SET import_status = 'missing_source', file_hash = 'abc123' \
+                 WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap();
+        upsert.title = "t2";
+        update_descriptive_fields(&db.engine, id, &upsert, 0, 0)
+            .await
+            .unwrap();
+        let row = get(&db.engine, id).await.unwrap();
+        assert_eq!(row.title, "t2");
+        assert_eq!(row.import_status, "missing_source");
+        assert_eq!(row.file_hash.as_deref(), Some("abc123"));
     }
 }

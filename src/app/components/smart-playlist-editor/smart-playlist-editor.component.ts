@@ -5,6 +5,7 @@ import {
   effect,
   inject,
   signal,
+  untracked,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import {
@@ -25,9 +26,29 @@ import {
   defaultValue,
   fieldById,
   isGroup,
+  normalizeForEditor,
 } from '../../models/smart';
 import { LibraryService } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
+
+/**
+ * A displayed row references its real index into `root.children`. A leaf
+ * row is fully editable; a group row (a nested `ConditionGroup` — imported
+ * iTunes rules can carry these, and they have distinct all/any semantics)
+ * is shown read-only with only a remove control — editing nested groups is
+ * out of scope for the v1, one-level-deep editor.
+ */
+export interface EditorLeafRow {
+  index: number;
+  leaf: LeafCondition;
+}
+
+export interface EditorGroupRow {
+  index: number;
+  group: ConditionGroup;
+}
+
+export type EditorRow = EditorLeafRow | EditorGroupRow;
 
 /**
  * iTunes-style smart playlist sheet: "Match [all|any] of the following
@@ -70,8 +91,10 @@ export class SmartPlaylistEditorComponent implements OnDestroy {
   protected readonly matchCount = signal<number | null>(null);
   protected readonly saving = signal(false);
   protected readonly loading = signal(false);
+  /** True when the last `load()` for the open playlist rejected. */
+  protected readonly loadFailed = signal(false);
 
-  /** Flat view of the root group's leaf rules (v1 editor is one level deep). */
+  /** Every root child, in its real `root.children` index. */
   protected readonly rows = computed(this.#computeRows.bind(this));
 
   #computeOpen(): boolean {
@@ -82,19 +105,29 @@ export class SmartPlaylistEditorComponent implements OnDestroy {
     return this.ui.smartEditor()?.playlistId ?? null;
   }
 
-  #computeRows(): LeafCondition[] {
-    return this.rule().root.children.filter((c): c is LeafCondition => !isGroup(c));
+  #computeRows(): EditorRow[] {
+    return this.rule().root.children.map((child, index) =>
+      isGroup(child) ? { index, group: child } : { index, leaf: child },
+    );
+  }
+
+  protected isGroupRow(row: EditorRow): row is EditorGroupRow {
+    return 'group' in row;
   }
 
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
   private previewSeq = 0;
+  private loadSeq = 0;
 
   constructor() {
-    // (Re)load whenever the sheet opens for a different target.
+    // (Re)load whenever the sheet opens for a different target. Reading the
+    // target must stay the only tracked dependency: `load()` itself awaits,
+    // and re-running it whenever e.g. `library.playlists()` changes in the
+    // background would discard unsaved edits.
     effect(() => {
       const target = this.ui.smartEditor();
       if (target === null) return;
-      void this.load(target.playlistId);
+      untracked(() => void this.load(target.playlistId));
     });
     // Debounced live preview on every rule change while open.
     effect(() => {
@@ -108,19 +141,34 @@ export class SmartPlaylistEditorComponent implements OnDestroy {
     if (this.previewTimer !== null) clearTimeout(this.previewTimer);
   }
 
+  protected retryLoad(): void {
+    void this.load(this.editingId());
+  }
+
   private async load(playlistId: number | null): Promise<void> {
+    const seq = ++this.loadSeq;
     this.matchCount.set(null);
+    this.loadFailed.set(false);
     if (playlistId === null) {
       this.name.set('');
       this.rule.set(defaultRule());
+      this.loading.set(false);
       return;
     }
     this.loading.set(true);
     const existing = this.library.playlists().find((p) => p.id === playlistId);
     this.name.set(existing?.name ?? '');
-    const rule = await this.ui.guard(this.library.getSmartRule(playlistId));
-    this.rule.set(rule ?? defaultRule());
-    this.loading.set(false);
+    try {
+      const rule = await this.library.getSmartRule(playlistId);
+      if (seq !== this.loadSeq) return; // superseded by a later load()
+      this.rule.set(rule ? normalizeForEditor(rule) : defaultRule());
+      this.loading.set(false);
+    } catch (error) {
+      if (seq !== this.loadSeq) return;
+      this.ui.reportError(error);
+      this.loadFailed.set(true);
+      this.loading.set(false);
+    }
   }
 
   private schedulePreview(rule: SmartRule): void {
@@ -275,7 +323,7 @@ export class SmartPlaylistEditorComponent implements OnDestroy {
   // ----- actions -----------------------------------------------------------
 
   protected canSave(): boolean {
-    return this.name().trim().length > 0 && !this.saving() && !this.loading();
+    return this.name().trim().length > 0 && !this.saving() && !this.loading() && !this.loadFailed();
   }
 
   protected async save(): Promise<void> {

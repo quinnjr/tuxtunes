@@ -542,6 +542,89 @@ describe('PlaybackService', () => {
     expect(harness.svc.currentArtworkPath()).toBe('/cache/queue.jpg');
   });
 
+  it('advanceFromQueue() skips a failing head and starts the next queued track', async () => {
+    const harness = build(async (cmd, args) => {
+      if (cmd === 'play_track' && (args as { trackId: number }).trackId === 1) {
+        throw new Error('File not found: /gone.mp3');
+      }
+      return [];
+    });
+    await harness.ready;
+    harness.svc.queue.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+    ]);
+    const started = await harness.svc.advanceFromQueue();
+    expect(started?.id).toBe(2);
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 1 });
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 2 });
+    expect(harness.svc.queue()).toEqual([]);
+  });
+
+  it('next() drains a failing queue head then falls through to the list', async () => {
+    const harness = build(async (cmd, args) => {
+      if (cmd === 'play_track' && (args as { trackId: number }).trackId === 1) {
+        throw new Error('File not found: /gone.mp3');
+      }
+      return [];
+    });
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+    ]);
+    harness.svc.currentTrackId.set(1);
+    harness.svc.queue.set([{ ...TRACK, id: 1 }]);
+    const started = await harness.svc.next();
+    expect(started?.id).toBe(2);
+    expect(harness.svc.queue()).toEqual([]);
+  });
+
+  it('next() skip-walk aborts when a newer play() supersedes it mid-walk', async () => {
+    let resolveDeferred: (() => void) | undefined;
+    const deferred = new Promise<void>((resolve) => {
+      resolveDeferred = resolve;
+    });
+    const harness = build(async (cmd, args) => {
+      if (cmd === 'play_track') {
+        const trackId = (args as { trackId: number }).trackId;
+        if (trackId === 2) {
+          await deferred;
+          throw new Error('File not found: /gone.mp3');
+        }
+      }
+      return [];
+    });
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+      { ...TRACK, id: 3 },
+    ]);
+    const nextResult = harness.svc.next(1);
+    // Let the walk reach the awaited (deferred) play_track(2) call.
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    await harness.svc.play(99);
+    resolveDeferred?.();
+    expect(await nextResult).toBeNull();
+    expect(harness.invoke).not.toHaveBeenCalledWith('play_track', { trackId: 3 });
+  });
+
+  it('next() skip-walk caps at 25 consecutive failures and reports once', async () => {
+    const harness = build(async (cmd) => {
+      if (cmd === 'play_track') throw new Error('File not found: /gone.mp3');
+      return [];
+    });
+    await harness.ready;
+    const rows = Array.from({ length: 30 }, (_, i) => ({ ...TRACK, id: i + 1 }));
+    harness.library.tracks.set(rows);
+    const started = await harness.svc.next(null);
+    expect(started).toBeNull();
+    expect(harness.svc.lastError()).toBe('Stopped: 25 tracks in a row could not be played');
+    const playTrackCalls = harness.invoke.mock.calls.filter(([cmd]) => cmd === 'play_track');
+    expect(playTrackCalls.length).toBe(25);
+  });
+
   it('reorderQueue() is a no-op for out-of-range indices', () => {
     const { svc } = build();
     const a = { ...TRACK, id: 1 };

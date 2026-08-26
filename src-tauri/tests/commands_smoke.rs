@@ -450,6 +450,123 @@ async fn play_track_loads_existing_row_and_drives_loadandplay() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 }
 
+/// A file that exists but can't be decoded must not leave the UI parked
+/// on `loading`: libmpv2 reports the error end-file as a bare `Err` from
+/// `wait_event`, which the loop used to drop on the floor.
+#[tokio::test(flavor = "multi_thread")]
+async fn undecodable_file_emits_warning_and_stops() {
+    use tauri::Listener;
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    let path = tmp.path().join("garbage.m4a");
+    let mut bytes = b"\0\0\0\x20ftypM4A garbage not really an mp4 at all".to_vec();
+    bytes.extend((0u16..600).map(|i| i.wrapping_mul(37) as u8));
+    std::fs::write(&path, bytes).unwrap();
+
+    let id: i64 = state
+        .db
+        .engine
+        .raw_sql_scalar(
+            "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('garbage', 0, 0, ?, '[]') RETURNING id",
+            &[prax_query::filter::FilterValue::String(
+                path.display().to_string(),
+            )],
+        )
+        .await
+        .unwrap();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let tx_state = tx.clone();
+    app.handle()
+        .listen(tuxtunes::playback::events::WARNING, move |e| {
+            let _ = tx.send(format!("warning:{}", e.payload()));
+        });
+    app.handle()
+        .listen(tuxtunes::playback::events::STATE_CHANGED, move |e| {
+            let _ = tx_state.send(format!("state:{}", e.payload()));
+        });
+
+    commands::playback::play_track(state, id).await.unwrap();
+
+    let mut saw_warning = false;
+    let mut saw_stopped = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while (!saw_warning || !saw_stopped) && std::time::Instant::now() < deadline {
+        let Ok(Some(msg)) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await
+        else {
+            break;
+        };
+        if msg.starts_with("warning:") && msg.contains("load_failed") {
+            saw_warning = true;
+        }
+        if msg.starts_with("state:") && msg.contains("stopped") {
+            saw_stopped = true;
+        }
+    }
+    assert!(saw_warning, "expected a playback:warning load_failed");
+    assert!(saw_stopped, "expected playback:state-changed stopped");
+}
+
+/// `play_track` must hand the engine the *persisted* prefs — passing
+/// `PlaybackPrefs::default()` re-wrote audio-exclusive/replaygain to
+/// their defaults before every loadfile.
+#[tokio::test(flavor = "multi_thread")]
+async fn play_track_uses_persisted_audio_prefs() {
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    commands::audio::set_audio_device(
+        state.clone(),
+        commands::audio::SetAudioDeviceArgs {
+            device_id: "alsa/persisted".into(),
+            exclusive: true,
+            replaygain_mode: Some(tuxtunes::playback::config::ReplayGainMode::Album),
+        },
+    )
+    .await
+    .unwrap();
+
+    let path = tmp.path().join("phantom-prefs.wav");
+    std::fs::write(&path, b"RIFF\0\0\0\0WAVEfmt ").unwrap();
+    let id: i64 = state
+        .db
+        .engine
+        .raw_sql_scalar(
+            "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('phantom-prefs', 0, 0, ?, '[]') RETURNING id",
+            &[prax_query::filter::FilterValue::String(
+                path.display().to_string(),
+            )],
+        )
+        .await
+        .unwrap();
+    let _ = commands::playback::play_track(state.clone(), id).await;
+
+    // The engine's applied mpv properties aren't observable without a
+    // real device, so assert on the loader play_track feeds them from.
+    let prefs = commands::audio::load_playback_prefs(&state.db.engine).await;
+    assert_eq!(prefs.selected_device_id.as_deref(), Some("alsa/persisted"));
+    assert!(prefs.exclusive_mode);
+    assert_eq!(
+        prefs.replaygain_mode,
+        tuxtunes::playback::config::ReplayGainMode::Album
+    );
+    assert_eq!(prefs.volume, 100);
+}
+
+/// With nothing persisted the loader falls back to the defaults, so a
+/// fresh install plays at full volume with ReplayGain off.
+#[tokio::test(flavor = "multi_thread")]
+async fn load_playback_prefs_falls_back_to_defaults() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let prefs = commands::audio::load_playback_prefs(&state.db.engine).await;
+    assert_eq!(prefs, tuxtunes::playback::config::PlaybackPrefs::default());
+}
+
 /// 8 kHz, 8-bit mono PCM WAV of `samples` silent samples (400 = 50 ms).
 fn short_wav(samples: u32) -> Vec<u8> {
     let mut wav = Vec::new();

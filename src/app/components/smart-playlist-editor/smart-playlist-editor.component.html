@@ -10,6 +10,16 @@
         </button>
       </header>
 
+      @if (loadFailed()) {
+        <div
+          class="flex items-center justify-between gap-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-body text-red-500"
+          role="alert"
+        >
+          <span>Couldn't load this playlist's rule — close and try again.</span>
+          <button type="button" class="mac-btn h-7 px-3" (click)="retryLoad()">Retry</button>
+        </div>
+      }
+
       <label class="flex flex-col gap-1.5 text-body">
         <span class="text-text-secondary">Name</span>
         <input
@@ -36,118 +46,137 @@
       </div>
 
       <div class="flex flex-col gap-2" role="list">
-        @for (row of rows(); track $index; let i = $index) {
-          <div class="flex flex-wrap items-center gap-2 text-body" role="listitem">
-            <select
-              [value]="row.field"
-              (change)="setField(i, inputValue($event))"
-              class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
-              aria-label="Field"
-            >
-              @for (f of fields; track f.id) {
-                <option [value]="f.id">{{ f.label }}</option>
-              }
-            </select>
-            <select
-              [value]="row.op"
-              (change)="setOp(i, $any(inputValue($event)))"
-              class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
-              aria-label="Operator"
-            >
-              @for (op of opsFor(row); track op) {
-                <option [value]="op">{{ opLabels[op] }}</option>
-              }
-            </select>
-
-            @switch (widget(row)) {
-              @case ('text') {
-                <input
-                  type="text"
-                  [value]="textValue(row)"
-                  (input)="setText(i, inputValue($event))"
-                  class="min-w-[160px] flex-1 rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary outline-none focus:border-accent"
-                  aria-label="Value"
-                />
-              }
-              @case ('number') {
-                <input
-                  type="number"
-                  [value]="numberValue(row)"
-                  (input)="setNumber(i, inputValue($event))"
-                  class="w-28 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary outline-none focus:border-accent"
-                  aria-label="Value"
-                />
-              }
-              @case ('bool') {
-                <select
-                  [value]="boolValue(row) ? 'true' : 'false'"
-                  (change)="setBool(i, inputValue($event) === 'true')"
-                  class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
-                  aria-label="Value"
-                >
-                  <option value="true">true</option>
-                  <option value="false">false</option>
-                </select>
-              }
-              @case ('range') {
-                <input
-                  type="number"
-                  [value]="rangeValue(row).from"
-                  (input)="setRange(i, 'from', inputValue($event))"
-                  class="w-24 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
-                  aria-label="From"
-                />
-                <span class="text-text-secondary">to</span>
-                <input
-                  type="number"
-                  [value]="rangeValue(row).to"
-                  (input)="setRange(i, 'to', inputValue($event))"
-                  class="w-24 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
-                  aria-label="To"
-                />
-              }
-              @case ('relative') {
-                <input
-                  type="number"
-                  min="1"
-                  [value]="relativeValue(row).n"
-                  (input)="setRelative(i, 'n', inputValue($event))"
-                  class="w-20 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
-                  aria-label="Amount"
-                />
-                <select
-                  [value]="relativeValue(row).unit"
-                  (change)="setRelative(i, 'unit', inputValue($event))"
-                  class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
-                  aria-label="Unit"
-                >
-                  @for (u of timeUnits; track u) {
-                    <option [value]="u">{{ u }}</option>
-                  }
-                </select>
-              }
-            }
-
-            <span class="ml-auto flex items-center gap-1">
+        @for (row of rows(); track row.index) {
+          @if (isGroupRow(row)) {
+            <div class="flex items-center gap-2 text-body text-text-secondary" role="listitem">
+              <span class="flex-1 italic">
+                (nested group: {{ row.group.children.length }} rules, match
+                {{ row.group.match_all ? 'all' : 'any' }})
+              </span>
               <button
                 type="button"
                 class="mac-btn h-6 w-6"
-                (click)="removeRow(i)"
+                (click)="removeRow(row.index)"
                 [disabled]="rows().length <= 1"
-                aria-label="Remove rule"
+                aria-label="Remove nested group"
               >
                 −
               </button>
-              <button
-                type="button"
-                class="mac-btn h-6 w-6"
-                (click)="addRow()"
-                aria-label="Add rule"
+            </div>
+          } @else {
+            @let leaf = row.leaf;
+            <div class="flex flex-wrap items-center gap-2 text-body" role="listitem">
+              <select
+                [value]="leaf.field"
+                (change)="setField(row.index, inputValue($event))"
+                class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+                aria-label="Field"
               >
-                +
-              </button>
-            </span>
-          </div>
+                @for (f of fields; track f.id) {
+                  <option [value]="f.id">{{ f.label }}</option>
+                }
+              </select>
+              <select
+                [value]="leaf.op"
+                (change)="setOp(row.index, $any(inputValue($event)))"
+                class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+                aria-label="Operator"
+              >
+                @for (op of opsFor(leaf); track op) {
+                  <option [value]="op">{{ opLabels[op] }}</option>
+                }
+              </select>
+
+              @switch (widget(leaf)) {
+                @case ('text') {
+                  <input
+                    type="text"
+                    [value]="textValue(leaf)"
+                    (input)="setText(row.index, inputValue($event))"
+                    class="min-w-[160px] flex-1 rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary outline-none focus:border-accent"
+                    aria-label="Value"
+                  />
+                }
+                @case ('number') {
+                  <input
+                    type="number"
+                    [value]="numberValue(leaf)"
+                    (input)="setNumber(row.index, inputValue($event))"
+                    class="w-28 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary outline-none focus:border-accent"
+                    aria-label="Value"
+                  />
+                }
+                @case ('bool') {
+                  <select
+                    [value]="boolValue(leaf) ? 'true' : 'false'"
+                    (change)="setBool(row.index, inputValue($event) === 'true')"
+                    class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+                    aria-label="Value"
+                  >
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                }
+                @case ('range') {
+                  <input
+                    type="number"
+                    [value]="rangeValue(leaf).from"
+                    (input)="setRange(row.index, 'from', inputValue($event))"
+                    class="w-24 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
+                    aria-label="From"
+                  />
+                  <span class="text-text-secondary">to</span>
+                  <input
+                    type="number"
+                    [value]="rangeValue(leaf).to"
+                    (input)="setRange(row.index, 'to', inputValue($event))"
+                    class="w-24 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
+                    aria-label="To"
+                  />
+                }
+                @case ('relative') {
+                  <input
+                    type="number"
+                    min="1"
+                    [value]="relativeValue(leaf).n"
+                    (input)="setRelative(row.index, 'n', inputValue($event))"
+                    class="w-20 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
+                    aria-label="Amount"
+                  />
+                  <select
+                    [value]="relativeValue(leaf).unit"
+                    (change)="setRelative(row.index, 'unit', inputValue($event))"
+                    class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+                    aria-label="Unit"
+                  >
+                    @for (u of timeUnits; track u) {
+                      <option [value]="u">{{ u }}</option>
+                    }
+                  </select>
+                }
+              }
+
+              <span class="ml-auto flex items-center gap-1">
+                <button
+                  type="button"
+                  class="mac-btn h-6 w-6"
+                  (click)="removeRow(row.index)"
+                  [disabled]="rows().length <= 1"
+                  aria-label="Remove rule"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  class="mac-btn h-6 w-6"
+                  (click)="addRow()"
+                  aria-label="Add rule"
+                >
+                  +
+                </button>
+              </span>
+            </div>
+          }
         }
       </div>
 

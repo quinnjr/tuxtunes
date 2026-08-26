@@ -8,6 +8,42 @@ use crate::playback::device::AudioDevice;
 use crate::playback::EngineCommand;
 use crate::runtime::AppState;
 
+/// Read the persisted audio prefs into a [`PlaybackPrefs`], falling back
+/// to defaults for keys that were never written.
+///
+/// Every `loadfile` re-applies `audio-device` / `audio-exclusive` /
+/// `replaygain` via `build_properties`, so a caller that passes
+/// `PlaybackPrefs::default()` here silently undoes whatever the user
+/// picked in settings. Load them instead.
+pub async fn load_playback_prefs(engine: &prax_sqlite::raw::SqliteRawEngine) -> PlaybackPrefs {
+    let selected_device_id = preferences::get::<String>(engine, KEY_AUDIO_DEVICE)
+        .await
+        .ok()
+        .flatten();
+    let exclusive_mode = preferences::get::<bool>(engine, KEY_AUDIO_EXCLUSIVE)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+    let replaygain_mode = preferences::get::<ReplayGainMode>(engine, KEY_REPLAYGAIN_MODE)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(ReplayGainMode::Off);
+    let volume = preferences::get::<i64>(engine, KEY_VOLUME)
+        .await
+        .ok()
+        .flatten()
+        .map(|v| v.clamp(0, 100) as u8)
+        .unwrap_or(100);
+    PlaybackPrefs {
+        selected_device_id,
+        exclusive_mode,
+        replaygain_mode,
+        volume,
+    }
+}
+
 #[tauri::command]
 pub async fn list_audio_devices(
     state: tauri::State<'_, AppState>,

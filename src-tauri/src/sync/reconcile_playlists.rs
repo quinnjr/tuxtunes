@@ -160,17 +160,39 @@ pub async fn reconcile(
             stats.inserted += 1;
         }
 
-        if let Some(parent_pid) = p.parent_persistent_id() {
-            pending_parent_links.push((local_id, parent_pid));
+        match p.parent_persistent_id() {
+            Some(parent_pid) => pending_parent_links.push((local_id, parent_pid)),
+            // The source no longer reports a parent for a playlist we
+            // already knew about — clear the stale link rather than
+            // leaving it pointing at whatever it last resolved to. A
+            // freshly-inserted row has no parent to clear.
+            None if existed => playlists::link_parent(engine, local_id, None).await?,
+            None => {}
         }
     }
 
     let playlist_pid_to_local = sync_util::load_pid_to_local_id_map(engine, "playlists", source_id)
         .await
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    // Current parent_id for every playlist, kept up to date locally as
+    // links are applied below, so each candidate link can be checked
+    // for a cycle against the state it would actually land in.
+    let mut parent_of = playlists::parent_id_map(engine).await?;
     for (child_id, parent_pid) in pending_parent_links {
         let parent_local = playlist_pid_to_local.get(&parent_pid).copied();
+        match parent_local {
+            Some(parent_local) if would_create_cycle(&parent_of, child_id, parent_local) => {
+                stats.warnings += 1;
+                log::warn!(
+                    "sync: playlist {child_id}'s parent link to {parent_local} would create \
+                     a cycle; keeping its existing parent"
+                );
+                continue;
+            }
+            _ => {}
+        }
         playlists::link_parent(engine, child_id, parent_local).await?;
+        parent_of.insert(child_id, parent_local);
     }
 
     let deleted = playlists::delete_missing(engine, source_id, &keep).await?;
@@ -193,6 +215,35 @@ fn classify(is_smart: bool, has_children: bool) -> (PlaylistKind, Option<String>
     }
 }
 
+/// True if setting `child`'s parent to `new_parent` would create a
+/// `parent_id` cycle, given `parent_of` — the current (or
+/// already-applied-this-pass) parent link for every local playlist id.
+/// Walks `new_parent`'s own parent chain looking for `child`; a source
+/// library can legitimately contain a cycle (a folder moved under its
+/// own descendant since the last sync), so this is a check the caller
+/// consults before committing the link, not a panic condition.
+fn would_create_cycle(
+    parent_of: &std::collections::HashMap<i64, Option<i64>>,
+    child: i64,
+    new_parent: i64,
+) -> bool {
+    let mut cursor = Some(new_parent);
+    let mut hops = 0;
+    while let Some(id) = cursor {
+        if id == child {
+            return true;
+        }
+        hops += 1;
+        if hops > parent_of.len() {
+            // Data already inconsistent (a dangling/cyclic chain not
+            // rooted in `parent_of`); don't spin forever over it.
+            return false;
+        }
+        cursor = parent_of.get(&id).copied().flatten();
+    }
+    false
+}
+
 impl From<TracksError> for PlaylistsError {
     fn from(e: TracksError) -> Self {
         PlaylistsError::Query(anyhow::Error::msg(e.to_string()))
@@ -209,5 +260,25 @@ mod tests {
         assert_eq!(classify(true, true).0, PlaylistKind::Folder);
         assert_eq!(classify(true, false).0, PlaylistKind::Smart);
         assert_eq!(classify(false, false).0, PlaylistKind::Regular);
+    }
+
+    #[test]
+    fn would_create_cycle_detects_direct_and_indirect_cycles() {
+        // 2 -> 1 already linked; proposing 1's parent = 2 closes the loop.
+        let parent_of = std::collections::HashMap::from([(1, None), (2, Some(1))]);
+        assert!(would_create_cycle(&parent_of, 1, 2));
+
+        // 3 -> 2 -> 1; proposing 1's parent = 3 closes a longer loop.
+        let parent_of = std::collections::HashMap::from([(1, None), (2, Some(1)), (3, Some(2))]);
+        assert!(would_create_cycle(&parent_of, 1, 3));
+
+        // Same shape, but proposing an unrelated node's parent is fine.
+        assert!(!would_create_cycle(&parent_of, 4, 3));
+    }
+
+    #[test]
+    fn would_create_cycle_false_for_acyclic_chain() {
+        let parent_of = std::collections::HashMap::from([(1, None), (2, Some(1))]);
+        assert!(!would_create_cycle(&parent_of, 3, 2));
     }
 }

@@ -304,9 +304,10 @@ fn compile_leaf(leaf: &LeafCondition, params: &mut Vec<FV>) -> Result<String, Sm
             date_relative(meta.column, false, &leaf.value, &leaf.field)
         }
         (FieldKind::Date, Op::Greater) => {
-            int_op(meta.column, ">", &leaf.value, params, &leaf.field)
+            date_op(meta.column, ">", &leaf.value, params, &leaf.field)
         }
-        (FieldKind::Date, Op::Less) => int_op(meta.column, "<", &leaf.value, params, &leaf.field),
+        (FieldKind::Date, Op::Less) => date_op(meta.column, "<", &leaf.value, params, &leaf.field),
+        (FieldKind::Date, Op::InRange) => date_range(meta.column, &leaf.value, params, &leaf.field),
 
         _ => Err(SmartError::InvalidOperator {
             field: leaf.field.clone(),
@@ -423,6 +424,60 @@ fn bool_op(
     let b = bool_value(value, field)?;
     params.push(FV::Int(if b { 1 } else { 0 }));
     Ok(format!("{column} {op} ?"))
+}
+
+/// Date comparison against `column ({op}) ?`. `date_added` /
+/// `last_played` / `last_skipped` are TEXT `'YYYY-MM-DD HH:MM:SS'`, so a
+/// unix-seconds `Value::Int` is converted to the same text form via
+/// `datetime(?, 'unixepoch')` before comparing — comparing the raw
+/// integer parameter against the TEXT column would compare
+/// lexicographically and silently match every/no row. A `Value::Text`
+/// value is compared as-is: a literal `'YYYY-MM-DD HH:MM:SS'` string
+/// already sorts correctly against the column's own text form.
+fn date_op(
+    column: &str,
+    op: &str,
+    value: &Value,
+    params: &mut Vec<FV>,
+    field: &str,
+) -> Result<String, SmartError> {
+    match value {
+        Value::Int(n) => {
+            params.push(FV::Int(*n));
+            Ok(format!("{column} {op} datetime(?, 'unixepoch')"))
+        }
+        Value::Text(s) => {
+            params.push(FV::String(s.clone()));
+            Ok(format!("{column} {op} ?"))
+        }
+        _ => Err(SmartError::Malformed(format!(
+            "{field}: expected an integer (unix seconds) or text date value"
+        ))),
+    }
+}
+
+/// `column BETWEEN datetime(?, 'unixepoch') AND datetime(?, 'unixepoch')`
+/// from a `Value::Range` of unix-seconds bounds — see `date_op` for why
+/// the conversion is necessary.
+fn date_range(
+    column: &str,
+    value: &Value,
+    params: &mut Vec<FV>,
+    field: &str,
+) -> Result<String, SmartError> {
+    let (from, to) = match value {
+        Value::Range { from, to } => (*from, *to),
+        _ => {
+            return Err(SmartError::Malformed(format!(
+                "{field}: in_range expects {{from, to}}"
+            )));
+        }
+    };
+    params.push(FV::Int(from));
+    params.push(FV::Int(to));
+    Ok(format!(
+        "{column} BETWEEN datetime(?, 'unixepoch') AND datetime(?, 'unixepoch')"
+    ))
 }
 
 fn date_relative(
@@ -933,6 +988,105 @@ mod tests {
         let rows = evaluate(&db.engine, &r).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].title, "old");
+    }
+
+    /// Pin `date_added` on each seeded row to a known unix-second
+    /// timestamp so `greater` / `less` / `in_range` can be checked
+    /// against exact boundaries rather than "now"-relative fixtures.
+    async fn set_date_added(engine: &SqliteRawEngine, title: &str, unix_secs: i64) {
+        engine
+            .raw_sql_execute(
+                "UPDATE tracks SET date_added = datetime(?, 'unixepoch') WHERE title = ?",
+                &[FV::Int(unix_secs), FV::String(title.to_string())],
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn evaluate_date_greater_and_less_unix_seconds() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("before", "x", 0, 0), ("after", "x", 0, 0)]).await;
+        // 2019-01-01 and 2021-01-01, straddling the 2020-01-01 boundary
+        // used below (1577836800).
+        set_date_added(&db.engine, "before", 1_546_300_800).await;
+        set_date_added(&db.engine, "after", 1_609_459_200).await;
+
+        let boundary = 1_577_836_800; // 2020-01-01T00:00:00Z
+        let greater = rule(
+            true,
+            vec![leaf("date_added", Op::Greater, Value::Int(boundary))],
+        );
+        let rows = evaluate(&db.engine, &greater).await.unwrap();
+        // Old (buggy) behavior compared TEXT column vs INTEGER param
+        // lexicographically and matched every row; this must match only
+        // the row actually after the boundary.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "after");
+
+        let less = rule(
+            true,
+            vec![leaf("date_added", Op::Less, Value::Int(boundary))],
+        );
+        let rows = evaluate(&db.engine, &less).await.unwrap();
+        // Old (buggy) behavior matched no rows at all for `less`.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "before");
+    }
+
+    #[tokio::test]
+    async fn evaluate_date_in_range_unix_seconds() {
+        let db = tmp_db().await;
+        seed(
+            &db.engine,
+            &[
+                ("too_early", "x", 0, 0),
+                ("middle_one", "x", 0, 0),
+                ("middle_two", "x", 0, 0),
+                ("too_late", "x", 0, 0),
+            ],
+        )
+        .await;
+        set_date_added(&db.engine, "too_early", 1_500_000_000).await;
+        set_date_added(&db.engine, "middle_one", 1_580_000_000).await;
+        set_date_added(&db.engine, "middle_two", 1_590_000_000).await;
+        set_date_added(&db.engine, "too_late", 1_650_000_000).await;
+
+        let r = rule(
+            true,
+            vec![leaf(
+                "date_added",
+                Op::InRange,
+                Value::Range {
+                    from: 1_577_836_800, // 2020-01-01
+                    to: 1_609_459_200,   // 2021-01-01
+                },
+            )],
+        );
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|r| r.title == "middle_one"));
+        assert!(rows.iter().any(|r| r.title == "middle_two"));
+    }
+
+    #[tokio::test]
+    async fn evaluate_date_greater_text_literal() {
+        let db = tmp_db().await;
+        seed(&db.engine, &[("before", "x", 0, 0), ("after", "x", 0, 0)]).await;
+        set_date_added(&db.engine, "before", 1_546_300_800).await;
+        set_date_added(&db.engine, "after", 1_609_459_200).await;
+
+        let r = rule(
+            true,
+            vec![leaf(
+                "date_added",
+                Op::Greater,
+                Value::Text("2020-01-01 00:00:00".to_string()),
+            )],
+        );
+        let rows = evaluate(&db.engine, &r).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].title, "after");
     }
 
     #[tokio::test]

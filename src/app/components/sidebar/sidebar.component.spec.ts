@@ -82,6 +82,22 @@ describe('buildPlaylistTree', () => {
     expect(tree).toHaveLength(1);
     expect(tree[0].children).toHaveLength(0);
   });
+
+  it('breaks a parent_id cycle by promoting its members to root, keeping non-member children in place', () => {
+    // A.parent = B, B.parent = A, C.parent = A. Without the fix, A and
+    // B are only ever linked as each other's child and never reach the
+    // roots array — the whole trio (including C) silently vanishes.
+    const tree = buildPlaylistTree([
+      pl({ id: 1, name: 'A', parentId: 2, kind: 'folder' }),
+      pl({ id: 2, name: 'B', parentId: 1, kind: 'folder' }),
+      pl({ id: 3, name: 'C', parentId: 1 }),
+    ]);
+    expect(tree.map((n) => n.playlist.name).sort()).toEqual(['A', 'B']);
+    const a = tree.find((n) => n.playlist.name === 'A')!;
+    const b = tree.find((n) => n.playlist.name === 'B')!;
+    expect(a.children.map((n) => n.playlist.name)).toEqual(['C']);
+    expect(b.children).toHaveLength(0);
+  });
 });
 
 describe('SidebarComponent', () => {

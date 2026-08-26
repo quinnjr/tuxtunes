@@ -138,8 +138,29 @@ impl PlaybackEngine {
                         handle_command(&mpv, cmd, &mut state, &app, &track_tx);
                     }
 
-                    if let Some(Ok(ev)) = mpv.wait_event(0.05) {
-                        handle_event(ev, &app, &mut state, &track_tx);
+                    // `FileLoaded` is deferred out of the match because
+                    // `wait_event` holds `&mut mpv` for as long as the
+                    // borrowed `Event` lives, and the handler needs a
+                    // `mpv.get_property` read of `pause`.
+                    let mut file_loaded = false;
+                    if let Some(res) = mpv.wait_event(0.05) {
+                        match res {
+                            Ok(Event::FileLoaded) => file_loaded = true,
+                            Ok(ev) => handle_event(ev, &app, &mut state, &track_tx, false),
+                            // libmpv2 turns an `MPV_EVENT_END_FILE`
+                            // carrying a non-zero `error` into
+                            // `Some(Err(_))` rather than
+                            // `Event::EndFile(REASON_ERROR)`, so a file
+                            // that exists but can't be decoded would
+                            // otherwise be dropped on the floor.
+                            Err(e) => {
+                                handle_wait_error(&e.to_string(), &app, &mut state, &track_tx)
+                            }
+                        }
+                    }
+                    if file_loaded {
+                        let paused = mpv.get_property::<bool>("pause").unwrap_or(false);
+                        handle_event(Event::FileLoaded, &app, &mut state, &track_tx, paused);
                     }
 
                     if rx.is_closed() {
@@ -244,7 +265,8 @@ fn handle_command<R: Runtime>(
             // Starting a track while another plays: mpv will raise
             // EndFile(STOP) for the old one *after* we record the new
             // current track, so account for the old one here instead.
-            if let Some(prev_id) = *current_track {
+            let prev_track = *current_track;
+            if let Some(prev_id) = prev_track {
                 let _ = track_tx.send(PlaybackTracking::TrackEnded {
                     track_id: prev_id,
                     position_ms: state.last_position_ms,
@@ -255,26 +277,52 @@ fn handle_command<R: Runtime>(
             apply_props(mpv, &props);
             if let Err(e) = mpv.command("loadfile", &[file_path.as_str(), "replace"]) {
                 log::warn!("loadfile failed: {e}");
+                // The previous track has already been credited above, so
+                // leaving it as `current_track` would double-count it on
+                // the next end-of-file. Clear out and tell the UI, which
+                // is otherwise stuck waiting for a load that never began.
+                *current_track = None;
+                state.loading = false;
+                state.last_position_ms = 0;
+                state.last_duration_ms = 0;
+                state.last_emitted_position_ms = 0;
+                state.last_emitted_state = None;
+                emit_load_failure(app, &e.to_string());
+                let _ = app.emit(
+                    events::TRACK_CHANGED,
+                    TrackChanged {
+                        track_id: None,
+                        prev_track_id: prev_track,
+                    },
+                );
+                state.emit_state(app, PlaybackState::Stopped);
                 return;
             }
             if let Err(e) = mpv.set_property("pause", false) {
                 log::warn!("unpause after loadfile failed: {e}");
             }
-            let prev = *current_track;
+            // Zero the tracking counters *after* the previous track's
+            // TrackEnded went out, so a load that fails before any
+            // `time-pos`/`duration` arrives can never be credited with
+            // the previous track's position.
+            state.last_position_ms = 0;
+            state.last_duration_ms = 0;
+            state.last_emitted_position_ms = 0;
+            state.loading = true;
             *current_track = Some(track_id);
             let _ = app.emit(
                 events::TRACK_CHANGED,
                 TrackChanged {
                     track_id: Some(track_id),
-                    prev_track_id: prev,
+                    prev_track_id: prev_track,
                 },
             );
-            let _ = app.emit(
-                events::STATE_CHANGED,
-                StateChanged {
-                    state: PlaybackState::Loading,
-                },
-            );
+            // Go through emit_state so the dedup cache knows we're on
+            // Loading — otherwise a load that fails right after a
+            // previous Stopped would dedup its own Stopped away and
+            // leave the UI parked on the loading spinner.
+            state.last_emitted_state = None;
+            state.emit_state(app, PlaybackState::Loading);
         }
         EngineCommand::Pause => {
             let _ = mpv.set_property("pause", true);
@@ -292,6 +340,7 @@ fn handle_command<R: Runtime>(
                 });
             }
             *current_track = None;
+            state.loading = false;
             let _ = app.emit(
                 events::STATE_CHANGED,
                 StateChanged {
@@ -344,6 +393,11 @@ const POSITION_EMIT_INTERVAL_MS: i64 = 250;
 #[derive(Default)]
 struct EventLoopState {
     current_track: Option<i64>,
+    /// True between `LoadAndPlay` and the matching `FileLoaded`. Used to
+    /// attribute a bare `Err` from `wait_event` — libmpv2 reports an
+    /// end-file carrying an error code that way, with no event id left
+    /// to identify it — to the track that is still trying to load.
+    loading: bool,
     last_position_ms: i64,
     last_duration_ms: i64,
     last_emitted_position_ms: i64,
@@ -361,11 +415,92 @@ impl EventLoopState {
     }
 }
 
+/// The state to report once a file is loaded. mpv can be paused during
+/// the load window (the user hit pause while the file was opening), and
+/// mpv raises no `pause` property change for a value it already holds —
+/// so forcing `Playing` here would leave the UI lying about a paused
+/// engine, and the next toggle would be a no-op.
+fn state_after_load(paused: bool) -> PlaybackState {
+    if paused {
+        PlaybackState::Paused
+    } else {
+        PlaybackState::Playing
+    }
+}
+
+fn emit_load_failure<R: Runtime>(app: &AppHandle<R>, detail: &str) {
+    let _ = app.emit(
+        events::WARNING,
+        events::Warning {
+            kind: events::WarningKind::LoadFailed,
+            detail: detail.to_string(),
+        },
+    );
+}
+
+/// Handle a bare `Err` from `Mpv::wait_event`.
+///
+/// libmpv2 collapses an `MPV_EVENT_END_FILE` whose `error` field is
+/// non-zero into `Some(Err(Error::Raw(code)))` — the `Event::EndFile`
+/// variant is never constructed and the reason is lost. The same
+/// `Err` shape is also used for failed `SetPropertyReply` /
+/// `CommandReply` replies, so we only treat it as a load failure while
+/// a track is mid-load (set by `LoadAndPlay`, cleared by `FileLoaded`).
+/// Anything else is logged and ignored.
+fn handle_wait_error<R: Runtime>(
+    detail: &str,
+    app: &AppHandle<R>,
+    state: &mut EventLoopState,
+    track_tx: &mpsc::UnboundedSender<PlaybackTracking>,
+) {
+    if !state.loading || state.current_track.is_none() {
+        log::debug!("mpv wait_event error (not a load failure): {detail}");
+        return;
+    }
+    log::warn!("mpv failed to load the current file: {detail}");
+    emit_load_failure(app, detail);
+    finish_current_track(app, state, track_tx, false);
+}
+
+/// Shared tail of every "the current file is over" path: credit the
+/// track for DB tracking, optionally announce a natural end, then clear
+/// engine state and tell the UI.
+fn finish_current_track<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &mut EventLoopState,
+    track_tx: &mpsc::UnboundedSender<PlaybackTracking>,
+    natural_eof: bool,
+) {
+    let prev = state.current_track;
+    if let Some(id) = prev {
+        let _ = track_tx.send(PlaybackTracking::TrackEnded {
+            track_id: id,
+            position_ms: state.last_position_ms,
+            duration_ms: state.last_duration_ms,
+        });
+        if natural_eof {
+            let _ = app.emit(events::TRACK_ENDED, events::TrackEnded { track_id: id });
+        }
+    }
+    state.current_track = None;
+    state.loading = false;
+    state.last_emitted_position_ms = 0;
+    state.emit_state(app, PlaybackState::Stopped);
+    let _ = app.emit(
+        events::TRACK_CHANGED,
+        TrackChanged {
+            track_id: None,
+            prev_track_id: prev,
+        },
+    );
+}
+
 fn handle_event<R: Runtime>(
     event: Event<'_>,
     app: &AppHandle<R>,
     state: &mut EventLoopState,
     track_tx: &mpsc::UnboundedSender<PlaybackTracking>,
+    paused_on_load: bool,
 ) {
     match event {
         Event::PropertyChange { name, change, .. } => match (name, change) {
@@ -410,14 +545,17 @@ fn handle_event<R: Runtime>(
             _ => {}
         },
         Event::FileLoaded => {
-            // The command handler emits `Loading` directly (it has no
-            // EventLoopState), and mpv's `pause=false` property change
-            // can land here before the file is loaded — both leave
-            // `last_emitted_state` claiming `Playing` while the UI is
-            // sitting on `Loading`. FileLoaded is the authoritative
-            // "audio is running" moment, so always emit it.
+            // mpv's `pause=false` property change can land before the
+            // file is loaded, leaving `last_emitted_state` claiming
+            // `Playing` while the UI still sits on `Loading`. FileLoaded
+            // is the authoritative "the file is open" moment, so clear
+            // the dedup and always emit — but emit what mpv *actually*
+            // holds: a pause issued during the load window would
+            // otherwise be reported as `Playing`, and mpv raises no
+            // property change when togglePlay re-sends `pause=true`.
+            state.loading = false;
             state.last_emitted_state = None;
-            state.emit_state(app, PlaybackState::Playing);
+            state.emit_state(app, state_after_load(paused_on_load));
         }
         Event::EndFile(reason) => {
             // libmpv2's EndFileReason is a `c_uint` alias from
@@ -434,27 +572,10 @@ fn handle_event<R: Runtime>(
             if reason != REASON_EOF && reason != REASON_ERROR {
                 return;
             }
-            let prev = state.current_track;
-            if let Some(id) = prev {
-                let _ = track_tx.send(PlaybackTracking::TrackEnded {
-                    track_id: id,
-                    position_ms: state.last_position_ms,
-                    duration_ms: state.last_duration_ms,
-                });
-                if reason == REASON_EOF {
-                    let _ = app.emit(events::TRACK_ENDED, events::TrackEnded { track_id: id });
-                }
+            if reason == REASON_ERROR {
+                emit_load_failure(app, "mpv reported an error end-file");
             }
-            state.current_track = None;
-            state.last_emitted_position_ms = 0;
-            state.emit_state(app, PlaybackState::Stopped);
-            let _ = app.emit(
-                events::TRACK_CHANGED,
-                TrackChanged {
-                    track_id: None,
-                    prev_track_id: prev,
-                },
-            );
+            finish_current_track(app, state, track_tx, reason == REASON_EOF);
         }
         _ => {}
     }
@@ -479,6 +600,7 @@ mod end_file_tests {
             events::TRACK_ENDED,
             events::TRACK_CHANGED,
             events::STATE_CHANGED,
+            events::WARNING,
         ] {
             let seen = std::sync::Arc::clone(&seen);
             app.handle().listen(name, move |e| {
@@ -490,6 +612,7 @@ mod end_file_tests {
             current_track: Some(7),
             last_position_ms: 12_000,
             last_duration_ms: 200_000,
+            loading: true,
             ..Default::default()
         };
         (app, state, tx, rx, seen)
@@ -499,7 +622,7 @@ mod end_file_tests {
     fn end_file_stop_after_replace_leaves_the_new_track_alone() {
         let (app, mut state, tx, mut rx, seen) = harness();
         // The old file's EndFile(STOP) arrives after the new track was recorded.
-        handle_event(Event::EndFile(2), app.handle(), &mut state, &tx);
+        handle_event(Event::EndFile(2), app.handle(), &mut state, &tx, false);
         assert_eq!(
             state.current_track,
             Some(7),
@@ -515,14 +638,14 @@ mod end_file_tests {
             "tracking for the old track is sent by the command, not here"
         );
         // Redirect (5) and quit (3) are the same story.
-        handle_event(Event::EndFile(5), app.handle(), &mut state, &tx);
+        handle_event(Event::EndFile(5), app.handle(), &mut state, &tx, false);
         assert_eq!(state.current_track, Some(7));
     }
 
     #[test]
     fn end_file_eof_emits_track_ended_and_clears() {
         let (app, mut state, tx, mut rx, seen) = harness();
-        handle_event(Event::EndFile(0), app.handle(), &mut state, &tx);
+        handle_event(Event::EndFile(0), app.handle(), &mut state, &tx, false);
         assert_eq!(state.current_track, None);
         let events = seen.lock().unwrap();
         assert!(
@@ -550,7 +673,7 @@ mod end_file_tests {
     #[test]
     fn end_file_error_clears_without_track_ended() {
         let (app, mut state, tx, _rx, seen) = harness();
-        handle_event(Event::EndFile(4), app.handle(), &mut state, &tx);
+        handle_event(Event::EndFile(4), app.handle(), &mut state, &tx, false);
         assert_eq!(state.current_track, None);
         let events = seen.lock().unwrap();
         assert!(
@@ -559,6 +682,108 @@ mod end_file_tests {
         );
         assert!(
             events.iter().any(|e| e.starts_with(events::TRACK_CHANGED)),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::WARNING) && e.contains("load_failed")),
+            "{events:?}"
+        );
+    }
+
+    /// libmpv2 hands an error end-file back as a bare `Err` from
+    /// `wait_event`, with no event id left to identify it. While a track
+    /// is mid-load that must be treated exactly like `EndFile(ERROR)`,
+    /// or the UI parks on `loading` forever.
+    #[test]
+    fn wait_error_during_load_clears_and_warns() {
+        let (app, mut state, tx, mut rx, seen) = harness();
+        handle_wait_error(
+            "mpv error: unrecognized file format",
+            app.handle(),
+            &mut state,
+            &tx,
+        );
+
+        assert_eq!(
+            state.current_track, None,
+            "the failed track must be cleared"
+        );
+        assert!(!state.loading);
+        let events = seen.lock().unwrap();
+        assert!(
+            events.iter().any(|e| e.starts_with(events::WARNING)
+                && e.contains("load_failed")
+                && e.contains("unrecognized file format")),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::TRACK_CHANGED) && e.contains("\"track_id\":null")),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::STATE_CHANGED) && e.contains("stopped")),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.starts_with(events::TRACK_ENDED)),
+            "a failed load never ends naturally: {events:?}"
+        );
+        // The track is still credited for DB tracking (0 progress).
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PlaybackTracking::TrackEnded { track_id: 7, .. })
+        ));
+    }
+
+    /// A `SetPropertyReply`/`CommandReply` failure arrives in the same
+    /// `Err` shape. Outside the load window it must not tear down the
+    /// currently-playing track.
+    #[test]
+    fn wait_error_outside_load_window_is_ignored() {
+        let (app, mut state, tx, mut rx, seen) = harness();
+        state.loading = false;
+        handle_wait_error("property not found", app.handle(), &mut state, &tx);
+        assert_eq!(state.current_track, Some(7));
+        assert!(seen.lock().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn file_loaded_respects_a_pause_issued_during_the_load_window() {
+        assert_eq!(state_after_load(true), PlaybackState::Paused);
+        assert_eq!(state_after_load(false), PlaybackState::Playing);
+
+        let (app, mut state, tx, _rx, seen) = harness();
+        handle_event(Event::FileLoaded, app.handle(), &mut state, &tx, true);
+        assert!(!state.loading);
+        let events = seen.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::STATE_CHANGED) && e.contains("paused")),
+            "{events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.contains("playing")),
+            "must not claim playing while mpv is paused: {events:?}"
+        );
+    }
+
+    #[test]
+    fn file_loaded_emits_playing_when_not_paused() {
+        let (app, mut state, tx, _rx, seen) = harness();
+        handle_event(Event::FileLoaded, app.handle(), &mut state, &tx, false);
+        let events = seen.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::STATE_CHANGED) && e.contains("playing")),
             "{events:?}"
         );
     }
