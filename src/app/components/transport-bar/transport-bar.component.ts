@@ -110,6 +110,6 @@ export class TransportBarComponent {
   protected async next(): Promise<void> {
     // For v1, "Next" pulls from the user-built queue. Auto-advance on
     // natural track end is wired separately via PlaybackService.
-    await this.playback.advanceFromQueue();
+    await this.playback.next();
   }
 }

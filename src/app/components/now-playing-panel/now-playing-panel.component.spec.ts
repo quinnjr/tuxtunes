@@ -152,7 +152,7 @@ describe('NowPlayingPanelComponent', () => {
 
   it('advance / remove / clear forward to PlaybackService', async () => {
     const { cmp, playback } = setup();
-    const adv = vi.spyOn(playback, 'advanceFromQueue').mockResolvedValue(null);
+    const adv = vi.spyOn(playback, 'next').mockResolvedValue(null);
     const rem = vi.spyOn(playback, 'removeFromQueue');
     const clr = vi.spyOn(playback, 'clearQueue');
     await cmp.advance();

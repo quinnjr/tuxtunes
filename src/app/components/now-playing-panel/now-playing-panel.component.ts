@@ -72,7 +72,7 @@ export class NowPlayingPanelComponent {
   }
 
   protected async advance(): Promise<void> {
-    await this.playback.advanceFromQueue();
+    await this.playback.next();
   }
 
   protected remove(index: number): void {

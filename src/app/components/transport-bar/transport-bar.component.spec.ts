@@ -114,7 +114,7 @@ describe('TransportBarComponent', () => {
     const t = vi.spyOn(playback, 'togglePlay').mockResolvedValue();
     const s = vi.spyOn(playback, 'stop').mockResolvedValue();
     const p = vi.spyOn(playback, 'previous').mockResolvedValue();
-    const a = vi.spyOn(playback, 'advanceFromQueue').mockResolvedValue(null);
+    const a = vi.spyOn(playback, 'next').mockResolvedValue(null);
     await cmp.togglePlay();
     await cmp.stop();
     await cmp.previous();

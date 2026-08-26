@@ -234,6 +234,55 @@ describe('PlaybackService', () => {
     expect(harness.svc.volume()).toBe(73);
   });
 
+  it('next() falls through to the row after the current track, skipping missing rows', async () => {
+    const harness = build();
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+      { ...TRACK, id: 3, missing: true },
+      { ...TRACK, id: 4 },
+    ]);
+    harness.svc.currentTrackId.set(2);
+    const started = await harness.svc.next();
+    expect(started?.id).toBe(4);
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 4 });
+
+    // End of list → nothing.
+    harness.svc.currentTrackId.set(4);
+    harness.invoke.mockClear();
+    expect(await harness.svc.next()).toBeNull();
+    expect(harness.invoke).not.toHaveBeenCalledWith('play_track', expect.anything());
+
+    // Current track not in the visible list (user switched views) → nothing.
+    harness.svc.currentTrackId.set(999);
+    expect(await harness.svc.next()).toBeNull();
+
+    // Nothing playing yet → start from the top.
+    harness.svc.currentTrackId.set(null);
+    const fromTop = await harness.svc.next();
+    expect(fromTop?.id).toBe(1);
+
+    // Queue still wins.
+    harness.svc.currentTrackId.set(1);
+    harness.svc.queue.set([{ ...TRACK, id: 50 }]);
+    const fromQueue = await harness.svc.next();
+    expect(fromQueue?.id).toBe(50);
+  });
+
+  it('track-ended continues down the list when the queue is empty', async () => {
+    const harness = build();
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+    ]);
+    harness.svc.currentTrackId.set(1);
+    harness.emit('playback:track-ended', { track_id: 1 });
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 2 });
+  });
+
   it('auto-advances on track-ended', async () => {
     const harness = build();
     await harness.ready;

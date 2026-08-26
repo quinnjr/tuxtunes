@@ -201,8 +201,11 @@ pub struct LocalTrackForSync {
     pub rating: i64,
     pub play_count: i64,
     pub skip_count: i64,
-    pub last_played: Option<i64>,
-    pub last_skipped: Option<i64>,
+    /// SQLite `CURRENT_TIMESTAMP` text (`YYYY-MM-DD HH:MM:SS`), set by
+    /// `bump_play_count` / `bump_skip_count`. Carried for the conflict
+    /// resolver's benefit; never parsed as a number.
+    pub last_played: Option<String>,
+    pub last_skipped: Option<String>,
     #[serde(deserialize_with = "crate::db::sync_util::sqlite_bool")]
     pub loved: bool,
     pub original_path: Option<String>,
@@ -920,6 +923,39 @@ mod tests {
         assert_eq!(row.rating, 80);
         assert_eq!(row.play_count, 5);
         assert!(row.loved);
+    }
+
+    /// Regression: `last_played` / `last_skipped` are TEXT timestamps
+    /// written by the bump helpers. A played track used to make every
+    /// later sync fail with "expected i64".
+    #[tokio::test]
+    async fn load_local_state_map_survives_played_tracks() {
+        let db = tmp_db().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 's', '/s', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let id: i64 = db
+            .engine
+            .raw_sql_scalar(
+                "INSERT INTO tracks (sync_source_id, persistent_id, title, duration_ms, \
+                 size_bytes, file_path, playlist_ids) VALUES \
+                 (1, '00000000deadbeef', 'a', 0, 0, '/tmp/a', '[]') RETURNING id",
+                &[],
+            )
+            .await
+            .unwrap();
+        bump_play_count(&db.engine, id).await.unwrap();
+        bump_skip_count(&db.engine, id).await.unwrap();
+        let map = load_local_state_map(&db.engine, 1).await.unwrap();
+        let row = map.get(&0xDEAD_BEEF).unwrap();
+        assert!(row.last_played.as_deref().is_some_and(|t| t.contains(':')));
+        assert!(row.last_skipped.is_some());
+        assert_eq!(row.play_count, 1);
     }
 
     #[tokio::test]

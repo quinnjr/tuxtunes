@@ -124,13 +124,13 @@ export class PlaybackService implements OnDestroy {
       // distinguishes user-stop / shutdown / redirect upstream and
       // doesn't emit `track-ended` for those.
       await this.tauri.listen<{ track_id: number }>('playback:track-ended', () => {
-        void this.advanceFromQueue();
+        void this.next();
       }),
       // Tray menu actions route through the frontend so the
       // state-machine logic (toggle on current state, advance from
       // queue) stays in one place.
       await this.tauri.listen('tray:toggle-play', () => void this.togglePlay()),
-      await this.tauri.listen('tray:next', () => void this.advanceFromQueue()),
+      await this.tauri.listen('tray:next', () => void this.next()),
       // MPRIS clients (gnome-shell, KDE plasma media controller, lock
       // screen, media keys) call into the Rust D-Bus server which
       // emits these events. They go through the same state-machine
@@ -139,7 +139,7 @@ export class PlaybackService implements OnDestroy {
       await this.tauri.listen('mpris:play', () => void this.resume()),
       await this.tauri.listen('mpris:pause', () => void this.pause()),
       await this.tauri.listen('mpris:stop', () => void this.stop()),
-      await this.tauri.listen('mpris:next', () => void this.advanceFromQueue()),
+      await this.tauri.listen('mpris:next', () => void this.next()),
       await this.tauri.listen('mpris:previous', () => void this.previous()),
       await this.tauri.listen<number>('mpris:seek', (offsetUs) => {
         // MPRIS Seek is relative-microseconds; engine seeks absolute ms.
@@ -259,6 +259,25 @@ export class PlaybackService implements OnDestroy {
     this.queue.set(rest);
     await this.play(head.id);
     return head;
+  }
+
+  /**
+   * "Next": the queue head if any, otherwise the row after the current
+   * track in the list on screen (All Songs, or the open playlist) —
+   * skipping rows already flagged missing. Returns the track started,
+   * or null at the end of the list.
+   */
+  async next(): Promise<TrackRow | null> {
+    const fromQueue = await this.advanceFromQueue();
+    if (fromQueue !== null) return fromQueue;
+    const rows = this.library.tracks();
+    const currentId = this.currentTrackId();
+    const start = currentId === null ? -1 : rows.findIndex((t) => t.id === currentId);
+    if (start === -1 && currentId !== null) return null;
+    const candidate = rows.slice(start + 1).find((t) => !t.missing);
+    if (!candidate) return null;
+    await this.play(candidate.id);
+    return candidate;
   }
 
   clearQueue(): void {
