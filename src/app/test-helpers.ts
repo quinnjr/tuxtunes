@@ -39,6 +39,9 @@ export const defaultInvoke = async (cmd: string): Promise<unknown> => {
   ) {
     return [];
   }
+  if (cmd === 'resolve_album_artwork') {
+    return null;
+  }
   if (cmd === 'get_audio_prefs') {
     return { device_id: null, exclusive: false, replaygain_mode: 'off' };
   }

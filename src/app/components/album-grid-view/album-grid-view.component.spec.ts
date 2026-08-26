@@ -47,10 +47,11 @@ interface AlbumGridInternals {
   coverUrl(p: string | null): string | null;
   onAlbumContextMenu(a: AlbumSummary, event: MouseEvent): Promise<void>;
   onTrackContextMenu(t: TrackRow, event: MouseEvent): void;
+  onCardVisible(a: AlbumSummary): void;
 }
 
-function setup() {
-  const stub = tauriStub();
+function setup(invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>) {
+  const stub = tauriStub(invoke);
   TestBed.configureTestingModule({
     imports: [AlbumGridViewComponent],
     providers: appProviders(stub),
@@ -63,7 +64,12 @@ function setup() {
     library: TestBed.inject(LibraryService),
     playback: TestBed.inject(PlaybackService),
     ctx: TestBed.inject(ContextMenuService),
+    stub,
   };
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 4; i += 1) await Promise.resolve();
 }
 
 describe('AlbumGridViewComponent', () => {
@@ -87,6 +93,62 @@ describe('AlbumGridViewComponent', () => {
     const { cmp } = setup();
     expect(cmp.coverUrl(null)).toBeNull();
     expect(cmp.coverUrl('/cov.jpg')).toBe('asset:///cov.jpg');
+  });
+
+  it('onCardVisible resolves missing artwork once and patches the album in place', async () => {
+    const { cmp, library, stub } = setup(async (cmd, args) => {
+      if (cmd === 'resolve_album_artwork') {
+        return (args as { album: string }).album === 'Hit' ? '/cache/abc.jpg' : null;
+      }
+      return [];
+    });
+    const hit = ALBUM({ album: 'Hit', artworkPath: null });
+    const miss = ALBUM({ album: 'Miss', artworkPath: null });
+    const has = ALBUM({ album: 'Has', artworkPath: '/x.jpg' });
+    await flush(); // let the mount-time refreshAlbums() land first
+    library.albums.set([hit, miss, has]);
+    cmp.onCardVisible(hit);
+    cmp.onCardVisible(miss);
+    cmp.onCardVisible(has);
+    cmp.onCardVisible(hit); // second sighting: no re-probe
+    cmp.onCardVisible(miss); // misses are remembered too
+    await flush();
+    const calls = stub.invoke.mock.calls.filter((c) => c[0] === 'resolve_album_artwork');
+    expect(calls).toHaveLength(2);
+    expect(calls[0][1]).toEqual({ albumArtist: 'AA', album: 'Hit' });
+    expect(library.albums().find((a) => a.album === 'Hit')?.artworkPath).toBe('/cache/abc.jpg');
+    expect(library.albums().find((a) => a.album === 'Miss')?.artworkPath).toBeNull();
+    expect(library.albums().find((a) => a.album === 'Has')?.artworkPath).toBe('/x.jpg');
+  });
+
+  it('artwork lookups are capped at 4 in flight and drain in order', async () => {
+    const pending: ((v: unknown) => void)[] = [];
+    const { cmp, stub } = setup(async (cmd) => {
+      if (cmd === 'resolve_album_artwork') return new Promise((r) => pending.push(r));
+      return [];
+    });
+    for (let i = 0; i < 6; i += 1) cmp.onCardVisible(ALBUM({ album: `A${i}`, artworkPath: null }));
+    await flush();
+    const started = () => stub.invoke.mock.calls.filter((c) => c[0] === 'resolve_album_artwork');
+    expect(started()).toHaveLength(4);
+    pending[0](null);
+    await flush();
+    expect(started()).toHaveLength(5);
+    expect(started()[4][1]).toEqual({ albumArtist: 'AA', album: 'A4' });
+    pending[1](null);
+    pending[2](null);
+    await flush();
+    expect(started()).toHaveLength(6);
+  });
+
+  it('a failed artwork lookup frees its slot', async () => {
+    const { cmp, stub } = setup(async (cmd) => {
+      if (cmd === 'resolve_album_artwork') throw new Error('boom');
+      return [];
+    });
+    for (let i = 0; i < 5; i += 1) cmp.onCardVisible(ALBUM({ album: `A${i}`, artworkPath: null }));
+    await flush();
+    expect(stub.invoke.mock.calls.filter((c) => c[0] === 'resolve_album_artwork')).toHaveLength(5);
   });
 
   it('toggle() expands an album, fetches tracks, and collapses on second click', async () => {

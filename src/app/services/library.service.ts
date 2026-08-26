@@ -306,6 +306,29 @@ export class LibraryService {
     );
   }
 
+  /**
+   * Ask the backend to find and cache cover art for an album whose
+   * summary has no `artworkPath` yet. Updates the matching entry in
+   * `albums` in place on a hit so the grid re-renders that card only.
+   */
+  async resolveAlbumArtwork(albumArtist: string, album: string): Promise<string | null> {
+    const path =
+      (await this.tauri.invoke<string | null | undefined>('resolve_album_artwork', {
+        albumArtist,
+        album,
+      })) ?? null;
+    if (path !== null) {
+      this.albums.update((all) =>
+        all.map((a) =>
+          a.albumArtist === albumArtist && a.album === album && a.artworkPath !== path
+            ? { ...a, artworkPath: path }
+            : a,
+        ),
+      );
+    }
+    return path;
+  }
+
   async tracksForAlbum(albumArtist: string, album: string): Promise<TrackRow[]> {
     const raws = await this.tauri.invoke<TrackRowRaw[]>('tracks_for_album', {
       albumArtist,

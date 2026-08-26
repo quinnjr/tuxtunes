@@ -4,7 +4,11 @@
   } @else {
     <div class="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-6">
       @for (a of library.albums(); track trackByAlbum($index, a)) {
-        <div class="flex flex-col gap-2" (contextmenu)="onAlbumContextMenu(a, $event)">
+        <div
+          class="flex flex-col gap-2"
+          (appInView)="onCardVisible(a)"
+          (contextmenu)="onAlbumContextMenu(a, $event)"
+        >
           <button type="button" (click)="toggle(a)" class="group flex flex-col gap-2 text-left">
             <div class="mac-card aspect-square bg-bg-tertiary">
               @if (coverUrl(a.artworkPath); as src) {

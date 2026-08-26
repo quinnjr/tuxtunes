@@ -5,7 +5,7 @@ edition = "2021"
 default-run = "tuxtunes"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "test"] }
+tauri = { version = "2", features = ["tray-icon", "test", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"

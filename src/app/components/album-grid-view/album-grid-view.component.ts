@@ -1,5 +1,6 @@
 import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { InViewDirective } from '../../directives/in-view.directive';
 import { ContextMenuService } from '../../services/context-menu.service';
 import { LibraryService, AlbumSummary } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
@@ -7,7 +8,7 @@ import { formatMmSs } from '../../utils/time';
 
 @Component({
   selector: 'app-album-grid-view',
-  imports: [],
+  imports: [InViewDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './album-grid-view.component.html',
 })
@@ -20,8 +21,46 @@ export class AlbumGridViewComponent implements OnInit {
   protected readonly expanded = signal<{ albumArtist: string; album: string } | null>(null);
   protected readonly expandedTracks = signal<TrackRow[]>([]);
 
+  /**
+   * Albums whose artwork lookup has been attempted this session, keyed
+   * by `trackByAlbum`. Misses are remembered too, so scrolling back
+   * over an art-less album doesn't re-probe its files.
+   */
+  private readonly artworkAttempted = new Set<string>();
+  private artworkInFlight = 0;
+  private readonly artworkQueue: AlbumSummary[] = [];
+  /** Concurrent backend lookups; each one reads a few files' tags. */
+  private static readonly ARTWORK_CONCURRENCY = 4;
+
   ngOnInit(): void {
     void this.library.refreshAlbums();
+  }
+
+  /** A card scrolled into view: queue an artwork lookup if it needs one. */
+  protected onCardVisible(a: AlbumSummary): void {
+    if (a.artworkPath !== null) return;
+    const key = this.trackByAlbum(0, a);
+    if (this.artworkAttempted.has(key)) return;
+    this.artworkAttempted.add(key);
+    this.artworkQueue.push(a);
+    this.pumpArtworkQueue();
+  }
+
+  private pumpArtworkQueue(): void {
+    while (
+      this.artworkInFlight < AlbumGridViewComponent.ARTWORK_CONCURRENCY &&
+      this.artworkQueue.length > 0
+    ) {
+      const a = this.artworkQueue.shift()!;
+      this.artworkInFlight += 1;
+      void this.library
+        .resolveAlbumArtwork(a.albumArtist, a.album)
+        .catch(() => null)
+        .finally(() => {
+          this.artworkInFlight -= 1;
+          this.pumpArtworkQueue();
+        });
+    }
   }
 
   protected trackByAlbum(_index: number, a: AlbumSummary): string {

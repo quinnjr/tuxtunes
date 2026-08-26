@@ -93,11 +93,11 @@ pub async fn list_artists(engine: &SqliteRawEngine) -> Result<Vec<ArtistSummary>
 /// `list_albums` ("Unknown Album", "Unknown Artist") are treated as
 /// matches against NULL or empty source values so a click in the grid
 /// always returns the same set the grid summarized.
-pub async fn tracks_for_album(
-    engine: &SqliteRawEngine,
-    album_artist: &str,
-    album: &str,
-) -> Result<Vec<crate::db::tracks::TrackRow>, AlbumsError> {
+/// WHERE fragment (without the keyword) plus bound params selecting
+/// every track in the `(album_artist, album)` group that `list_albums`
+/// summarized. The placeholder strings ("Unknown Album", "Unknown
+/// Artist") match NULL or empty source values.
+fn album_match(album_artist: &str, album: &str) -> (String, Vec<FV>) {
     let artist_clause = if album_artist == "Unknown Artist" {
         "(album_artist IS NULL OR album_artist = '') \
          AND (artist IS NULL OR artist = '')"
@@ -109,14 +109,6 @@ pub async fn tracks_for_album(
     } else {
         "album = ?"
     };
-    let sql = format!(
-        "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-         sample_rate, bit_depth, kind, play_count, skip_count \
-         FROM tracks \
-         WHERE {artist_clause} AND {album_clause} \
-         ORDER BY disc_number ASC NULLS LAST, track_number ASC NULLS LAST, \
-                  title COLLATE NOCASE"
-    );
     let mut params: Vec<FV> = Vec::new();
     if album_artist != "Unknown Artist" {
         params.push(FV::String(album_artist.to_string()));
@@ -124,6 +116,28 @@ pub async fn tracks_for_album(
     if album != "Unknown Album" {
         params.push(FV::String(album.to_string()));
     }
+    (format!("{artist_clause} AND {album_clause}"), params)
+}
+
+/// All tracks for the given `(album_artist, album)` pair, ordered by
+/// disc/track number then title. The placeholder strings used by
+/// `list_albums` ("Unknown Album", "Unknown Artist") are treated as
+/// matches against NULL or empty source values so a click in the grid
+/// always returns the same set the grid summarized.
+pub async fn tracks_for_album(
+    engine: &SqliteRawEngine,
+    album_artist: &str,
+    album: &str,
+) -> Result<Vec<crate::db::tracks::TrackRow>, AlbumsError> {
+    let (where_clause, params) = album_match(album_artist, album);
+    let sql = format!(
+        "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
+         sample_rate, bit_depth, kind, play_count, skip_count \
+         FROM tracks \
+         WHERE {where_clause} \
+         ORDER BY disc_number ASC NULLS LAST, track_number ASC NULLS LAST, \
+                  title COLLATE NOCASE"
+    );
 
     let rows = engine
         .raw_sql_query(&sql, &params)
@@ -132,6 +146,27 @@ pub async fn tracks_for_album(
     rows.into_iter()
         .map(|r| serde_json::from_value(r.into_json()))
         .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AlbumsError::Query(anyhow::Error::from(e)))
+}
+
+/// Stamp `artwork_path` on every track of the album that doesn't have
+/// one yet, so `list_albums`' `MIN(artwork_path)` picks it up on the
+/// next load. Returns the number of rows updated.
+pub async fn set_album_artwork(
+    engine: &SqliteRawEngine,
+    album_artist: &str,
+    album: &str,
+    artwork_path: &str,
+) -> Result<u64, AlbumsError> {
+    let (where_clause, mut params) = album_match(album_artist, album);
+    let sql = format!(
+        "UPDATE tracks SET artwork_path = ? \
+         WHERE {where_clause} AND (artwork_path IS NULL OR artwork_path = '')"
+    );
+    params.insert(0, FV::String(artwork_path.to_string()));
+    engine
+        .raw_sql_execute(&sql, &params)
+        .await
         .map_err(|e| AlbumsError::Query(anyhow::Error::from(e)))
 }
 
@@ -164,6 +199,49 @@ mod tests {
             ];
             engine.raw_sql_execute(sql, &params).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn set_album_artwork_stamps_only_the_album_and_only_when_missing() {
+        let db = tmp_db().await;
+        seed(
+            &db.engine,
+            &[
+                ("One A", Some("Artist"), Some("One")),
+                ("One B", Some("Artist"), Some("One")),
+                ("Two A", Some("Artist"), Some("Two")),
+                ("Unknown", None, None),
+            ],
+        )
+        .await;
+        // Pre-existing art on one track must be left alone.
+        db.engine
+            .raw_sql_execute(
+                "UPDATE tracks SET artwork_path = '/keep.jpg' WHERE title = 'One B'",
+                &[],
+            )
+            .await
+            .unwrap();
+
+        let n = set_album_artwork(&db.engine, "Artist", "One", "/new.jpg")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let albums = list_albums(&db.engine).await.unwrap();
+        let one = albums.iter().find(|a| a.album == "One").unwrap();
+        // MIN() over {'/new.jpg', '/keep.jpg'}.
+        assert_eq!(one.artwork_path.as_deref(), Some("/keep.jpg"));
+        let two = albums.iter().find(|a| a.album == "Two").unwrap();
+        assert_eq!(two.artwork_path, None);
+
+        // Placeholder names address the NULL/empty group.
+        let n = set_album_artwork(&db.engine, "Unknown Artist", "Unknown Album", "/u.png")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let albums = list_albums(&db.engine).await.unwrap();
+        let unk = albums.iter().find(|a| a.album == "Unknown Album").unwrap();
+        assert_eq!(unk.artwork_path.as_deref(), Some("/u.png"));
     }
 
     #[tokio::test]

@@ -93,6 +93,48 @@ pub async fn tracks_for_album(
         .map_err(|e| e.to_string())
 }
 
+/// Find (and cache) cover art for an album on demand. Probes the
+/// album's first few files for an embedded picture or a sidecar image,
+/// copies the hit into `$APPDATA/artwork/`, stamps `artwork_path` on
+/// the album's tracks, and returns the cached path — or None when the
+/// album has no discoverable art. Cheap to call repeatedly: the cache
+/// is content-addressed and the DB write is a no-op once stamped.
+#[tauri::command]
+pub async fn resolve_album_artwork(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    album_artist: String,
+    album: String,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("artwork");
+    let engine = &state.db.engine;
+    let paths: Vec<std::path::PathBuf> = albums::tracks_for_album(engine, &album_artist, &album)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|t| std::path::PathBuf::from(t.file_path))
+        .collect();
+    let found = tokio::task::spawn_blocking(move || {
+        crate::library::artwork::resolve_for_files(&cache_dir, &paths)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let Some(path) = found else {
+        return Ok(None);
+    };
+    let path_str = path.to_string_lossy().into_owned();
+    albums::set_album_artwork(engine, &album_artist, &album, &path_str)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Some(path_str))
+}
+
 #[tauri::command]
 pub async fn pick_and_add_track(
     app: tauri::AppHandle,
