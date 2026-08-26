@@ -76,3 +76,33 @@ pub async fn open_smart_playlist(
     }
     Ok(rows)
 }
+
+/// Open any playlist by id and return its tracks: smart playlists are
+/// evaluated live, regular playlists resolve their stored ordered
+/// entries, folders yield nothing. Refreshes the sidebar's cached
+/// count either way.
+#[tauri::command]
+pub async fn open_playlist(
+    state: tauri::State<'_, AppState>,
+    playlist_id: i64,
+) -> Result<Vec<TrackRow>, String> {
+    let engine = &state.db.engine;
+    let rule_json = playlists::get_smart_rule(engine, playlist_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let rows = match rule_json {
+        Some(json) => {
+            let rule: SmartRule = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            smart::evaluate(engine, &rule)
+                .await
+                .map_err(|e| e.to_string())?
+        }
+        None => playlists::tracks_for_regular(engine, playlist_id)
+            .await
+            .map_err(|e| e.to_string())?,
+    };
+    if let Err(e) = playlists::set_cached_count(engine, playlist_id, rows.len() as i64).await {
+        log::warn!("set_cached_count for {playlist_id} failed: {e}");
+    }
+    Ok(rows)
+}

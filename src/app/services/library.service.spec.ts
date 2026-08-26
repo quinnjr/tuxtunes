@@ -1,6 +1,7 @@
 import { Injector, runInInjectionContext } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
-import { LibraryService } from './library.service';
+import { LibraryService, sortTracks } from './library.service';
+import { mapTrack } from './playback.service';
 import { TauriService } from './tauri.service';
 
 type InvokeMock = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -168,5 +169,111 @@ describe('LibraryService', () => {
     svc.tracks.set([{ ...RAW_TRACK, id: 1 } as never, { ...RAW_TRACK, id: 2 } as never]);
     expect(svc.tracksById().size).toBe(2);
     expect(svc.tracksById().get(1)?.id).toBe(1);
+  });
+});
+
+describe('LibraryService playlists', () => {
+  const raws = [
+    { ...RAW_TRACK, id: 3, title: 'Zed', artist: null, album: null },
+    { ...RAW_TRACK, id: 1, title: 'alpha', artist: 'B', album: null },
+    { ...RAW_TRACK, id: 2, title: 'Beta', artist: 'a', album: null },
+  ];
+
+  it('refreshPlaylists maps rows and refreshTracks routes to open_playlist when active', async () => {
+    const { svc, invoke } = build(async (cmd) => {
+      if (cmd === 'list_playlists') {
+        return [
+          {
+            id: 9,
+            name: 'Nine',
+            kind: 'regular',
+            parent_id: 4,
+            sort_order: 2,
+            cached_track_count: 0,
+          },
+          {
+            id: 4,
+            name: 'F',
+            kind: 'weird',
+            parent_id: null,
+            sort_order: 1,
+            cached_track_count: null,
+          },
+        ];
+      }
+      if (cmd === 'open_playlist') return raws;
+      return [];
+    });
+    await svc.refreshPlaylists();
+    expect(svc.playlists()).toEqual([
+      { id: 9, name: 'Nine', kind: 'regular', parentId: 4, sortOrder: 2, trackCount: 0 },
+      { id: 4, name: 'F', kind: 'regular', parentId: null, sortOrder: 1, trackCount: null },
+    ]);
+
+    await svc.openPlaylist(9);
+    expect(invoke).toHaveBeenCalledWith('open_playlist', { playlistId: 9 });
+    expect(invoke).not.toHaveBeenCalledWith('list_tracks', expect.anything());
+    // Playlist order preserved, cached count refreshed from the result.
+    expect(svc.tracks().map((t) => t.id)).toEqual([3, 1, 2]);
+    expect(svc.activePlaylist()?.trackCount).toBe(3);
+
+    await svc.openPlaylist(null);
+    expect(invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
+    expect(svc.activePlaylist()).toBeNull();
+  });
+
+  it('applies search and sort client-side for an active playlist', async () => {
+    const { svc } = build(async (cmd) => (cmd === 'open_playlist' ? raws : []));
+    await svc.openPlaylist(9);
+    svc.setSearch('a');
+    await svc.refreshTracks();
+    expect(svc.tracks().map((t) => t.title)).toEqual(['alpha', 'Beta']);
+    svc.setSearch('');
+    await svc.cycleSort('title');
+    expect(svc.tracks().map((t) => t.title)).toEqual(['alpha', 'Beta', 'Zed']);
+    await svc.cycleSort('title');
+    expect(svc.tracks().map((t) => t.title)).toEqual(['Zed', 'Beta', 'alpha']);
+  });
+
+  it('ignores a stale open_playlist response after switching playlists', async () => {
+    let resolveFirst: (v: unknown) => void = () => {};
+    const { svc } = build(async (cmd, args) => {
+      if (cmd !== 'open_playlist') return [];
+      if ((args as { playlistId: number }).playlistId === 1) {
+        return new Promise((r) => (resolveFirst = r));
+      }
+      return [raws[0]];
+    });
+    const first = svc.openPlaylist(1);
+    await svc.openPlaylist(2);
+    resolveFirst(raws);
+    await first;
+    expect(svc.activePlaylistId()).toBe(2);
+    expect(svc.tracks().map((t) => t.id)).toEqual([3]);
+  });
+});
+
+describe('sortTracks', () => {
+  const rows = [
+    { ...RAW_TRACK, id: 1, artist: null, play_count: 5 },
+    { ...RAW_TRACK, id: 2, artist: 'b', play_count: 1 },
+    { ...RAW_TRACK, id: 3, artist: 'A', play_count: 1 },
+  ].map((r) => mapTrack(r));
+
+  it('sorts strings case-insensitively with nulls last ascending', () => {
+    const out = sortTracks(rows, { column: 'artist', descending: false });
+    expect(out.map((t) => t.id)).toEqual([3, 2, 1]);
+  });
+
+  it('sorts numbers with nulls first descending and is stable', () => {
+    const out = sortTracks(rows, { column: 'play_count', descending: true });
+    expect(out.map((t) => t.id)).toEqual([1, 2, 3]);
+    const asc = sortTracks(rows, { column: 'play_count', descending: false });
+    expect(asc.map((t) => t.id)).toEqual([2, 3, 1]);
+  });
+
+  it('leaves order untouched for columns TrackRow does not carry', () => {
+    const out = sortTracks(rows, { column: 'year', descending: false });
+    expect(out.map((t) => t.id)).toEqual([1, 2, 3]);
   });
 });

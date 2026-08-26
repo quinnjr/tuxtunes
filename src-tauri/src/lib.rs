@@ -62,6 +62,7 @@ pub fn run() {
             commands::playlists::update_smart_playlist,
             commands::playlists::delete_playlist,
             commands::playlists::open_smart_playlist,
+            commands::playlists::open_playlist,
             commands::preferences::get_library_root,
             commands::preferences::set_library_root,
             commands::preferences::get_organize_scheme,

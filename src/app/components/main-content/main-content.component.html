@@ -13,6 +13,15 @@
         </button>
       }
     </div>
+    @if (library.activePlaylist(); as playlist) {
+      <div class="flex min-w-0 items-center gap-1.5 text-body" data-testid="active-playlist">
+        <span class="text-text-muted">›</span>
+        <span class="truncate font-medium text-text-primary">{{ playlist.name }}</span>
+        @if (playlist.trackCount !== null) {
+          <span class="text-caption text-text-muted">({{ playlist.trackCount }})</span>
+        }
+      </div>
+    }
     <div class="ml-auto flex items-center gap-2">
       <div
         class="flex items-center gap-2 rounded-md border border-border bg-bg-surface px-2 py-1 text-body focus-within:border-accent"

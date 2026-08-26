@@ -25,8 +25,17 @@ export class MainContentComponent {
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * The segmented control always addresses the whole library, so
+   * picking a mode leaves any active playlist. Switching to "tracks"
+   * needs an explicit reload because the track list only fetches on
+   * mount and the view may already be 'tracks'.
+   */
   protected setMode(mode: LibraryView): void {
+    const hadPlaylist = this.library.activePlaylistId() !== null;
+    this.library.activePlaylistId.set(null);
     this.ui.libraryView.set(mode);
+    if (hadPlaylist && mode === 'tracks') void this.library.refreshTracks();
   }
 
   protected toggleBrowser(): void {

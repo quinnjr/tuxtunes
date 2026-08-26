@@ -28,6 +28,8 @@ impl PlaylistKind {
 pub enum PlaylistsError {
     #[error("query failed: {0}")]
     Query(#[source] anyhow::Error),
+    #[error("playlist {0} not found")]
+    NotFound(i64),
 }
 
 pub async fn by_persistent_id(
@@ -258,6 +260,68 @@ pub async fn list_all(engine: &SqliteRawEngine) -> Result<Vec<PlaylistRow>, Play
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
 }
 
+/// Resolve a regular playlist's ordered `track_entries` into full track
+/// rows. Order (and duplicates) follow the playlist, not the DB; ids
+/// that no longer exist in `tracks` are silently dropped. Returns an
+/// empty Vec for folders/smart playlists (their `track_entries` is
+/// `[]`). Fetches in chunks to stay well under SQLite's bind limit on
+/// very long playlists.
+pub async fn tracks_for_regular(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+) -> Result<Vec<crate::db::tracks::TrackRow>, PlaylistsError> {
+    use crate::db::tracks::TrackRow;
+    use std::collections::HashMap;
+
+    let sql = "SELECT track_entries FROM playlists WHERE id = ?";
+    let row = engine
+        .raw_sql_optional(sql, &[FilterValue::Int(playlist_id)])
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?
+        .ok_or(PlaylistsError::NotFound(playlist_id))?;
+    let entries_val = row
+        .into_json()
+        .get("track_entries")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let ids: Vec<i64> = match entries_val {
+        serde_json::Value::String(s) => {
+            serde_json::from_str(&s).map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?
+        }
+        serde_json::Value::Array(_) => serde_json::from_value(entries_val)
+            .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?,
+        _ => Vec::new(),
+    };
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    const CHUNK: usize = 500;
+    let mut by_id: HashMap<i64, TrackRow> = HashMap::with_capacity(ids.len());
+    let mut unique: Vec<i64> = ids.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    for chunk in unique.chunks(CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
+             sample_rate, bit_depth, kind, play_count, skip_count \
+             FROM tracks WHERE id IN ({placeholders})"
+        );
+        let params: Vec<FilterValue> = chunk.iter().map(|id| FilterValue::Int(*id)).collect();
+        let rows = engine
+            .raw_sql_query(&sql, &params)
+            .await
+            .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+        for r in rows {
+            let t: TrackRow = serde_json::from_value(r.into_json())
+                .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+            by_id.insert(t.id, t);
+        }
+    }
+    Ok(ids.iter().filter_map(|id| by_id.get(id).cloned()).collect())
+}
+
 /// Hard-delete a playlist by id. Sync-sourced playlists deleted this
 /// way will reappear on the next sync — that's the intended behavior.
 pub async fn delete(engine: &SqliteRawEngine, playlist_id: i64) -> Result<(), PlaylistsError> {
@@ -316,6 +380,75 @@ mod tests {
             .await
             .unwrap();
         db
+    }
+
+    async fn insert_track(db: &Db, title: &str) -> i64 {
+        db.engine
+            .raw_sql_scalar(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+                 VALUES (?, 1000, 0, ?, '[]') RETURNING id",
+                &[
+                    FilterValue::String(title.to_string()),
+                    FilterValue::String(format!("/tmp/{title}.flac")),
+                ],
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn tracks_for_regular_preserves_playlist_order_and_duplicates() {
+        let db = tmp().await;
+        let a = insert_track(&db, "a").await;
+        let b = insert_track(&db, "b").await;
+        let c = insert_track(&db, "c").await;
+        let entries = [c, a, c, 9_999_999, b];
+        let u = PlaylistUpsert {
+            persistent_id: 0x1111_2222_3333_4444,
+            sync_source_id: 1,
+            name: "Ordered",
+            kind: PlaylistKind::Regular,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &entries,
+            smart_rule_json: None,
+        };
+        let id = upsert(&db.engine, &u).await.unwrap();
+        let rows = tracks_for_regular(&db.engine, id).await.unwrap();
+        let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
+        // Playlist order kept, duplicate kept, dangling id dropped.
+        assert_eq!(titles, ["c", "a", "c", "b"]);
+    }
+
+    #[tokio::test]
+    async fn tracks_for_regular_errors_on_unknown_playlist() {
+        let db = tmp().await;
+        let err = tracks_for_regular(&db.engine, 424_242).await.unwrap_err();
+        assert!(matches!(err, PlaylistsError::NotFound(424_242)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn tracks_for_regular_handles_long_playlists_across_chunks() {
+        let db = tmp().await;
+        let mut ids = Vec::new();
+        for i in 0..1_203 {
+            ids.push(insert_track(&db, &format!("t{i}")).await);
+        }
+        ids.reverse();
+        let u = PlaylistUpsert {
+            persistent_id: 0x5555_6666_7777_8888,
+            sync_source_id: 1,
+            name: "Long",
+            kind: PlaylistKind::Regular,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &ids,
+            smart_rule_json: None,
+        };
+        let id = upsert(&db.engine, &u).await.unwrap();
+        let rows = tracks_for_regular(&db.engine, id).await.unwrap();
+        let got: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(got, ids);
     }
 
     #[tokio::test]

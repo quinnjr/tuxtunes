@@ -44,6 +44,26 @@ interface ArtistSummaryRaw {
   track_count: number;
 }
 
+export type PlaylistKind = 'regular' | 'smart' | 'folder';
+
+export interface Playlist {
+  id: number;
+  name: string;
+  kind: PlaylistKind;
+  parentId: number | null;
+  sortOrder: number;
+  trackCount: number | null;
+}
+
+interface PlaylistRaw {
+  id: number;
+  name: string;
+  kind: string;
+  parent_id: number | null;
+  sort_order: number;
+  cached_track_count: number | null;
+}
+
 export type DistinctColumn = 'genre' | 'artist' | 'album';
 
 export interface DistinctValue {
@@ -104,6 +124,21 @@ export class LibraryService {
   readonly tracks = signal<TrackRow[]>([]);
   readonly albums = signal<AlbumSummary[]>([]);
   readonly artists = signal<ArtistSummary[]>([]);
+  readonly playlists = signal<Playlist[]>([]);
+
+  /**
+   * Playlist currently shown in the track list, or null for the whole
+   * library. When set, `refreshTracks()` loads the playlist's tracks
+   * (in playlist order) instead of running the filtered library query.
+   */
+  readonly activePlaylistId = signal<number | null>(null);
+  readonly activePlaylist = computed(this.#computeActivePlaylist.bind(this));
+
+  #computeActivePlaylist(): Playlist | null {
+    const id = this.activePlaylistId();
+    if (id === null) return null;
+    return this.playlists().find((p) => p.id === id) ?? null;
+  }
 
   /** Active column-browser + search filters. Drives refreshTracks(). */
   readonly filters = signal<TrackFilters>({ ...EMPTY_FILTERS });
@@ -147,6 +182,11 @@ export class LibraryService {
   }
 
   async refreshTracks(limit = 500, offset = 0): Promise<void> {
+    const playlistId = this.activePlaylistId();
+    if (playlistId !== null) {
+      await this.loadPlaylistTracks(playlistId);
+      return;
+    }
     const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', {
       limit,
       offset,
@@ -154,6 +194,60 @@ export class LibraryService {
       sort: this.sort(),
     });
     this.tracks.set(raws.map((raw) => mapTrack(raw)));
+  }
+
+  /**
+   * Make `id` the active playlist and load its tracks. Passing null
+   * returns to the whole-library view. Sort resets to playlist order
+   * (the default sort) so the list comes up the way iTunes had it.
+   */
+  async openPlaylist(id: number | null): Promise<void> {
+    this.activePlaylistId.set(id);
+    this.sort.set({ ...DEFAULT_SORT });
+    await this.refreshTracks();
+  }
+
+  /**
+   * Playlists are fetched whole (order is stored on the row) and then
+   * narrowed client-side by the search box and sort spec, since the
+   * backend query has no notion of "the library filtered to a
+   * playlist". Filters from the column browser are ignored here — it
+   * is closed while a playlist is shown.
+   */
+  private async loadPlaylistTracks(id: number): Promise<void> {
+    const raws = await this.tauri.invoke<TrackRowRaw[]>('open_playlist', { playlistId: id });
+    // The user may have switched playlists while the query was in flight.
+    if (this.activePlaylistId() !== id) return;
+    let rows = raws.map((raw) => mapTrack(raw));
+    const search = this.filters().search?.toLowerCase() ?? null;
+    if (search !== null) {
+      rows = rows.filter((t) =>
+        [t.title, t.artist ?? '', t.album ?? ''].some((s) => s.toLowerCase().includes(search)),
+      );
+    }
+    const sort = this.sort();
+    if (sort.column !== DEFAULT_SORT.column || sort.descending !== DEFAULT_SORT.descending) {
+      rows = sortTracks(rows, sort);
+    }
+    this.tracks.set(rows);
+    const count = raws.length;
+    this.playlists.update((all) =>
+      all.map((p) => (p.id === id && p.trackCount !== count ? { ...p, trackCount: count } : p)),
+    );
+  }
+
+  async refreshPlaylists(): Promise<void> {
+    const raws = await this.tauri.invoke<PlaylistRaw[]>('list_playlists');
+    this.playlists.set(
+      raws.map((r) => ({
+        id: r.id,
+        name: r.name,
+        kind: toPlaylistKind(r.kind),
+        parentId: r.parent_id,
+        sortOrder: r.sort_order,
+        trackCount: r.cached_track_count,
+      })),
+    );
   }
 
   /**
@@ -219,4 +313,65 @@ export class LibraryService {
     });
     return raws.map((raw) => mapTrack(raw));
   }
+}
+
+function toPlaylistKind(kind: string): PlaylistKind {
+  return kind === 'smart' || kind === 'folder' ? kind : 'regular';
+}
+
+/** Comparable value for a sort column; only the columns a TrackRow carries. */
+function sortKey(t: TrackRow, column: SortColumn): string | number | null {
+  switch (column) {
+    case 'title': {
+      return t.title;
+    }
+    case 'artist': {
+      return t.artist;
+    }
+    case 'album': {
+      return t.album;
+    }
+    case 'duration_ms': {
+      return t.durationMs;
+    }
+    case 'play_count': {
+      return t.playCount;
+    }
+    case 'sample_rate': {
+      return t.sampleRate;
+    }
+    case 'kind': {
+      return t.kind;
+    }
+    default: {
+      return null;
+    }
+  }
+}
+
+/**
+ * Stable client-side sort mirroring the backend's semantics: strings
+ * compare case-insensitively, nulls sort last ascending / first
+ * descending. Unknown columns leave the order untouched.
+ */
+export function sortTracks(rows: TrackRow[], sort: TrackSort): TrackRow[] {
+  const dir = sort.descending ? -1 : 1;
+  return rows
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => {
+      const ka = sortKey(a.t, sort.column);
+      const kb = sortKey(b.t, sort.column);
+      if (ka === null && kb === null) return a.i - b.i;
+      // Nulls last ascending, first descending (matches the SQL side).
+      if (ka === null) return dir;
+      if (kb === null) return -dir;
+      let cmp: number;
+      if (typeof ka === 'string' && typeof kb === 'string') {
+        cmp = ka.localeCompare(kb, undefined, { sensitivity: 'base' });
+      } else {
+        cmp = (ka as number) < (kb as number) ? -1 : (ka as number) > (kb as number) ? 1 : 0;
+      }
+      return cmp === 0 ? a.i - b.i : cmp * dir;
+    })
+    .map((x) => x.t);
 }

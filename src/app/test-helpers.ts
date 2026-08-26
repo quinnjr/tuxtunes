@@ -31,6 +31,8 @@ export const defaultInvoke = async (cmd: string): Promise<unknown> => {
     cmd === 'list_albums' ||
     cmd === 'list_artists' ||
     cmd === 'tracks_for_album' ||
+    cmd === 'list_playlists' ||
+    cmd === 'open_playlist' ||
     cmd === 'list_sync_sources' ||
     cmd === 'list_audio_devices' ||
     cmd === 'get_distinct'
