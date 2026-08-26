@@ -4,6 +4,7 @@ import { InViewDirective } from '../../directives/in-view.directive';
 import { ContextMenuService } from '../../services/context-menu.service';
 import { LibraryService, AlbumSummary } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
+import { UiService } from '../../services/ui.service';
 import { formatMmSs } from '../../utils/time';
 
 @Component({
@@ -16,6 +17,7 @@ export class AlbumGridViewComponent implements OnInit {
   protected readonly library = inject(LibraryService);
   private readonly playback = inject(PlaybackService);
   private readonly ctx = inject(ContextMenuService);
+  private readonly ui = inject(UiService);
 
   /** Currently-expanded album. Clicking a card flips its inline track list. */
   protected readonly expanded = signal<{ albumArtist: string; album: string } | null>(null);
@@ -33,7 +35,7 @@ export class AlbumGridViewComponent implements OnInit {
   private static readonly ARTWORK_CONCURRENCY = 4;
 
   ngOnInit(): void {
-    void this.library.refreshAlbums();
+    void this.ui.guard(this.library.refreshAlbums());
   }
 
   /** A card scrolled into view: queue an artwork lookup if it needs one. */
@@ -83,7 +85,12 @@ export class AlbumGridViewComponent implements OnInit {
       return;
     }
     this.expanded.set({ albumArtist: a.albumArtist, album: a.album });
-    const tracks = await this.library.tracksForAlbum(a.albumArtist, a.album);
+    const tracks = await this.ui.guard(this.library.tracksForAlbum(a.albumArtist, a.album));
+    if (tracks === null) {
+      // Don't leave a card open on nothing.
+      this.expanded.set(null);
+      return;
+    }
     this.expandedTracks.set(tracks);
   }
 
@@ -111,7 +118,7 @@ export class AlbumGridViewComponent implements OnInit {
     const tracks =
       this.isExpanded(a) && this.expandedTracks().length > 0
         ? this.expandedTracks()
-        : await this.library.tracksForAlbum(a.albumArtist, a.album);
+        : ((await this.ui.guard(this.library.tracksForAlbum(a.albumArtist, a.album))) ?? []);
     this.ctx.show(event, [
       {
         label: `Play album (${tracks.length})`,

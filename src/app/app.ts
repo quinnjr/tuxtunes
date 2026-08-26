@@ -6,9 +6,11 @@ import { MenuBarComponent } from './components/menu-bar/menu-bar.component';
 import { NowPlayingPanelComponent } from './components/now-playing-panel/now-playing-panel.component';
 import { PreferencesPanelComponent } from './components/preferences-panel/preferences-panel.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
+import { SmartPlaylistEditorComponent } from './components/smart-playlist-editor/smart-playlist-editor.component';
 import { StatusBarComponent } from './components/status-bar/status-bar.component';
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
 import { LibraryService } from './services/library.service';
+import { UiService } from './services/ui.service';
 
 @Component({
   selector: 'app-root',
@@ -20,6 +22,7 @@ import { LibraryService } from './services/library.service';
     NowPlayingPanelComponent,
     PreferencesPanelComponent,
     SidebarComponent,
+    SmartPlaylistEditorComponent,
     StatusBarComponent,
     TransportBarComponent,
   ],
@@ -29,8 +32,9 @@ import { LibraryService } from './services/library.service';
 })
 export class App implements OnInit {
   private readonly library = inject(LibraryService);
+  private readonly ui = inject(UiService);
 
   ngOnInit(): void {
-    void this.library.refreshStats();
+    void this.ui.guard(this.library.refreshStats());
   }
 }

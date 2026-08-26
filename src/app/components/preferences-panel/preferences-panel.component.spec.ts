@@ -113,4 +113,29 @@ describe('PreferencesPanelComponent', () => {
     expect(cmp.draftScheme()).toBe('{album}/{title}.{ext}');
     expect(cmp.draftKeep()).toBe(false);
   });
+
+  it('save() reports the error and keeps the panel open when setLibraryRoot rejects', async () => {
+    const { cmp, prefs, ui } = setup();
+    cmp.draftRoot.set('/r');
+    vi.spyOn(prefs, 'setLibraryRoot').mockRejectedValue(new Error('disk full'));
+    vi.spyOn(prefs, 'setOrganizeScheme').mockResolvedValue();
+    vi.spyOn(prefs, 'setKeepOrganized').mockResolvedValue();
+    ui.preferencesOpen.set(true);
+
+    await expect(cmp.save()).resolves.toBeUndefined();
+
+    expect(ui.preferencesOpen()).toBe(true);
+    expect(ui.lastError()).toContain('disk full');
+  });
+
+  it('opening the dialog leaves drafts at defaults and reports the error when refresh() rejects', async () => {
+    const { fixture, cmp, prefs, ui } = setup();
+    vi.spyOn(prefs, 'refresh').mockRejectedValue(new Error('unreachable'));
+    ui.preferencesOpen.set(true);
+    fixture.detectChanges();
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    expect(cmp.draftRoot()).toBe('');
+    expect(ui.lastError()).toContain('unreachable');
+  });
 });

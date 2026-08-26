@@ -292,4 +292,17 @@ mod tests {
         assert_eq!(again.added, 0);
         assert_eq!(again.skipped, 3);
     }
+
+    #[tokio::test]
+    async fn probe_and_add_errors_on_non_audio_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let bogus = dir.path().join("not-audio.flac");
+        std::fs::write(&bogus, b"not actually audio").unwrap();
+
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp_db.path()).await.unwrap();
+
+        let err = probe_and_add(&db.engine, &bogus).await.unwrap_err();
+        assert!(matches!(err, IngestError::Probe { .. }));
+    }
 }

@@ -27,6 +27,7 @@ interface PathRow {
 })
 export class ImportWizardComponent {
   protected readonly sync = inject(SyncService);
+  private readonly ui = inject(UiService);
   protected readonly open = inject(UiService).importWizardOpen;
 
   private readonly logBox = viewChild<ElementRef<HTMLElement>>('logBox');
@@ -88,10 +89,12 @@ export class ImportWizardComponent {
   }
 
   protected async pickFile(): Promise<void> {
-    const picked = await dialogOpen({
-      filters: [{ name: 'iTunes Library', extensions: ['itl'] }],
-      multiple: false,
-    });
+    const picked = await this.ui.guard(
+      dialogOpen({
+        filters: [{ name: 'iTunes Library', extensions: ['itl'] }],
+        multiple: false,
+      }),
+    );
     if (typeof picked === 'string') this.filePath.set(picked);
   }
 
@@ -112,15 +115,19 @@ export class ImportWizardComponent {
     this.step.set('conflict');
   }
 
+  /** Create the source; on failure stay on this step with the error shown. */
   protected async submitConflict(): Promise<void> {
     const mappings: PathMapping[] = this.pathRows().filter((r) => r.from && r.to);
-    const id = await this.sync.addSource({
-      name: this.name(),
-      source_path: this.filePath(),
-      path_mappings: mappings,
-      conflict_rules: this.rules(),
-      auto_copy_files: this.autoCopy(),
-    });
+    const id = await this.ui.guard(
+      this.sync.addSource({
+        name: this.name(),
+        source_path: this.filePath(),
+        path_mappings: mappings,
+        conflict_rules: this.rules(),
+        auto_copy_files: this.autoCopy(),
+      }),
+    );
+    if (id === null) return;
     this.step.set('progress');
     await this.sync.runNow(id);
   }

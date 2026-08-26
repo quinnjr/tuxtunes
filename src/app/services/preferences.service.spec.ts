@@ -71,3 +71,29 @@ describe('PreferencesService', () => {
     expect(svc.keepOrganized()).toBe(false);
   });
 });
+
+describe('negative cases', () => {
+  it('setLibraryRoot() rejects when the backend throws and leaves libraryRoot() unchanged', async () => {
+    const { svc } = build(async () => {
+      throw new Error('write failed');
+    });
+    await expect(svc.setLibraryRoot('/bad')).rejects.toThrow('write failed');
+    expect(svc.libraryRoot()).toBe('');
+  });
+
+  it('setOrganizeScheme() rejects when the backend throws and leaves organizeScheme() unchanged', async () => {
+    const { svc } = build(async () => {
+      throw new Error('write failed');
+    });
+    await expect(svc.setOrganizeScheme('{bad}')).rejects.toThrow('write failed');
+    expect(svc.organizeScheme()).toBe('');
+  });
+
+  it('setKeepOrganized() rejects when the backend throws and leaves keepOrganized() unchanged', async () => {
+    const { svc } = build(async () => {
+      throw new Error('write failed');
+    });
+    await expect(svc.setKeepOrganized(false)).rejects.toThrow('write failed');
+    expect(svc.keepOrganized()).toBe(true);
+  });
+});

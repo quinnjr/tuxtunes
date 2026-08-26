@@ -11,6 +11,7 @@ interface MenuBarInternals {
   close(): void;
   addFile(): Promise<void>;
   addFolder(): Promise<void>;
+  newSmartPlaylist(): void;
   importItunes(): void;
   openPreferences(): void;
 }
@@ -66,6 +67,15 @@ describe('MenuBarComponent', () => {
     expect(cmp.openMenu()).toBeNull();
   });
 
+  it('newSmartPlaylist() opens the editor for a new playlist and closes the menu', () => {
+    const { cmp } = setup();
+    const ui = TestBed.inject(UiService);
+    cmp.toggle('file');
+    cmp.newSmartPlaylist();
+    expect(ui.smartEditor()).toEqual({ playlistId: null });
+    expect(cmp.openMenu()).toBeNull();
+  });
+
   it('importItunes() flips the import-wizard signal and closes the menu', () => {
     const { cmp, ui } = setup();
     expect(ui.importWizardOpen()).toBe(false);
@@ -88,5 +98,27 @@ describe('MenuBarComponent', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('File');
     expect(text).toContain('Settings');
+  });
+
+  it('addFile() closes the menu and reports the error when addTrackFromPicker rejects', async () => {
+    const { cmp, library, ui } = setup();
+    vi.spyOn(library, 'addTrackFromPicker').mockRejectedValue(new Error('picker failed'));
+    cmp.toggle('file');
+
+    await expect(cmp.addFile()).resolves.toBeUndefined();
+
+    expect(cmp.openMenu()).toBeNull();
+    expect(ui.lastError()).toContain('picker failed');
+  });
+
+  it('addFolder() closes the menu and reports the error when addFolderFromPicker rejects', async () => {
+    const { cmp, library, ui } = setup();
+    vi.spyOn(library, 'addFolderFromPicker').mockRejectedValue(new Error('folder locked'));
+    cmp.toggle('file');
+
+    await expect(cmp.addFolder()).resolves.toBeUndefined();
+
+    expect(cmp.openMenu()).toBeNull();
+    expect(ui.lastError()).toContain('folder locked');
   });
 });

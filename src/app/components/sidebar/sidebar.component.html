@@ -95,6 +95,7 @@
         [class]="'mac-sidebar-item w-full ' + (isPlaylistActive(node.playlist) ? 'selected' : '')"
         [title]="node.playlist.name"
         (click)="onPlaylistClick(node)"
+        (contextmenu)="onPlaylistContextMenu(node, $event)"
       >
         @switch (isFolder(node) ? 'folder' : node.playlist.kind) {
           @case ('folder') {

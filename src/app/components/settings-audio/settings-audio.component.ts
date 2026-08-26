@@ -1,5 +1,6 @@
 import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { TauriService } from '../../services/tauri.service';
+import { UiService } from '../../services/ui.service';
 
 export interface AudioDevice {
   id: string;
@@ -24,6 +25,7 @@ interface AudioPrefsSnapshot {
 })
 export class SettingsAudioComponent implements OnInit {
   private readonly tauri = inject(TauriService);
+  private readonly ui = inject(UiService);
 
   protected readonly devices = signal<AudioDevice[]>([]);
   protected readonly selectedId = signal<string | null>(null);
@@ -37,7 +39,7 @@ export class SettingsAudioComponent implements OnInit {
   ] as const;
 
   ngOnInit(): void {
-    void this.refresh();
+    void this.ui.guard(this.refresh());
   }
 
   /**
@@ -57,19 +59,29 @@ export class SettingsAudioComponent implements OnInit {
     this.replayGainMode.set(prefs.replaygain_mode);
   }
 
+  // Each setter is optimistic: the signal moves first so the control
+  // feels instant, and rolls back if the backend write fails.
   protected async select(id: string): Promise<void> {
+    const previous = this.selectedId();
     this.selectedId.set(id);
-    await this.apply();
+    if (!(await this.applyOrRollback())) this.selectedId.set(previous);
   }
 
   protected async toggleExclusive(): Promise<void> {
-    this.exclusive.update((v) => !v);
-    if (this.selectedId()) await this.apply();
+    const previous = this.exclusive();
+    this.exclusive.set(!previous);
+    if (this.selectedId() && !(await this.applyOrRollback())) this.exclusive.set(previous);
   }
 
   protected async setReplayGain(mode: ReplayGainMode): Promise<void> {
+    const previous = this.replayGainMode();
     this.replayGainMode.set(mode);
-    if (this.selectedId()) await this.apply();
+    if (this.selectedId() && !(await this.applyOrRollback())) this.replayGainMode.set(previous);
+  }
+
+  /** `apply()` with the failure reported; true on success. */
+  private async applyOrRollback(): Promise<boolean> {
+    return (await this.ui.guard(this.apply())) !== null;
   }
 
   /**

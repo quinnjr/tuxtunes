@@ -1,0 +1,229 @@
+@if (open()) {
+  <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
+    <div class="mac-sheet flex max-h-[90vh] w-[680px] flex-col gap-4 overflow-auto p-6">
+      <header class="hairline-b flex items-center justify-between pb-3">
+        <h2 class="text-headline font-semibold text-text-primary">
+          {{ editingId() === null ? 'New Smart Playlist' : 'Edit Smart Playlist' }}
+        </h2>
+        <button type="button" class="mac-btn h-7 w-7" (click)="close()" aria-label="Close">
+          <span class="text-body">✕</span>
+        </button>
+      </header>
+
+      <label class="flex flex-col gap-1.5 text-body">
+        <span class="text-text-secondary">Name</span>
+        <input
+          type="text"
+          [value]="name()"
+          (input)="onNameInput($event)"
+          placeholder="Untitled smart playlist"
+          class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+        />
+      </label>
+
+      <div class="flex items-center gap-2 text-body text-text-primary">
+        <span>Match</span>
+        <select
+          [value]="rule().match_all ? 'all' : 'any'"
+          (change)="setMatchAll(inputValue($event) === 'all')"
+          class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+          aria-label="Match all or any"
+        >
+          <option value="all">all</option>
+          <option value="any">any</option>
+        </select>
+        <span>of the following rules:</span>
+      </div>
+
+      <div class="flex flex-col gap-2" role="list">
+        @for (row of rows(); track $index; let i = $index) {
+          <div class="flex flex-wrap items-center gap-2 text-body" role="listitem">
+            <select
+              [value]="row.field"
+              (change)="setField(i, inputValue($event))"
+              class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+              aria-label="Field"
+            >
+              @for (f of fields; track f.id) {
+                <option [value]="f.id">{{ f.label }}</option>
+              }
+            </select>
+            <select
+              [value]="row.op"
+              (change)="setOp(i, $any(inputValue($event)))"
+              class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+              aria-label="Operator"
+            >
+              @for (op of opsFor(row); track op) {
+                <option [value]="op">{{ opLabels[op] }}</option>
+              }
+            </select>
+
+            @switch (widget(row)) {
+              @case ('text') {
+                <input
+                  type="text"
+                  [value]="textValue(row)"
+                  (input)="setText(i, inputValue($event))"
+                  class="min-w-[160px] flex-1 rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary outline-none focus:border-accent"
+                  aria-label="Value"
+                />
+              }
+              @case ('number') {
+                <input
+                  type="number"
+                  [value]="numberValue(row)"
+                  (input)="setNumber(i, inputValue($event))"
+                  class="w-28 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary outline-none focus:border-accent"
+                  aria-label="Value"
+                />
+              }
+              @case ('bool') {
+                <select
+                  [value]="boolValue(row) ? 'true' : 'false'"
+                  (change)="setBool(i, inputValue($event) === 'true')"
+                  class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+                  aria-label="Value"
+                >
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              }
+              @case ('range') {
+                <input
+                  type="number"
+                  [value]="rangeValue(row).from"
+                  (input)="setRange(i, 'from', inputValue($event))"
+                  class="w-24 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
+                  aria-label="From"
+                />
+                <span class="text-text-secondary">to</span>
+                <input
+                  type="number"
+                  [value]="rangeValue(row).to"
+                  (input)="setRange(i, 'to', inputValue($event))"
+                  class="w-24 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
+                  aria-label="To"
+                />
+              }
+              @case ('relative') {
+                <input
+                  type="number"
+                  min="1"
+                  [value]="relativeValue(row).n"
+                  (input)="setRelative(i, 'n', inputValue($event))"
+                  class="w-20 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary"
+                  aria-label="Amount"
+                />
+                <select
+                  [value]="relativeValue(row).unit"
+                  (change)="setRelative(i, 'unit', inputValue($event))"
+                  class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary"
+                  aria-label="Unit"
+                >
+                  @for (u of timeUnits; track u) {
+                    <option [value]="u">{{ u }}</option>
+                  }
+                </select>
+              }
+            }
+
+            <span class="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                class="mac-btn h-6 w-6"
+                (click)="removeRow(i)"
+                [disabled]="rows().length <= 1"
+                aria-label="Remove rule"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                class="mac-btn h-6 w-6"
+                (click)="addRow()"
+                aria-label="Add rule"
+              >
+                +
+              </button>
+            </span>
+          </div>
+        }
+      </div>
+
+      <div class="hairline-t flex flex-col gap-2 pt-3 text-body text-text-primary">
+        <label class="flex flex-wrap items-center gap-2">
+          <input
+            type="checkbox"
+            [checked]="rule().limit !== null"
+            (change)="toggleLimit(inputChecked($event))"
+          />
+          <span>Limit to</span>
+          <input
+            type="number"
+            min="1"
+            [value]="rule().limit?.value ?? 25"
+            [disabled]="rule().limit === null"
+            (input)="setLimitValue(inputValue($event))"
+            class="w-20 rounded-md border border-border bg-bg-primary px-2 py-1 tnum text-text-primary disabled:opacity-50"
+            aria-label="Limit amount"
+          />
+          <select
+            [value]="rule().limit?.unit ?? 'songs'"
+            [disabled]="rule().limit === null"
+            (change)="setLimitUnit($any(inputValue($event)))"
+            class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary disabled:opacity-50"
+            aria-label="Limit unit"
+          >
+            @for (u of limitUnits; track u) {
+              <option [value]="u">{{ u === 'mb' ? 'MB' : u === 'gb' ? 'GB' : u }}</option>
+            }
+          </select>
+          <span>selected by</span>
+          <select
+            [value]="rule().limit?.selected_by ?? 'random'"
+            [disabled]="rule().limit === null"
+            (change)="setSelectedBy($any(inputValue($event)))"
+            class="rounded-md border border-border bg-bg-primary px-2 py-1 text-text-primary disabled:opacity-50"
+            aria-label="Selected by"
+          >
+            @for (m of selectionModes; track m.id) {
+              <option [value]="m.id">{{ m.label }}</option>
+            }
+          </select>
+        </label>
+        <label class="flex items-center gap-2">
+          <input
+            type="checkbox"
+            [checked]="rule().live_updating"
+            (change)="setLiveUpdating(inputChecked($event))"
+          />
+          <span>Live updating</span>
+        </label>
+      </div>
+
+      <footer class="hairline-t flex items-center justify-between pt-3">
+        <span class="text-caption text-text-secondary" data-testid="match-count">
+          @if (matchCount(); as n) {
+            {{ n }} {{ n === 1 ? 'song matches' : 'songs match' }}
+          } @else if (matchCount() === 0) {
+            No songs match
+          } @else {
+            …
+          }
+        </span>
+        <span class="flex items-center gap-2">
+          <button type="button" class="mac-btn h-8 px-3" (click)="close()">Cancel</button>
+          <button
+            type="button"
+            class="mac-btn h-8 px-4 bg-accent text-white hover:bg-accent-hover"
+            (click)="save()"
+            [disabled]="!canSave()"
+          >
+            {{ editingId() === null ? 'Create' : 'Save' }}
+          </button>
+        </span>
+      </footer>
+    </div>
+  </div>
+}

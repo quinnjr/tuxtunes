@@ -1,6 +1,7 @@
 import { Injector, runInInjectionContext } from '@angular/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LibraryService } from './library.service';
+import { UiService } from './ui.service';
 import { PlaybackService, type TrackRow } from './playback.service';
 import { TauriService } from './tauri.service';
 
@@ -38,6 +39,7 @@ function build(
     providers: [
       { provide: TauriService, useValue: stubTauri },
       { provide: LibraryService, useClass: LibraryService },
+      { provide: UiService, useClass: UiService },
       { provide: PlaybackService, useClass: PlaybackService },
     ],
   });
@@ -415,6 +417,7 @@ describe('PlaybackService', () => {
       providers: [
         { provide: TauriService, useValue: stubTauri },
         { provide: LibraryService, useClass: LibraryService },
+        { provide: UiService, useClass: UiService },
         { provide: PlaybackService, useClass: PlaybackService },
       ],
     });
@@ -425,5 +428,46 @@ describe('PlaybackService', () => {
     for (const u of unlistenSpies) expect(u).toHaveBeenCalledTimes(1);
     svc.ngOnDestroy();
     for (const u of unlistenSpies) expect(u).toHaveBeenCalledTimes(1);
+  });
+
+  it('pause / resume / stop / seek / setVolume resolve without throwing and surface lastError on rejection', async () => {
+    const failingCommands = new Set(['pause', 'resume', 'stop', 'seek', 'set_volume']);
+    const { svc } = build(async (cmd) => {
+      if (failingCommands.has(cmd)) throw new Error('engine down');
+      return [];
+    });
+
+    await expect(svc.pause()).resolves.toBeUndefined();
+    expect(svc.lastError()).toBe('engine down');
+
+    await expect(svc.resume()).resolves.toBeUndefined();
+    expect(svc.lastError()).toBe('engine down');
+
+    await expect(svc.stop()).resolves.toBeUndefined();
+    expect(svc.lastError()).toBe('engine down');
+
+    await expect(svc.seek(0)).resolves.toBeUndefined();
+    expect(svc.lastError()).toBe('engine down');
+
+    await expect(svc.setVolume(50)).resolves.toBeUndefined();
+    expect(svc.lastError()).toBe('engine down');
+  });
+
+  it('reorderQueue() is a no-op for out-of-range indices', () => {
+    const { svc } = build();
+    const a = { ...TRACK, id: 1 };
+    const b = { ...TRACK, id: 2 };
+    svc.enqueue(a);
+    svc.enqueue(b);
+
+    svc.reorderQueue(99, 0);
+    expect(svc.queue().map((t) => t.id)).toEqual([1, 2]);
+    expect(svc.queue().includes(undefined as unknown as TrackRow)).toBe(false);
+
+    svc.reorderQueue(-1, 0);
+    expect(svc.queue().map((t) => t.id)).toEqual([1, 2]);
+
+    svc.reorderQueue(0, 5);
+    expect(svc.queue().map((t) => t.id)).toEqual([1, 2]);
   });
 });

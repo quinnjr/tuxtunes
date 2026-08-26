@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ContextMenuService, type ContextMenuItem } from '../../services/context-menu.service';
 import { LibraryService, type AlbumSummary } from '../../services/library.service';
 import { PlaybackService, type TrackRow } from '../../services/playback.service';
+import { UiService } from '../../services/ui.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { AlbumGridViewComponent } from './album-grid-view.component';
 
@@ -237,5 +238,34 @@ describe('AlbumGridViewComponent', () => {
     expect(playSpy).toHaveBeenCalledWith(5);
     expect(enqueueSpy).toHaveBeenCalled();
     expect(playNextSpy).toHaveBeenCalled();
+  });
+
+  it('toggle() leaves the card collapsed and reports the error when tracksForAlbum rejects', async () => {
+    const { cmp, library } = setup();
+    const ui = TestBed.inject(UiService);
+    const a = ALBUM();
+    vi.spyOn(library, 'tracksForAlbum').mockRejectedValue(new Error('io error'));
+
+    await expect(cmp.toggle(a)).resolves.toBeUndefined();
+
+    expect(cmp.isExpanded(a)).toBe(false);
+    expect(cmp.expandedTracks()).toEqual([]);
+    expect(ui.lastError()).toContain('io error');
+  });
+
+  it('onAlbumContextMenu shows a "Play album (0)" item and reports the error when tracksForAlbum rejects', async () => {
+    const { cmp, ctx, library } = setup();
+    const ui = TestBed.inject(UiService);
+    vi.spyOn(library, 'tracksForAlbum').mockRejectedValue(new Error('offline'));
+    const showSpy = vi.spyOn(ctx, 'show');
+
+    await expect(
+      cmp.onAlbumContextMenu(ALBUM(), { preventDefault: vi.fn() } as unknown as MouseEvent),
+    ).resolves.toBeUndefined();
+
+    expect(showSpy).toHaveBeenCalled();
+    const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items[0].label).toBe('Play album (0)');
+    expect(ui.lastError()).toContain('offline');
   });
 });

@@ -1,7 +1,7 @@
 import { Component, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
-import { PlaybackService } from '../../services/playback.service';
 import { SyncService } from '../../services/sync.service';
+import { UiService } from '../../services/ui.service';
 import { formatByteSize, formatTotalDuration } from '../../utils/format';
 
 @Component({
@@ -13,7 +13,7 @@ import { formatByteSize, formatTotalDuration } from '../../utils/format';
 export class StatusBarComponent {
   protected readonly library = inject(LibraryService);
   protected readonly sync = inject(SyncService);
-  protected readonly playback = inject(PlaybackService);
+  protected readonly ui = inject(UiService);
 
   protected readonly summary = computed(this.#computeSummary.bind(this));
   protected readonly syncLabel = computed(this.#computeSyncLabel.bind(this));

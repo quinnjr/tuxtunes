@@ -618,3 +618,58 @@ async fn app_state_is_managed_on_the_mock_app() {
     let state: tauri::State<AppState> = app.state::<AppState>();
     let _ = Arc::clone(&state.db);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn play_track_errors_and_marks_missing_when_file_absent() {
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    let path = tmp.path().join("gone.flac");
+
+    let id: i64 = state
+        .db
+        .engine
+        .raw_sql_first(
+            "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('gone', 0, 0, ?, '[]') RETURNING id",
+            &[prax_query::filter::FilterValue::String(
+                path.display().to_string(),
+            )],
+        )
+        .await
+        .unwrap()
+        .into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .unwrap();
+
+    let err = commands::playback::play_track(state.clone(), id)
+        .await
+        .unwrap_err();
+    assert!(err.contains("File not found"), "{err:?}");
+
+    let row = tuxtunes::db::tracks::get(&state.db.engine, id)
+        .await
+        .unwrap();
+    assert_eq!(row.import_status, "missing_source");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn play_track_errors_for_unknown_track_id() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let err = commands::playback::play_track(state, 999_999)
+        .await
+        .unwrap_err();
+    assert!(!err.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn open_playlist_errors_for_unknown_playlist_id() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let err = commands::playlists::open_playlist(state, 999_999)
+        .await
+        .unwrap_err();
+    assert!(err.contains("not found"), "{err:?}");
+}

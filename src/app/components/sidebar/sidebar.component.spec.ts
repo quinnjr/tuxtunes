@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { ContextMenuService, type ContextMenuItem } from '../../services/context-menu.service';
 import { LibraryService, Playlist } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
 import { appProviders, defaultInvoke, tauriStub } from '../../test-helpers';
@@ -10,6 +11,7 @@ interface SidebarInternals {
   isActive(v: string): boolean;
   onPlaylistClick(node: { playlist: Playlist; children: unknown[] }): void;
   isFolder(node: { playlist: Playlist; children: unknown[] }): boolean;
+  onPlaylistContextMenu(node: { playlist: Playlist; children: unknown[] }, event: MouseEvent): void;
   isExpanded(p: Playlist): boolean;
 }
 
@@ -183,6 +185,37 @@ describe('SidebarComponent', () => {
     expect(library.activePlaylistId()).toBeNull();
     expect(stub.invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
     expect(cmp.isActive('tracks')).toBe(true);
+  });
+
+  it('right-click offers Edit + Delete for smart playlists, Remove for synced, nothing for folders', async () => {
+    const { fixture, cmp, ui, library, stub } = setup(RAW_PLAYLISTS);
+    await settle(fixture);
+    const ctx = TestBed.inject(ContextMenuService);
+    const show = vi.spyOn(ctx, 'show');
+    const ev = new MouseEvent('contextmenu');
+    const smart = library.playlists().find((p) => p.id === 7)!;
+    cmp.onPlaylistContextMenu({ playlist: smart, children: [] }, ev);
+    const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items.map((i) => i.label)).toEqual(['Edit Smart Playlist…', 'Delete']);
+    await items[0].action?.();
+    expect(ui.smartEditor()).toEqual({ playlistId: 7 });
+    library.activePlaylistId.set(7);
+    await items[1].action?.();
+    expect(stub.invoke).toHaveBeenCalledWith('delete_playlist', { playlistId: 7 });
+    expect(library.activePlaylistId()).toBeNull();
+
+    show.mockClear();
+    const regular = library.playlists().find((p) => p.id === 6)!;
+    cmp.onPlaylistContextMenu({ playlist: regular, children: [] }, ev);
+    const items2 = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items2.map((i) => i.label)).toEqual(['Remove until next sync']);
+
+    show.mockClear();
+    cmp.onPlaylistContextMenu(
+      { playlist: library.playlists().find((p) => p.id === 5)!, children: [{}] },
+      ev,
+    );
+    expect(show).not.toHaveBeenCalled();
   });
 
   it('renders the All Songs / Artists / Albums / Genres buttons', () => {

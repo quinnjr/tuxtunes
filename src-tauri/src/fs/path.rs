@@ -464,4 +464,16 @@ mod tests {
         let resolved = resolve_collision(&f);
         assert_eq!(resolved.file_name().unwrap().to_str().unwrap(), "noext (2)");
     }
+
+    #[test]
+    fn nested_brace_in_token_errors() {
+        let err = render("{title{x}}", &t("x")).unwrap_err();
+        assert!(matches!(err, PathRenderError::Malformed(_)));
+    }
+
+    #[test]
+    fn non_numeric_width_errors() {
+        let err = render("{track:xx}", &t("x")).unwrap_err();
+        assert!(matches!(err, PathRenderError::Malformed(_)));
+    }
 }

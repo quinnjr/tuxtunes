@@ -5,6 +5,7 @@ import {
   type DistinctColumn,
   type DistinctValue,
 } from '../../services/library.service';
+import { UiService } from '../../services/ui.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { ColumnBrowserComponent } from './column-browser.component';
 
@@ -143,5 +144,44 @@ describe('ColumnBrowserComponent', () => {
     // called refreshAll already, so just assert the spy fired at
     // least three times in this manual call.
     expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('refreshAll() leaves panes unchanged and reports exactly one error when getDistinct rejects', async () => {
+    // get_distinct rejects from the very first call, so the constructor
+    // effect's and ngOnInit's own refreshAll() calls fail the same way
+    // as our manual call below — no race with a successful fetch.
+    const stub = tauriStub(async (cmd) => {
+      if (cmd === 'get_distinct') throw new Error('query failed');
+      return [];
+    });
+    TestBed.configureTestingModule({
+      imports: [ColumnBrowserComponent],
+      providers: appProviders(stub),
+    });
+    const fixture = TestBed.createComponent(ColumnBrowserComponent);
+    fixture.detectChanges();
+    const cmp = fixture.componentInstance as unknown as BrowserInternals;
+    const ui = TestBed.inject(UiService);
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+
+    const before = cmp.panes();
+    const reportSpy = vi.spyOn(ui, 'reportError');
+
+    await expect(cmp.refreshAll()).resolves.toBeUndefined();
+
+    expect(cmp.panes()).toBe(before);
+    expect(reportSpy).toHaveBeenCalledTimes(1);
+    expect(ui.lastError()).toContain('query failed');
+  });
+
+  it('toggle() resolves and reports the error when refreshTracks rejects', async () => {
+    const { cmp, library } = setup();
+    const ui = TestBed.inject(UiService);
+    vi.spyOn(library, 'refreshTracks').mockRejectedValue(new Error('backend down'));
+
+    await expect(cmp.toggle('genre', 'Rock', false)).resolves.toBeUndefined();
+
+    expect(library.filters().genres).toEqual(['Rock']);
+    expect(ui.lastError()).toContain('backend down');
   });
 });

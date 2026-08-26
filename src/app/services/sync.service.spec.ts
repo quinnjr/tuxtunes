@@ -239,3 +239,22 @@ describe('SyncService', () => {
     for (const u of unlistenSpies) expect(u).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('negative cases', () => {
+  it('addSource() rejects when add_sync_source fails and does not refresh the list', async () => {
+    const { svc, invoke } = build(async (cmd) => {
+      if (cmd === 'add_sync_source') throw new Error('add failed');
+      return;
+    });
+    await expect(
+      svc.addSource({
+        name: 'X',
+        source_path: '/x.itl',
+        path_mappings: [],
+        conflict_rules: RAW_SOURCE.conflict_rules,
+        auto_copy_files: true,
+      }),
+    ).rejects.toThrow('add failed');
+    expect(invoke).not.toHaveBeenCalledWith('list_sync_sources');
+  });
+});

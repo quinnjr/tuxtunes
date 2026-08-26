@@ -143,4 +143,30 @@ describe('ImportWizardComponent', () => {
     expect(text).toContain('reading .itl');
     expect(text).toContain('applying tracks: 100');
   });
+
+  it('submitConflict stays on the conflict step and reports the error when addSource rejects', async () => {
+    const { cmp, sync, ui } = setup();
+    cmp.filePath.set('/x.itl');
+    cmp.step.set('conflict');
+    const addSpy = vi.spyOn(sync, 'addSource').mockRejectedValue(new Error('name taken'));
+    const runSpy = vi.spyOn(sync, 'runNow').mockResolvedValue();
+
+    await expect(cmp.submitConflict()).resolves.toBeUndefined();
+
+    expect(addSpy).toHaveBeenCalled();
+    expect(cmp.step()).toBe('conflict');
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(ui.lastError()).toContain('name taken');
+  });
+
+  it('pickFile leaves filePath unchanged and reports the error when the dialog rejects', async () => {
+    const { cmp, ui } = setup();
+    cmp.filePath.set('/before');
+    (dialogOpen as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('dialog closed'));
+
+    await expect(cmp.pickFile()).resolves.toBeUndefined();
+
+    expect(cmp.filePath()).toBe('/before');
+    expect(ui.lastError()).toContain('dialog closed');
+  });
 });

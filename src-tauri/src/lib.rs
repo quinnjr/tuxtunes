@@ -64,6 +64,8 @@ pub fn run() {
             commands::playlists::create_smart_playlist,
             commands::playlists::update_smart_playlist,
             commands::playlists::delete_playlist,
+            commands::playlists::get_smart_playlist_rule,
+            commands::playlists::rename_playlist,
             commands::playlists::open_smart_playlist,
             commands::playlists::open_playlist,
             commands::preferences::get_library_root,

@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::Listener;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn reorganize_renames_file_on_metadata_change() {
@@ -117,4 +118,66 @@ async fn reorganize_emits_failure_event_when_source_missing() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let row = tuxtunes::db::tracks::get(&db.engine, row_id).await.unwrap();
     assert_eq!(row.file_path, "/nope/missing.flac");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reorganize_emits_failure_event_when_scheme_is_invalid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("tuxtunes.db");
+    let lib_root = tmp.path().join("lib");
+    std::fs::create_dir_all(&lib_root).unwrap();
+
+    // Source file present and readable, but the organize scheme
+    // contains an unknown token — render(..)? fails inside
+    // organize_one and the worker emits ORGANIZE_FAILED.
+    let src_dir = lib_root.join("A/A-album");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let src_path = src_dir.join("01 - title.flac");
+    std::fs::write(&src_path, b"x").unwrap();
+
+    let db = tuxtunes::db::Db::open(&db_path).await.unwrap();
+    tuxtunes::db::preferences::set_library_root(&db.engine, &lib_root)
+        .await
+        .unwrap();
+    tuxtunes::db::preferences::set_organize_scheme(&db.engine, "{bogus_token}")
+        .await
+        .unwrap();
+
+    let row_id: i64 = db
+        .engine
+        .raw_sql_first(
+            "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('Title', 0, 0, ?, '[]') RETURNING id",
+            &[prax_query::filter::FilterValue::String(
+                src_path.display().to_string(),
+            )],
+        )
+        .await
+        .unwrap()
+        .into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .unwrap();
+
+    let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
+    let handle = app.handle().clone();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.handle()
+        .listen(tuxtunes::fs::events::ORGANIZE_FAILED, move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+    let fs = tuxtunes::fs::coordinator::FsCoordinator::new(Arc::clone(&db.engine), handle);
+    fs.reorganize_track(row_id).unwrap();
+
+    let payload = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("fs:organize-failed within 5s of an invalid scheme")
+        .expect("channel open");
+    assert!(
+        payload.contains(&format!("\"track_id\":{row_id}")),
+        "{payload}"
+    );
+    assert!(payload.contains("bogus_token"), "{payload}");
 }

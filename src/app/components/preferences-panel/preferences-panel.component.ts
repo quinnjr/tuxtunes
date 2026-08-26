@@ -14,7 +14,8 @@ import { UiService } from '../../services/ui.service';
 export class PreferencesPanelComponent {
   protected readonly prefs = inject(PreferencesService);
   protected readonly theme = inject(ThemeService);
-  protected readonly open = inject(UiService).preferencesOpen;
+  private readonly ui = inject(UiService);
+  protected readonly open = this.ui.preferencesOpen;
 
   /** Color-mode choices, in display order, for the segmented selector. */
   protected readonly colorModes: readonly ColorMode[] = ['light', 'dark', 'system'] as const;
@@ -26,7 +27,8 @@ export class PreferencesPanelComponent {
   constructor() {
     effect(() => {
       if (this.open()) {
-        void this.prefs.refresh().then(() => {
+        void this.ui.guard(this.prefs.refresh()).then((ok) => {
+          if (ok === null) return;
           this.draftRoot.set(this.prefs.libraryRoot());
           this.draftScheme.set(this.prefs.organizeScheme());
           this.draftKeep.set(this.prefs.keepOrganized());
@@ -36,17 +38,20 @@ export class PreferencesPanelComponent {
   }
 
   protected async pickRoot(): Promise<void> {
-    const picked = await dialogOpen({ directory: true, multiple: false });
+    const picked = await this.ui.guard(dialogOpen({ directory: true, multiple: false }));
     if (typeof picked === 'string') this.draftRoot.set(picked);
   }
 
+  /** Persist the draft; on failure report it and keep the dialog open. */
   protected async save(): Promise<void> {
-    await Promise.all([
-      this.prefs.setLibraryRoot(this.draftRoot()),
-      this.prefs.setOrganizeScheme(this.draftScheme()),
-      this.prefs.setKeepOrganized(this.draftKeep()),
-    ]);
-    this.hide();
+    const ok = await this.ui.guard(
+      Promise.all([
+        this.prefs.setLibraryRoot(this.draftRoot()),
+        this.prefs.setOrganizeScheme(this.draftScheme()),
+        this.prefs.setKeepOrganized(this.draftKeep()),
+      ]),
+    );
+    if (ok !== null) this.hide();
   }
 
   protected hide(): void {

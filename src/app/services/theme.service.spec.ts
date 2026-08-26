@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeService } from './theme.service';
 
 function make(): ThemeService {
@@ -58,6 +58,45 @@ describe('ThemeService', () => {
       expect(theme.resolved()).toBe('light');
     } finally {
       globalThis.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it('falls back to system for a corrupted stored value', () => {
+    // make() clears storage before constructing, so seed the value via
+    // TestBed directly to have it in place when ThemeService's field
+    // initializer reads it.
+    localStorage.setItem('tuxtunes.theme', 'blue');
+    TestBed.configureTestingModule({});
+    const theme = TestBed.inject(ThemeService);
+    expect(theme.mode()).toBe('system');
+  });
+
+  it('does not throw when localStorage.setItem fails, and still applies the mode', () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota');
+    });
+    try {
+      const theme = make();
+      TestBed.flushEffects();
+      expect(() => theme.set('dark')).not.toThrow();
+      TestBed.flushEffects();
+      expect(theme.mode()).toBe('dark');
+    } finally {
+      setItemSpy.mockRestore();
+    }
+  });
+
+  it('defaults to system when localStorage.getItem fails', () => {
+    const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('unavailable');
+    });
+    try {
+      TestBed.configureTestingModule({});
+      const theme = TestBed.inject(ThemeService);
+      TestBed.flushEffects();
+      expect(theme.mode()).toBe('system');
+    } finally {
+      getItemSpy.mockRestore();
     }
   });
 });

@@ -36,7 +36,13 @@ export class ThemeService {
       document.documentElement.dataset['theme'] = this.resolved();
     });
     effect(() => {
-      localStorage.setItem(STORAGE_KEY, this.mode());
+      // Storage can be disabled or full (private mode, quota); the
+      // preference then just doesn't persist across launches.
+      try {
+        localStorage.setItem(STORAGE_KEY, this.mode());
+      } catch {
+        /* best effort */
+      }
     });
   }
 
@@ -50,7 +56,12 @@ export class ThemeService {
 }
 
 function initialMode(): ColorMode {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem(STORAGE_KEY);
+  } catch {
+    /* storage unavailable → default */
+  }
   if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
   return 'system';
 }

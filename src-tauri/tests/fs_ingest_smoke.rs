@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::Listener;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ingest_copies_hashes_and_updates_row() {
@@ -75,4 +76,63 @@ async fn ingest_copies_hashes_and_updates_row() {
             break;
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingest_emits_failure_and_marks_missing_source_when_unreadable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("tuxtunes.db");
+    let lib_root = tmp.path().join("lib");
+    std::fs::create_dir_all(&lib_root).unwrap();
+
+    // Source path that never existed — hash::hash_file fails, which
+    // ingest_one propagates. The dispatcher then emits INGEST_FAILED
+    // and marks the row missing_source.
+    let missing_src = tmp.path().join("does-not-exist.flac");
+
+    let db = tuxtunes::db::Db::open(&db_path).await.unwrap();
+    tuxtunes::db::preferences::set_library_root(&db.engine, &lib_root)
+        .await
+        .unwrap();
+
+    let row_id: i64 = {
+        let v = db
+            .engine
+            .raw_sql_first(
+                "INSERT INTO tracks (title, artist, album, duration_ms, \
+                 size_bytes, file_path, playlist_ids) VALUES \
+                 ('Song', 'Someone', 'Album', 100, 1024, ?, '[]') RETURNING id",
+                &[prax_query::filter::FilterValue::String(
+                    missing_src.display().to_string(),
+                )],
+            )
+            .await
+            .unwrap()
+            .into_json();
+        v.get("id").and_then(|n| n.as_i64()).unwrap()
+    };
+
+    let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
+    let handle = app.handle().clone();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.handle()
+        .listen(tuxtunes::fs::events::INGEST_FAILED, move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+    let fs = tuxtunes::fs::coordinator::FsCoordinator::new(Arc::clone(&db.engine), handle);
+    fs.copy_for_track(row_id, missing_src.clone()).unwrap();
+
+    let payload = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("fs:ingest-failed within 5s of an unreadable source")
+        .expect("channel open");
+    assert!(
+        payload.contains(&format!("\"track_id\":{row_id}")),
+        "{payload}"
+    );
+
+    let row = tuxtunes::db::tracks::get(&db.engine, row_id).await.unwrap();
+    assert_eq!(row.import_status, "missing_source");
 }

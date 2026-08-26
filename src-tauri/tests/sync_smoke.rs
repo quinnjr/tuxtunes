@@ -252,3 +252,59 @@ async fn sync_coordinator_run_now_drives_worker_to_finalize() {
         }
     }
 }
+
+#[tokio::test]
+async fn reconcile_source_errors_for_unknown_source_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = std::sync::Arc::new(
+        tuxtunes::db::Db::open(&tmp.path().join("tuxtunes.db"))
+            .await
+            .unwrap(),
+    );
+
+    let log_sink = |_level: tuxtunes::sync::import_log::LogLevel, _msg: &str| {};
+    let err = tuxtunes::sync::worker::reconcile_source(
+        &db,
+        None,
+        &tuxtunes::sync::observer::NoopObserver,
+        &log_sink,
+        999_999,
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.to_string().is_empty());
+}
+
+#[tokio::test]
+async fn reconcile_source_errors_when_itl_path_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = std::sync::Arc::new(
+        tuxtunes::db::Db::open(&tmp.path().join("tuxtunes.db"))
+            .await
+            .unwrap(),
+    );
+
+    let missing_itl = tmp.path().join("does-not-exist.itl");
+    let source_id = tuxtunes::db::sync_sources::insert(
+        &db.engine,
+        "missing-itl",
+        &missing_itl.display().to_string(),
+        &[],
+        &Default::default(),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let log_sink = |_level: tuxtunes::sync::import_log::LogLevel, _msg: &str| {};
+    let err = tuxtunes::sync::worker::reconcile_source(
+        &db,
+        None,
+        &tuxtunes::sync::observer::NoopObserver,
+        &log_sink,
+        source_id,
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.to_string().is_empty());
+}

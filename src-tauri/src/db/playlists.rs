@@ -214,6 +214,28 @@ pub async fn update_smart_rule(
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
 }
 
+/// Rename any playlist. Synced playlists take the .itl name again on
+/// the next sync; user-created ones keep it.
+pub async fn rename(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+    name: &str,
+) -> Result<(), PlaylistsError> {
+    let sql = "UPDATE playlists SET name = ? WHERE id = ?";
+    let params = vec![
+        FilterValue::String(name.to_string()),
+        FilterValue::Int(playlist_id),
+    ];
+    let n = engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    if n == 0 {
+        return Err(PlaylistsError::NotFound(playlist_id));
+    }
+    Ok(())
+}
+
 /// Read back the rule JSON for a smart playlist. Returns Ok(None) for
 /// non-smart playlists or unknown ids.
 ///
@@ -449,6 +471,17 @@ mod tests {
         let rows = tracks_for_regular(&db.engine, id).await.unwrap();
         let got: Vec<i64> = rows.iter().map(|r| r.id).collect();
         assert_eq!(got, ids);
+    }
+
+    #[tokio::test]
+    async fn rename_updates_name_and_errors_for_unknown_id() {
+        let db = tmp().await;
+        let id = create_smart(&db.engine, "Old", "{}").await.unwrap();
+        rename(&db.engine, id, "New").await.unwrap();
+        let rows = list_all(&db.engine).await.unwrap();
+        assert_eq!(rows.iter().find(|r| r.id == id).unwrap().name, "New");
+        let err = rename(&db.engine, 424_242, "x").await.unwrap_err();
+        assert!(matches!(err, PlaylistsError::NotFound(424_242)), "{err}");
     }
 
     #[tokio::test]

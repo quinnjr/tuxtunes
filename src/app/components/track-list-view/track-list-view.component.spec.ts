@@ -4,6 +4,7 @@ import { ContextMenuService, type ContextMenuItem } from '../../services/context
 import { LibraryService, type SortColumn } from '../../services/library.service';
 import { PlaybackService, type TrackRow } from '../../services/playback.service';
 import { TauriService } from '../../services/tauri.service';
+import { UiService } from '../../services/ui.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { TrackListViewComponent } from './track-list-view.component';
 
@@ -270,5 +271,33 @@ describe('TrackListViewComponent', () => {
     cmp.onRowClick(1, gone, new MouseEvent('click'));
     expect(cmp.rowClass(gone)).toContain('mac-row-selected');
     expect(cmp.rowClass(gone)).toContain('opacity-50');
+  });
+
+  it('context-menu "Remove from Library" reports a per-target failure but still removes the rest, clears selection, and refreshes', async () => {
+    let calls = 0;
+    const { cmp, ctx, library, invoke } = setup(async (cmd: string) => {
+      if (cmd === 'remove_track') {
+        calls += 1;
+        if (calls === 1) throw new Error('locked');
+        return undefined;
+      }
+      return [];
+    });
+    library.tracks.set([TRACK(1), TRACK(2)]);
+    cmp.selection.set(new Set([1, 2]));
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onRowContextMenu(TRACK(2), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    invoke.mockClear();
+
+    const ui = TestBed.inject(UiService);
+    await expect(items[6].action?.()).resolves.toBeUndefined();
+
+    expect(ui.lastError()).toContain('locked');
+    expect(invoke).toHaveBeenCalledWith('remove_track', { trackId: 1 });
+    expect(invoke).toHaveBeenCalledWith('remove_track', { trackId: 2 });
+    expect(cmp.selection().size).toBe(0);
+    expect(invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
+    expect(invoke).toHaveBeenCalledWith('get_library_stats');
   });
 });

@@ -294,4 +294,10 @@ mod tests {
             _ => panic!("expected sync run"),
         }
     }
+
+    #[test]
+    fn parse_mapping_rejects_empty_from_or_to() {
+        assert!(parse_mapping("=/mnt/music").is_err());
+        assert!(parse_mapping("D:/=").is_err());
+    }
 }

@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
 import { LibraryService } from '../../services/library.service';
-import { PlaybackService } from '../../services/playback.service';
+import { UiService } from '../../services/ui.service';
 import { SyncService } from '../../services/sync.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { StatusBarComponent } from './status-bar.component';
@@ -19,7 +19,7 @@ function setup() {
     el: fixture.nativeElement as HTMLElement,
     library: TestBed.inject(LibraryService),
     sync: TestBed.inject(SyncService),
-    playback: TestBed.inject(PlaybackService),
+    ui: TestBed.inject(UiService),
   };
 }
 
@@ -72,7 +72,7 @@ describe('StatusBarComponent', () => {
   });
 
   it('shows the last playback error as an alert, taking precedence over the sync label', () => {
-    const { fixture, el, playback, sync } = setup();
+    const { fixture, el, ui, sync } = setup();
     sync.progress.set({
       source_id: 1,
       phase: 'ApplyingTracks',
@@ -82,12 +82,12 @@ describe('StatusBarComponent', () => {
     } as never);
     fixture.detectChanges();
     expect(el.textContent).toContain('Syncing');
-    playback.lastError.set('File not found: /x.mp3');
+    ui.lastError.set('File not found: /x.mp3');
     fixture.detectChanges();
     const alert = el.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain('File not found: /x.mp3');
     expect(el.textContent).not.toContain('Syncing');
-    playback.lastError.set(null);
+    ui.lastError.set(null);
     fixture.detectChanges();
     expect(el.querySelector('[role="alert"]')).toBeNull();
   });

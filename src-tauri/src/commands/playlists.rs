@@ -43,6 +43,39 @@ pub async fn update_smart_playlist(
         .map_err(|e| e.to_string())
 }
 
+/// The editor loads an existing smart playlist's rule through this.
+/// Ok(None) for regular playlists / folders / unknown ids.
+#[tauri::command]
+pub async fn get_smart_playlist_rule(
+    state: tauri::State<'_, AppState>,
+    playlist_id: i64,
+) -> Result<Option<SmartRule>, String> {
+    let json = playlists::get_smart_rule(&state.db.engine, playlist_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    match json {
+        Some(j) => serde_json::from_str::<SmartRule>(&j)
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn rename_playlist(
+    state: tauri::State<'_, AppState>,
+    playlist_id: i64,
+    name: String,
+) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("playlist name cannot be empty".to_string());
+    }
+    playlists::rename(&state.db.engine, playlist_id, trimmed)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn delete_playlist(
     state: tauri::State<'_, AppState>,

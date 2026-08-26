@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { LibraryService, AlbumSummary, ArtistSummary } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
+import { UiService } from '../../services/ui.service';
 import { formatMmSs } from '../../utils/time';
 
 @Component({
@@ -19,6 +20,7 @@ import { formatMmSs } from '../../utils/time';
 export class ArtistSplitViewComponent implements OnInit {
   protected readonly library = inject(LibraryService);
   private readonly playback = inject(PlaybackService);
+  private readonly ui = inject(UiService);
 
   protected readonly selected = signal<string | null>(null);
   protected readonly tracks = signal<TrackRow[]>([]);
@@ -28,7 +30,7 @@ export class ArtistSplitViewComponent implements OnInit {
 
   ngOnInit(): void {
     // Albums also feeds the right-hand pane filter; refresh both in parallel.
-    void Promise.all([this.library.refreshArtists(), this.library.refreshAlbums()]);
+    void this.ui.guard(Promise.all([this.library.refreshArtists(), this.library.refreshAlbums()]));
   }
 
   #computeAlbumsForSelected(): AlbumSummary[] {
@@ -53,10 +55,11 @@ export class ArtistSplitViewComponent implements OnInit {
     this.selected.set(a.artist);
     // "All tracks for this artist" — concatenate every album's tracks.
     const albums = this.library.albums().filter((al) => al.albumArtist === a.artist);
-    const lists = await Promise.all(
-      albums.map((al) => this.library.tracksForAlbum(al.albumArtist, al.album)),
+    const lists = await this.ui.guard(
+      Promise.all(albums.map((al) => this.library.tracksForAlbum(al.albumArtist, al.album))),
     );
-    this.tracks.set(lists.flat());
+    // On failure show nothing rather than the previous artist's tracks.
+    this.tracks.set(lists === null ? [] : lists.flat());
   }
 
   protected async play(t: TrackRow): Promise<void> {

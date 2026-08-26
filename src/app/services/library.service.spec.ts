@@ -316,3 +316,43 @@ describe('LibraryService.resolveTrackArtwork', () => {
     expect(svc.stats()?.trackCount).toBe(3);
   });
 });
+
+describe('negative cases', () => {
+  it('addTrackFromPicker() rejects when pick_and_add_track fails', async () => {
+    const { svc } = build(async () => {
+      throw new Error('picker failed');
+    });
+    await expect(svc.addTrackFromPicker()).rejects.toThrow('picker failed');
+    expect(svc.tracks()).toEqual([]);
+  });
+
+  it('addFolderFromPicker() rejects when pick_and_add_folder fails and does not refresh', async () => {
+    const { svc, invoke } = build(async () => {
+      throw new Error('folder failed');
+    });
+    await expect(svc.addFolderFromPicker()).rejects.toThrow('folder failed');
+    expect(invoke).not.toHaveBeenCalledWith('list_tracks', expect.anything());
+  });
+
+  const refreshCases: {
+    method: 'refreshTracks' | 'refreshAlbums' | 'refreshArtists' | 'refreshStats';
+    cmd: string;
+    signal: 'tracks' | 'albums' | 'artists' | 'stats';
+    empty: unknown;
+  }[] = [
+    { method: 'refreshTracks', cmd: 'list_tracks', signal: 'tracks', empty: [] },
+    { method: 'refreshAlbums', cmd: 'list_albums', signal: 'albums', empty: [] },
+    { method: 'refreshArtists', cmd: 'list_artists', signal: 'artists', empty: [] },
+    { method: 'refreshStats', cmd: 'get_library_stats', signal: 'stats', empty: null },
+  ];
+
+  for (const { method, cmd, signal, empty } of refreshCases) {
+    it(`${method}() rejects when ${cmd} fails and leaves ${signal}() unchanged`, async () => {
+      const { svc } = build(async () => {
+        throw new Error('backend error');
+      });
+      await expect(svc[method]()).rejects.toThrow('backend error');
+      expect(svc[signal]()).toEqual(empty);
+    });
+  }
+});

@@ -11,6 +11,7 @@ import { ContextMenuItem, ContextMenuService } from '../../services/context-menu
 import { LibraryService, SortColumn } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
 import { TauriService } from '../../services/tauri.service';
+import { UiService } from '../../services/ui.service';
 import { formatMmSs } from '../../utils/time';
 
 interface Column {
@@ -67,6 +68,7 @@ export class TrackListViewComponent implements OnInit {
   protected readonly playback = inject(PlaybackService);
   private readonly tauri = inject(TauriService);
   private readonly ctx = inject(ContextMenuService);
+  private readonly ui = inject(UiService);
 
   /** All columns the user can choose from. */
   protected readonly allColumns = ALL_COLUMNS;
@@ -93,7 +95,7 @@ export class TrackListViewComponent implements OnInit {
   protected readonly pickerOpen = signal(false);
 
   ngOnInit(): void {
-    void this.library.refreshTracks();
+    void this.ui.guard(this.library.refreshTracks());
   }
 
   #computeVisibleColumns(): Column[] {
@@ -212,35 +214,38 @@ export class TrackListViewComponent implements OnInit {
         label: 'Show in Files',
         disabled: !single,
         action: async () => {
-          await this.tauri.invoke('show_in_files', { trackId: t.id });
+          await this.ui.guard(this.tauri.invoke('show_in_files', { trackId: t.id }));
         },
       },
       { label: '---' },
       {
         label: single ? 'Remove from Library' : `Remove ${targets.length} from Library`,
         destructive: true,
-        action: async () => {
-          for (const target of targets) {
-            await this.tauri.invoke('remove_track', { trackId: target.id });
-          }
-          this.selection.set(new Set());
-          await this.library.refreshTracks();
-          await this.library.refreshStats();
-        },
+        action: () => this.removeTargets(targets, 'remove_track'),
       },
       {
         label: single ? 'Move to Trash' : `Move ${targets.length} to Trash`,
         destructive: true,
-        action: async () => {
-          for (const target of targets) {
-            await this.tauri.invoke('trash_track', { trackId: target.id });
-          }
-          this.selection.set(new Set());
-          await this.library.refreshTracks();
-          await this.library.refreshStats();
-        },
+        action: () => this.removeTargets(targets, 'trash_track'),
       },
     ];
+  }
+
+  /**
+   * Remove (or trash) each target. A failure is reported and the rest
+   * still proceed; the list and stats refresh afterwards either way so
+   * the view matches whatever actually happened.
+   */
+  private async removeTargets(
+    targets: TrackRow[],
+    command: 'remove_track' | 'trash_track',
+  ): Promise<void> {
+    for (const target of targets) {
+      await this.ui.guard(this.tauri.invoke(command, { trackId: target.id }));
+    }
+    this.selection.set(new Set());
+    await this.ui.guard(this.library.refreshTracks());
+    await this.ui.guard(this.library.refreshStats());
   }
 
   protected togglePicker(event: MouseEvent): void {

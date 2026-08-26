@@ -2,6 +2,8 @@ import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { type UnlistenFn } from '@tauri-apps/api/event';
 import { LibraryService } from './library.service';
 import { TauriService } from './tauri.service';
+import { UiService } from './ui.service';
+import { toErrorMessage } from '../utils/errors';
 
 export interface TrackRow {
   id: number;
@@ -61,6 +63,7 @@ export type PlaybackState = 'playing' | 'paused' | 'stopped' | 'loading';
 export class PlaybackService implements OnDestroy {
   private readonly tauri = inject(TauriService);
   private readonly library = inject(LibraryService);
+  private readonly ui = inject(UiService);
 
   readonly currentTrackId = signal<number | null>(null);
   readonly state = signal<PlaybackState>('stopped');
@@ -83,13 +86,11 @@ export class PlaybackService implements OnDestroy {
   readonly queue = signal<TrackRow[]>([]);
 
   /**
-   * Last playback failure the user should see (e.g. "File not found").
-   * Cleared automatically after a few seconds and on the next
-   * successful play().
+   * Last user-facing failure (e.g. "File not found"). Shared with the
+   * rest of the UI through UiService; kept here as an alias so
+   * playback callers and specs read it from the service they hold.
    */
-  readonly lastError = signal<string | null>(null);
-  private errorTimer: ReturnType<typeof setTimeout> | null = null;
-  private static readonly ERROR_VISIBLE_MS = 6000;
+  readonly lastError = this.ui.lastError;
 
   private readonly unlisteners: UnlistenFn[] = [];
 
@@ -182,10 +183,10 @@ export class PlaybackService implements OnDestroy {
   async play(trackId: number): Promise<void> {
     try {
       await this.tauri.invoke<void>('play_track', { trackId });
-      this.setError(null);
+      this.ui.clearError();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.setError(message);
+      const message = toErrorMessage(error);
+      this.ui.reportError(message);
       this.markMissing(trackId, message);
     }
   }
@@ -222,20 +223,6 @@ export class PlaybackService implements OnDestroy {
     }
   }
 
-  private setError(message: string | null): void {
-    if (this.errorTimer !== null) {
-      clearTimeout(this.errorTimer);
-      this.errorTimer = null;
-    }
-    this.lastError.set(message);
-    if (message !== null) {
-      this.errorTimer = setTimeout(() => {
-        this.lastError.set(null);
-        this.errorTimer = null;
-      }, PlaybackService.ERROR_VISIBLE_MS);
-    }
-  }
-
   /**
    * Mirror the backend's `missing_source` flag onto the loaded rows so
    * the track list dims the row without a full refetch.
@@ -250,24 +237,26 @@ export class PlaybackService implements OnDestroy {
     );
   }
 
+  // Transport controls never throw: a failed engine call is reported
+  // through UiService so buttons, tray and MPRIS callers stay simple.
   async pause(): Promise<void> {
-    await this.tauri.invoke<void>('pause');
+    await this.ui.guard(this.tauri.invoke<void>('pause'));
   }
 
   async resume(): Promise<void> {
-    await this.tauri.invoke<void>('resume');
+    await this.ui.guard(this.tauri.invoke<void>('resume'));
   }
 
   async stop(): Promise<void> {
-    await this.tauri.invoke<void>('stop');
+    await this.ui.guard(this.tauri.invoke<void>('stop'));
   }
 
   async seek(positionMs: number): Promise<void> {
-    await this.tauri.invoke<void>('seek', { positionMs });
+    await this.ui.guard(this.tauri.invoke<void>('seek', { positionMs }));
   }
 
   async setVolume(volume: number): Promise<void> {
-    await this.tauri.invoke<void>('set_volume', { volume });
+    await this.ui.guard(this.tauri.invoke<void>('set_volume', { volume }));
   }
 
   enqueue(track: TrackRow): void {
@@ -284,6 +273,10 @@ export class PlaybackService implements OnDestroy {
 
   reorderQueue(fromIndex: number, toIndex: number): void {
     this.queue.update((q) => {
+      // Out-of-range indices would splice `undefined` into the queue.
+      if (fromIndex < 0 || fromIndex >= q.length || toIndex < 0 || toIndex >= q.length) {
+        return q;
+      }
       const next = [...q];
       const [moved] = next.splice(fromIndex, 1);
       next.splice(toIndex, 0, moved);

@@ -1033,4 +1033,26 @@ mod tests {
         assert_eq!(row.album.as_deref(), Some("New Album"));
         assert_eq!(row.play_count, 42);
     }
+
+    #[tokio::test]
+    async fn get_errors_for_unknown_id() {
+        let db = tmp_db().await;
+        let err = get(&db.engine, 999_999).await.unwrap_err();
+        assert!(matches!(err, TracksError::Query(_)));
+    }
+
+    #[tokio::test]
+    async fn relink_file_path_fails_when_target_path_already_taken() {
+        let db = tmp_db().await;
+        let _a = insert_fixture(&db.engine, "Alpha", "/music/base.flac").await;
+        let b = insert_fixture(&db.engine, "Bravo", "/music/base 2.flac").await;
+
+        let err = relink_file_path(&db.engine, b, "/music/base.flac")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TracksError::Query(_)));
+
+        let row = get(&db.engine, b).await.unwrap();
+        assert_eq!(row.file_path, "/music/base 2.flac");
+    }
 }

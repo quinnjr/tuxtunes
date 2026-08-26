@@ -13,6 +13,7 @@ import {
   LibraryService,
   TrackFilters,
 } from '../../services/library.service';
+import { UiService } from '../../services/ui.service';
 
 interface PaneState {
   column: DistinctColumn;
@@ -27,6 +28,7 @@ interface PaneState {
 })
 export class ColumnBrowserComponent implements OnInit {
   protected readonly library = inject(LibraryService);
+  private readonly ui = inject(UiService);
 
   /** Three fixed panes for v1. Configurable column choice is deferred. */
   protected readonly panes = signal<PaneState[]>([
@@ -72,15 +74,18 @@ export class ColumnBrowserComponent implements OnInit {
     });
   }
 
+  /** Re-query every pane; on failure report once and keep the old values. */
   protected async refreshAll(): Promise<void> {
     const panes = this.panes();
-    const next: PaneState[] = await Promise.all(
-      panes.map(async (p) => ({
-        column: p.column,
-        values: await this.library.getDistinct(p.column),
-      })),
+    const next = await this.ui.guard(
+      Promise.all(
+        panes.map(async (p) => ({
+          column: p.column,
+          values: await this.library.getDistinct(p.column),
+        })),
+      ),
     );
-    this.panes.set(next);
+    if (next !== null) this.panes.set(next);
   }
 
   protected paneTitle(column: DistinctColumn): string {
@@ -115,7 +120,7 @@ export class ColumnBrowserComponent implements OnInit {
       next = [value];
     }
     this.library.filters.update((f) => writeColumn(f, column, next));
-    await this.library.refreshTracks();
+    await this.ui.guard(this.library.refreshTracks());
   }
 
   protected onValueClick(column: DistinctColumn, value: string, event: MouseEvent): void {
@@ -124,7 +129,7 @@ export class ColumnBrowserComponent implements OnInit {
 
   protected clearPane(column: DistinctColumn): void {
     this.library.filters.update((f) => writeColumn(f, column, []));
-    void this.library.refreshTracks();
+    void this.ui.guard(this.library.refreshTracks());
   }
 
   protected onPaneSearchInput(index: number, event: Event): void {

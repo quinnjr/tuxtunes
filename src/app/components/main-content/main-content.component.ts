@@ -35,7 +35,7 @@ export class MainContentComponent {
     const hadPlaylist = this.library.activePlaylistId() !== null;
     this.library.activePlaylistId.set(null);
     this.ui.libraryView.set(mode);
-    if (hadPlaylist && mode === 'tracks') void this.library.refreshTracks();
+    if (hadPlaylist && mode === 'tracks') void this.ui.guard(this.library.refreshTracks());
   }
 
   protected toggleBrowser(): void {
@@ -51,13 +51,13 @@ export class MainContentComponent {
     this.library.setSearch(value);
     if (this.searchTimer !== null) clearTimeout(this.searchTimer);
     this.searchTimer = setTimeout(() => {
-      void this.library.refreshTracks();
+      void this.ui.guard(this.library.refreshTracks());
       this.searchTimer = null;
     }, 200);
   }
 
   protected clearSearch(): void {
     this.library.setSearch('');
-    void this.library.refreshTracks();
+    void this.ui.guard(this.library.refreshTracks());
   }
 }

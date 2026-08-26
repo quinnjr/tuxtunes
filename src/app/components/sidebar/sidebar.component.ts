@@ -8,6 +8,7 @@ import {
   signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
 import { LibraryService, Playlist } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { LibraryView, UiService } from '../../services/ui.service';
@@ -47,6 +48,7 @@ export class SidebarComponent implements OnInit {
   protected readonly ui = inject(UiService);
   protected readonly library = inject(LibraryService);
   private readonly sync = inject(SyncService);
+  private readonly ctx = inject(ContextMenuService);
 
   protected readonly tree = computed(this.#computeTree.bind(this));
 
@@ -60,12 +62,12 @@ export class SidebarComponent implements OnInit {
   constructor() {
     // A finished sync may have added/renamed/removed playlists.
     effect(() => {
-      if (this.sync.lastComplete() !== null) void this.library.refreshPlaylists();
+      if (this.sync.lastComplete() !== null) void this.ui.guard(this.library.refreshPlaylists());
     });
   }
 
   ngOnInit(): void {
-    void this.library.refreshPlaylists();
+    void this.ui.guard(this.library.refreshPlaylists());
   }
 
   /**
@@ -85,7 +87,9 @@ export class SidebarComponent implements OnInit {
     }
     // The track list only fetches on mount; when it stays mounted we
     // must reload it ourselves to drop the playlist's rows.
-    if (hadPlaylist && this.ui.libraryView() === 'tracks') void this.library.refreshTracks();
+    if (hadPlaylist && this.ui.libraryView() === 'tracks') {
+      void this.ui.guard(this.library.refreshTracks());
+    }
   }
 
   protected isActive(view: LibraryView): boolean {
@@ -121,6 +125,31 @@ export class SidebarComponent implements OnInit {
     });
   }
 
+  /**
+   * Right-click: smart playlists can be edited or deleted; synced
+   * playlists only deleted (they come back on the next sync, so that's
+   * offered as "Remove until next sync").
+   */
+  protected onPlaylistContextMenu(node: PlaylistNode, event: MouseEvent): void {
+    const p = node.playlist;
+    if (this.isFolder(node)) return;
+    const items: ContextMenuItem[] = [];
+    if (p.kind === 'smart') {
+      items.push({
+        label: 'Edit Smart Playlist…',
+        action: () => this.ui.smartEditor.set({ playlistId: p.id }),
+      });
+    }
+    items.push({
+      label: p.kind === 'smart' ? 'Delete' : 'Remove until next sync',
+      destructive: true,
+      action: async () => {
+        await this.ui.guard(this.library.deletePlaylist(p.id));
+      },
+    });
+    this.ctx.show(event, items);
+  }
+
   /** Folders expand/collapse; playlists open in the track list. */
   protected onPlaylistClick(node: PlaylistNode): void {
     const p = node.playlist;
@@ -130,6 +159,6 @@ export class SidebarComponent implements OnInit {
     }
     this.ui.libraryView.set('tracks');
     this.ui.columnBrowserOpen.set(false);
-    void this.library.openPlaylist(p.id);
+    void this.ui.guard(this.library.openPlaylist(p.id));
   }
 }

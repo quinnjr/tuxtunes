@@ -1,6 +1,12 @@
 import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
-import { faFileImport, faFolderPlus, faGear, faPlus } from '@fortawesome/free-solid-svg-icons';
+import {
+  faFileImport,
+  faFolderPlus,
+  faGear,
+  faPlus,
+  faWandMagicSparkles,
+} from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
 
@@ -18,6 +24,7 @@ export class MenuBarComponent {
 
   protected readonly faPlus = faPlus;
   protected readonly faFolderPlus = faFolderPlus;
+  protected readonly faWand = faWandMagicSparkles;
   protected readonly faFileImport = faFileImport;
   protected readonly faGear = faGear;
 
@@ -34,12 +41,17 @@ export class MenuBarComponent {
 
   protected async addFile(): Promise<void> {
     this.close();
-    await this.library.addTrackFromPicker();
+    await this.ui.guard(this.library.addTrackFromPicker());
   }
 
   protected async addFolder(): Promise<void> {
     this.close();
-    await this.library.addFolderFromPicker();
+    await this.ui.guard(this.library.addFolderFromPicker());
+  }
+
+  protected newSmartPlaylist(): void {
+    this.close();
+    this.ui.smartEditor.set({ playlistId: null });
   }
 
   protected importItunes(): void {

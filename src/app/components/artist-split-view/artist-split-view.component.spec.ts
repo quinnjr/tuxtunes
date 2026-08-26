@@ -6,6 +6,7 @@ import {
   type ArtistSummary,
 } from '../../services/library.service';
 import { PlaybackService, type TrackRow } from '../../services/playback.service';
+import { UiService } from '../../services/ui.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { ArtistSplitViewComponent } from './artist-split-view.component';
 
@@ -117,5 +118,25 @@ describe('ArtistSplitViewComponent', () => {
     const spy = vi.spyOn(playback, 'play').mockResolvedValue();
     await cmp.play(TRACK(9));
     expect(spy).toHaveBeenCalledWith(9);
+  });
+
+  it('select() sets the artist, clears tracks, and reports the error when one tracksForAlbum rejects', async () => {
+    const { cmp, library } = setup();
+    const ui = TestBed.inject(UiService);
+    library.albums.set([
+      ALBUM({ albumArtist: 'X', album: 'A1' }),
+      ALBUM({ albumArtist: 'X', album: 'A2' }),
+    ]);
+    vi.spyOn(library, 'tracksForAlbum').mockImplementation(async (_a, album) =>
+      album === 'A1' ? [TRACK(1)] : Promise.reject(new Error('network down')),
+    );
+
+    await expect(
+      cmp.select({ artist: 'X', albumCount: 2, trackCount: 2 }),
+    ).resolves.toBeUndefined();
+
+    expect(cmp.selected()).toBe('X');
+    expect(cmp.tracks()).toEqual([]);
+    expect(ui.lastError()).toContain('network down');
   });
 });

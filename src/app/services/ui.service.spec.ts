@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { UiService } from './ui.service';
 
 describe('UiService', () => {
@@ -29,5 +29,49 @@ describe('UiService', () => {
       svc.libraryView.set(view);
       expect(svc.libraryView()).toBe(view);
     }
+  });
+
+  describe('error reporting', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('reportError() extracts a message from an Error and clearError() nulls it', () => {
+      const svc = new UiService();
+      svc.reportError(new Error('x'));
+      expect(svc.lastError()).toBe('x');
+      svc.clearError();
+      expect(svc.lastError()).toBeNull();
+    });
+
+    it('reportError() accepts a plain string message', () => {
+      const svc = new UiService();
+      svc.reportError('plain');
+      expect(svc.lastError()).toBe('plain');
+    });
+
+    it('auto-clears the error after ERROR_VISIBLE_MS, and a second report resets the timer', () => {
+      vi.useFakeTimers();
+      const svc = new UiService();
+      svc.reportError('first');
+      vi.advanceTimersByTime(5000);
+      svc.reportError('second');
+      vi.advanceTimersByTime(5000);
+      expect(svc.lastError()).toBe('second');
+      vi.advanceTimersByTime(1000);
+      expect(svc.lastError()).toBeNull();
+    });
+
+    it('guard() resolves the value and leaves lastError unset on success', async () => {
+      const svc = new UiService();
+      await expect(svc.guard(Promise.resolve(3))).resolves.toBe(3);
+      expect(svc.lastError()).toBeNull();
+    });
+
+    it('guard() resolves null and reports the error on rejection', async () => {
+      const svc = new UiService();
+      await expect(svc.guard(Promise.reject(new Error('bad')))).resolves.toBeNull();
+      expect(svc.lastError()).toBe('bad');
+    });
   });
 });

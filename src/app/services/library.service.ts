@@ -1,5 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { TauriService } from './tauri.service';
+import { SmartRule } from '../models/smart';
 import { mapTrack, TrackRow, TrackRowRaw } from './playback.service';
 
 export interface LibraryStats {
@@ -240,6 +241,42 @@ export class LibraryService {
     this.playlists.update((all) =>
       all.map((p) => (p.id === id && p.trackCount !== count ? { ...p, trackCount: count } : p)),
     );
+  }
+
+  // ----- Smart playlists -------------------------------------------------
+
+  /** Number of tracks a rule currently matches (editor's live badge). */
+  async previewSmartRule(rule: SmartRule): Promise<number> {
+    return this.tauri.invoke<number>('preview_smart_rule', { rule });
+  }
+
+  async getSmartRule(playlistId: number): Promise<SmartRule | null> {
+    return (
+      (await this.tauri.invoke<SmartRule | null | undefined>('get_smart_playlist_rule', {
+        playlistId,
+      })) ?? null
+    );
+  }
+
+  /** Create a user-owned smart playlist; returns its id and refreshes the sidebar. */
+  async createSmartPlaylist(name: string, rule: SmartRule): Promise<number> {
+    const id = await this.tauri.invoke<number>('create_smart_playlist', { name, rule });
+    await this.refreshPlaylists();
+    return id;
+  }
+
+  /** Replace a smart playlist's rule (and name) and refresh the sidebar. */
+  async updateSmartPlaylist(playlistId: number, name: string, rule: SmartRule): Promise<void> {
+    await this.tauri.invoke<void>('update_smart_playlist', { playlistId, rule });
+    await this.tauri.invoke<void>('rename_playlist', { playlistId, name });
+    await this.refreshPlaylists();
+    if (this.activePlaylistId() === playlistId) await this.refreshTracks();
+  }
+
+  async deletePlaylist(playlistId: number): Promise<void> {
+    await this.tauri.invoke<void>('delete_playlist', { playlistId });
+    if (this.activePlaylistId() === playlistId) this.activePlaylistId.set(null);
+    await this.refreshPlaylists();
   }
 
   async refreshPlaylists(): Promise<void> {

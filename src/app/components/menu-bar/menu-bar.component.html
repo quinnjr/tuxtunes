@@ -45,6 +45,14 @@
         </button>
         <button
           type="button"
+          (click)="newSmartPlaylist()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faWand" />
+          New Smart Playlist…
+        </button>
+        <button
+          type="button"
           (click)="importItunes()"
           class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
