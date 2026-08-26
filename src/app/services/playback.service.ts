@@ -225,6 +225,11 @@ export class PlaybackService implements OnDestroy {
         void this.setVolume(volumePct);
       }),
     );
+
+    // The engine restores the persisted volume before this listener
+    // exists and de-duplicates repeats, so the slider would sit at its
+    // default until the user touches it. Read the persisted value once.
+    await this.syncVolumeFromPrefs();
   }
 
   /** State-aware play/pause — used by both the transport bar and the tray. */
@@ -324,6 +329,17 @@ export class PlaybackService implements OnDestroy {
 
   async seek(positionMs: number): Promise<void> {
     await this.ui.guard(this.tauri.invoke<void>('seek', { positionMs }));
+  }
+
+  private async syncVolumeFromPrefs(): Promise<void> {
+    try {
+      const prefs = await this.tauri.invoke<{ volume?: number | null } | null>('get_audio_prefs');
+      const v = prefs?.volume;
+      if (typeof v === 'number' && Number.isFinite(v))
+        this.volume.set(Math.min(100, Math.max(0, v)));
+    } catch {
+      // Cosmetic: keep the default until the next volume event.
+    }
   }
 
   async setVolume(volume: number): Promise<void> {

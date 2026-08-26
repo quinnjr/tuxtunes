@@ -128,6 +128,30 @@ describe('PlaybackService', () => {
     expect(harness.svc.lastError()).toBeNull();
   });
 
+  it('reads the persisted volume at startup (the restore event fires before we listen)', async () => {
+    const harness = build(async (cmd) => {
+      if (cmd === 'get_audio_prefs') {
+        return { device_id: null, exclusive: false, replaygain_mode: 'off', volume: 37 };
+      }
+      return [];
+    });
+    await harness.ready;
+    expect(harness.invoke).toHaveBeenCalledWith('get_audio_prefs');
+    expect(harness.svc.volume()).toBe(37);
+  });
+
+  it('keeps the default volume when prefs carry none or the read fails', async () => {
+    const a = build(async (cmd) => (cmd === 'get_audio_prefs' ? { volume: null } : []));
+    await a.ready;
+    expect(a.svc.volume()).toBe(100);
+    const b = build(async (cmd) => {
+      if (cmd === 'get_audio_prefs') throw new Error('nope');
+      return [];
+    });
+    await b.ready;
+    expect(b.svc.volume()).toBe(100);
+  });
+
   it('forwards play / pause / resume / stop / seek / setVolume to Tauri', async () => {
     const { svc, invoke } = build();
     await svc.play(7);
