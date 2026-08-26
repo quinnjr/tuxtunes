@@ -24,6 +24,7 @@ fn fake_track(title: &str) -> TrackRow {
         kind: None,
         play_count: 0,
         skip_count: 0,
+        import_status: "ok".to_string(),
     }
 }
 

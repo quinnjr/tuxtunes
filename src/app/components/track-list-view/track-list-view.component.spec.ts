@@ -18,6 +18,8 @@ interface ListInternals {
   pickerOpen: { (): boolean };
   isCurrent(t: TrackRow): boolean;
   isSelected(t: TrackRow): boolean;
+  rowClass(t: TrackRow): string;
+  rowTitle(t: TrackRow): string | null;
   isSortColumn(id: SortColumn): boolean;
   sortIndicator(id: SortColumn): string;
   cycleSort(id: SortColumn): Promise<void>;
@@ -42,6 +44,7 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   kind: 'flac',
   playCount: 0,
   skipCount: 0,
+  missing: false,
   ...overrides,
 });
 
@@ -252,5 +255,19 @@ describe('TrackListViewComponent', () => {
     cmp.selection.set(new Set([5]));
     expect(cmp.isSelected(TRACK(5))).toBe(true);
     expect(cmp.isSelected(TRACK(6))).toBe(false);
+  });
+
+  it('rowClass/rowTitle dim missing tracks and explain why, without hiding selection', () => {
+    const { cmp, library } = setup();
+    const fine = TRACK(1, { title: 'Fine' });
+    const gone = TRACK(2, { title: 'Gone', missing: true, filePath: '/gone.mp3' });
+    library.tracks.set([fine, gone]);
+    expect(cmp.rowClass(fine)).not.toContain('opacity-50');
+    expect(cmp.rowTitle(fine)).toBeNull();
+    expect(cmp.rowClass(gone)).toContain('opacity-50');
+    expect(cmp.rowTitle(gone)).toBe('File not found: /gone.mp3');
+    cmp.onRowClick(1, gone, new MouseEvent('click'));
+    expect(cmp.rowClass(gone)).toContain('mac-row-selected');
+    expect(cmp.rowClass(gone)).toContain('opacity-50');
   });
 });

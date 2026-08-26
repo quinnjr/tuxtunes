@@ -24,6 +24,7 @@ pub async fn reconcile(
     obs: &dyn SyncObserver,
     source_id: i64,
     lib: &ItlFile,
+    aliases: &std::collections::HashMap<u64, u64>,
 ) -> Result<PlaylistReconcileStats, PlaylistsError> {
     let mut stats = PlaylistReconcileStats::default();
     let total = lib.playlists().len() as u64;
@@ -79,6 +80,9 @@ pub async fn reconcile(
             .iter()
             .filter_map(|itl_id| {
                 let track_pid = itl_to_pid.get(itl_id)?;
+                // A track merged into another (same file) keeps its
+                // playlist slots via the survivor.
+                let track_pid = aliases.get(track_pid).unwrap_or(track_pid);
                 track_pid_to_local.get(track_pid).copied()
             })
             .collect();

@@ -1,5 +1,6 @@
 import { Injector, runInInjectionContext } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LibraryService } from './library.service';
 import { PlaybackService, type TrackRow } from './playback.service';
 import { TauriService } from './tauri.service';
 
@@ -7,6 +8,7 @@ type Listener = (payload: unknown) => void;
 
 interface Harness {
   svc: PlaybackService;
+  library: LibraryService;
   invoke: ReturnType<typeof vi.fn>;
   /** Fire a listener registered for `event` with the given payload. */
   emit: (event: string, payload: unknown) => void;
@@ -35,6 +37,7 @@ function build(
   const injector = Injector.create({
     providers: [
       { provide: TauriService, useValue: stubTauri },
+      { provide: LibraryService, useClass: LibraryService },
       { provide: PlaybackService, useClass: PlaybackService },
     ],
   });
@@ -51,7 +54,7 @@ function build(
     for (const handler of listeners.get(event) ?? []) handler(payload);
   };
 
-  return { svc, invoke: invokeSpy, emit, ready };
+  return { svc, library: injector.get(LibraryService), invoke: invokeSpy, emit, ready };
 }
 
 const TRACK: TrackRow = {
@@ -66,9 +69,14 @@ const TRACK: TrackRow = {
   kind: 'flac',
   playCount: 0,
   skipCount: 0,
+  missing: false,
 };
 
 describe('PlaybackService', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('initializes signals to defaults', () => {
     const { svc } = build();
     expect(svc.currentTrackId()).toBeNull();
@@ -77,6 +85,43 @@ describe('PlaybackService', () => {
     expect(svc.durationMs()).toBe(0);
     expect(svc.volume()).toBe(100);
     expect(svc.queue()).toEqual([]);
+  });
+
+  it('play() failure surfaces lastError, flags the row missing, and clears on the timer', async () => {
+    vi.useFakeTimers();
+    const harness = build(async (cmd) => {
+      if (cmd === 'play_track') throw new Error('File not found: /tmp/a.flac');
+      return [];
+    });
+    await harness.ready;
+    const { library } = harness;
+    library.tracks.set([TRACK, { ...TRACK, id: 7 }]);
+    harness.svc.enqueue(TRACK);
+
+    await harness.svc.play(42);
+    expect(harness.svc.lastError()).toBe('File not found: /tmp/a.flac');
+    expect(library.tracks().map((t) => t.missing)).toEqual([true, false]);
+    expect(harness.svc.queue()[0].missing).toBe(true);
+
+    vi.advanceTimersByTime(6000);
+    expect(harness.svc.lastError()).toBeNull();
+  });
+
+  it('play() success clears a previous error; non-missing errors do not flag rows', async () => {
+    let fail = true;
+    const harness = build(async (cmd) => {
+      if (cmd === 'play_track' && fail) throw new Error('engine down');
+      return [];
+    });
+    await harness.ready;
+    const { library } = harness;
+    library.tracks.set([TRACK]);
+    await harness.svc.play(42);
+    expect(harness.svc.lastError()).toBe('engine down');
+    expect(library.tracks()[0].missing).toBe(false);
+    fail = false;
+    await harness.svc.play(42);
+    expect(harness.svc.lastError()).toBeNull();
   });
 
   it('forwards play / pause / resume / stop / seek / setVolume to Tauri', async () => {
@@ -291,6 +336,7 @@ describe('PlaybackService', () => {
     const injector = Injector.create({
       providers: [
         { provide: TauriService, useValue: stubTauri },
+        { provide: LibraryService, useClass: LibraryService },
         { provide: PlaybackService, useClass: PlaybackService },
       ],
     });

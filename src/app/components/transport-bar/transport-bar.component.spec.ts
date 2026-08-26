@@ -33,6 +33,7 @@ const TRACK: TrackRow = {
   kind: 'flac',
   playCount: 0,
   skipCount: 0,
+  missing: false,
 };
 
 function setup() {

@@ -64,12 +64,9 @@
       (keydown.enter)="play(track)"
       (dblclick)="play(track)"
       (contextmenu)="onRowContextMenu(track, $event)"
-      [class]="
-        'flex h-[30px] cursor-pointer items-center px-4 text-body ' +
-        (isSelected(track)
-          ? 'mac-row-selected'
-          : 'hover:bg-bg-elevated ' + (isCurrent(track) ? 'text-accent' : ''))
-      "
+      [class]="rowClass(track)"
+      [attr.title]="rowTitle(track)"
+      [attr.data-missing]="track.missing ? '' : null"
       role="row"
       tabindex="0"
     >
@@ -87,7 +84,11 @@
               : 'text-text-secondary')
           "
         >
-          @if (col.id === 'title' && isCurrent(track)) {
+          @if (col.id === 'title' && track.missing) {
+            <span aria-label="File not found" class="text-caption2 leading-none text-accent"
+              >⚠</span
+            >
+          } @else if (col.id === 'title' && isCurrent(track)) {
             <span aria-hidden="true" class="text-caption2 leading-none text-accent">♫</span>
           }
           <span class="truncate">{{ col.format(track) }}</span>

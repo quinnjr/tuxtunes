@@ -9,8 +9,8 @@ use crate::sync::observer::SyncObserver;
 use crate::sync::path_map::{self, PathMapError, PathMapping};
 use itl_rs::ItlFile;
 use prax_sqlite::raw::SqliteRawEngine;
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TrackReconcileStats {
@@ -18,6 +18,22 @@ pub struct TrackReconcileStats {
     pub updated: u64,
     pub deleted: u64,
     pub warnings: u64,
+    /// Entries whose ` N` collision-suffix file was gone but whose base
+    /// file existed: relinked to it (unclaimed) or merged into the entry
+    /// that already owns it (see `TrackReconcileOutcome::aliases`).
+    pub relinked: u64,
+    pub merged: u64,
+}
+
+/// Everything the playlist pass needs from the track pass.
+#[derive(Debug, Default)]
+pub struct TrackReconcileOutcome {
+    pub stats: TrackReconcileStats,
+    pub ingest_candidates: Vec<IngestCandidate>,
+    /// `dropped_pid → surviving_pid` for entries merged into another
+    /// track because both resolved to the same file. Playlists that
+    /// referenced the dropped pid should point at the survivor.
+    pub aliases: HashMap<u64, u64>,
 }
 
 /// `(track_id, source_path)` for a track that should be handed off to
@@ -39,9 +55,10 @@ pub async fn reconcile(
     mappings: &[PathMapping],
     rules: &ConflictRules,
     log: LogSink<'_>,
-) -> Result<(TrackReconcileStats, Vec<IngestCandidate>), TracksError> {
+) -> Result<TrackReconcileOutcome, TracksError> {
     let mut stats = TrackReconcileStats::default();
     let mut ingest_candidates = Vec::new();
+    let mut aliases: HashMap<u64, u64> = HashMap::new();
     let total = lib.tracks().len() as u64;
     // Cap how many individual warnings we surface — both as `sync:warning`
     // events and as log lines — so a library with no path mappings (or one
@@ -62,7 +79,16 @@ pub async fn reconcile(
     // tracks.file_path UNIQUE constraints, aborting the whole import. Real
     // iTunes libraries contain such duplicates, so skip any repeat.
     let mut seen: HashSet<u64> = HashSet::with_capacity(lib.tracks().len());
-    let mut seen_paths: HashSet<String> = HashSet::with_capacity(lib.tracks().len());
+    // Resolved path → pid that claimed it, so a later entry resolving to
+    // the same file can be aliased to the claimant instead of dropped.
+    let mut seen_paths: HashMap<String, u64> = HashMap::with_capacity(lib.tracks().len());
+
+    // Entries whose mapped file is gone but whose collision-suffix base
+    // file exists are held back and applied after every direct entry,
+    // so the entry that genuinely owns the base file always claims it
+    // first and the suffixed one becomes an alias rather than a UNIQUE
+    // violation on `tracks.file_path`.
+    let mut deferred: Vec<(usize, String, String)> = Vec::new();
 
     for (idx, t) in lib.tracks().iter().enumerate() {
         if idx % 250 == 0 {
@@ -117,75 +143,82 @@ pub async fn reconcile(
             }
         };
 
-        if !seen_paths.insert(mapped.clone()) {
-            if duplicate_throttle.allow() {
-                let detail =
-                    format!("duplicate file path {mapped:?} (pid {pid:016x}); skipping repeat");
-                obs.warning(&SyncWarning {
-                    source_id,
-                    kind: WarningKind::DuplicateTrack,
-                    detail: detail.clone(),
-                });
-                log(LogLevel::Warn, &format!("duplicate track: {detail}"));
-            }
-            stats.warnings += 1;
+        if let Some(base) = crate::fs::relink::dedupe_suffix_candidate(Path::new(&mapped)) {
+            deferred.push((
+                idx,
+                raw_path.to_string(),
+                base.to_string_lossy().into_owned(),
+            ));
             continue;
         }
 
-        keep.push(pid);
+        apply_entry(
+            engine,
+            obs,
+            source_id,
+            t,
+            raw_path,
+            mapped,
+            rules,
+            &local_map,
+            &mut seen_paths,
+            &mut keep,
+            &mut aliases,
+            &mut stats,
+            &mut ingest_candidates,
+            &mut duplicate_throttle,
+            log,
+        )
+        .await?;
+    }
 
-        let upsert = ItlTrackUpsert {
-            persistent_id: pid,
-            sync_source_id: source_id,
-            title: t.title().unwrap_or(""),
-            artist: t.artist(),
-            album: t.album(),
-            album_artist: t.album_artist(),
-            composer: t.composer(),
-            genre: t.genre(),
-            kind: t.kind(),
-            duration_ms: i64::from(t.duration_ms()),
-            size_bytes: i64::from(t.size_bytes()),
-            bit_rate: nz(i64::from(t.bit_rate())),
-            sample_rate: nz(i64::from(t.sample_rate())),
-            track_number: t.track_number().map(i64::from),
-            disc_number: t.disc_number().map(i64::from),
-            year: t.year().map(i64::from),
-            bpm: t.bpm().map(i64::from),
-            rating: i64::from(t.rating()),
-            play_count: i64::from(t.play_count()),
-            date_added_unix: t.date_added_unix(),
-            file_path: &mapped,
-            original_path: Some(raw_path),
-        };
-
-        match local_map.get(&pid) {
-            None => {
-                let track_id = tracks::insert_from_itl(engine, &upsert).await?;
-                stats.inserted += 1;
-                ingest_candidates.push(IngestCandidate {
-                    track_id,
-                    source_path: PathBuf::from(raw_path),
-                });
-            }
-            Some(local) => {
-                let (resolved_rating, resolved_play_count) =
-                    resolve_user_state(&upsert, local, rules);
-                tracks::update_descriptive_fields(
-                    engine,
-                    local.id,
-                    &upsert,
-                    resolved_rating,
-                    resolved_play_count,
-                )
-                .await?;
-                stats.updated += 1;
-                ingest_candidates.push(IngestCandidate {
-                    track_id: local.id,
-                    source_path: PathBuf::from(raw_path),
-                });
-            }
+    if !deferred.is_empty() {
+        log(
+            LogLevel::Info,
+            &format!(
+                "relinking {} collision-suffix entries to surviving base files",
+                deferred.len()
+            ),
+        );
+    }
+    for (idx, raw_path, base) in deferred {
+        let t = &lib.tracks()[idx];
+        let pid = t.persistent_id();
+        if let Some(&owner) = seen_paths.get(&base) {
+            // The base file's own entry is in the library: fold this
+            // one into it so playlists keep the song.
+            aliases.insert(pid, owner);
+            stats.merged += 1;
+            continue;
         }
+        stats.relinked += 1;
+        apply_entry(
+            engine,
+            obs,
+            source_id,
+            t,
+            &raw_path,
+            base,
+            rules,
+            &local_map,
+            &mut seen_paths,
+            &mut keep,
+            &mut aliases,
+            &mut stats,
+            &mut ingest_candidates,
+            &mut duplicate_throttle,
+            log,
+        )
+        .await?;
+    }
+    if stats.relinked + stats.merged > 0 {
+        log(
+            LogLevel::Info,
+            &format!(
+                "collision-suffix recovery: {} relinked, {} merged into existing entries",
+                stats.relinked, stats.merged
+            ),
+        );
     }
 
     // One summary per throttled category, so the IPC channel and the log see a
@@ -222,7 +255,106 @@ pub async fn reconcile(
         stats.deleted = deleted;
     }
 
-    Ok((stats, ingest_candidates))
+    Ok(TrackReconcileOutcome {
+        stats,
+        ingest_candidates,
+        aliases,
+    })
+}
+
+/// Insert or update one library entry whose file path has been
+/// resolved to `mapped`. A second entry resolving to a path already
+/// claimed this run is aliased to the claimant and skipped.
+#[allow(clippy::too_many_arguments)]
+async fn apply_entry(
+    engine: &SqliteRawEngine,
+    obs: &dyn SyncObserver,
+    source_id: i64,
+    t: &itl_rs::Track,
+    raw_path: &str,
+    mapped: String,
+    rules: &ConflictRules,
+    local_map: &std::collections::HashMap<u64, LocalTrackForSync>,
+    seen_paths: &mut HashMap<String, u64>,
+    keep: &mut Vec<u64>,
+    aliases: &mut HashMap<u64, u64>,
+    stats: &mut TrackReconcileStats,
+    ingest_candidates: &mut Vec<IngestCandidate>,
+    duplicate_throttle: &mut WarnThrottle,
+    log: LogSink<'_>,
+) -> Result<(), TracksError> {
+    let pid = t.persistent_id();
+    if let Some(&owner) = seen_paths.get(&mapped) {
+        aliases.insert(pid, owner);
+        if duplicate_throttle.allow() {
+            let detail = format!(
+                "duplicate file path {mapped:?} (pid {pid:016x}); merged into {owner:016x}"
+            );
+            obs.warning(&SyncWarning {
+                source_id,
+                kind: WarningKind::DuplicateTrack,
+                detail: detail.clone(),
+            });
+            log(LogLevel::Warn, &format!("duplicate track: {detail}"));
+        }
+        stats.warnings += 1;
+        return Ok(());
+    }
+    seen_paths.insert(mapped.clone(), pid);
+    keep.push(pid);
+
+    let upsert = ItlTrackUpsert {
+        persistent_id: pid,
+        sync_source_id: source_id,
+        title: t.title().unwrap_or(""),
+        artist: t.artist(),
+        album: t.album(),
+        album_artist: t.album_artist(),
+        composer: t.composer(),
+        genre: t.genre(),
+        kind: t.kind(),
+        duration_ms: i64::from(t.duration_ms()),
+        size_bytes: i64::from(t.size_bytes()),
+        bit_rate: nz(i64::from(t.bit_rate())),
+        sample_rate: nz(i64::from(t.sample_rate())),
+        track_number: t.track_number().map(i64::from),
+        disc_number: t.disc_number().map(i64::from),
+        year: t.year().map(i64::from),
+        bpm: t.bpm().map(i64::from),
+        rating: i64::from(t.rating()),
+        play_count: i64::from(t.play_count()),
+        date_added_unix: t.date_added_unix(),
+        file_path: &mapped,
+        original_path: Some(raw_path),
+    };
+
+    match local_map.get(&pid) {
+        None => {
+            let track_id = tracks::insert_from_itl(engine, &upsert).await?;
+            stats.inserted += 1;
+            ingest_candidates.push(IngestCandidate {
+                track_id,
+                source_path: PathBuf::from(raw_path),
+            });
+        }
+        Some(local) => {
+            let (resolved_rating, resolved_play_count) = resolve_user_state(&upsert, local, rules);
+            tracks::update_descriptive_fields(
+                engine,
+                local.id,
+                &upsert,
+                resolved_rating,
+                resolved_play_count,
+            )
+            .await?;
+            stats.updated += 1;
+            ingest_candidates.push(IngestCandidate {
+                track_id: local.id,
+                source_path: PathBuf::from(raw_path),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Bounds how many individual warnings of one category are surfaced per run.

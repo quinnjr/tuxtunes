@@ -17,6 +17,15 @@ pub struct TrackRow {
     pub kind: Option<String>,
     pub play_count: i64,
     pub skip_count: i64,
+    /// `'ok'` normally; `'missing_source'` once verify or a failed play
+    /// found the file unreachable. Defaults to `'ok'` when absent so
+    /// callers constructing rows by hand (tests) don't need to care.
+    #[serde(default = "default_import_status")]
+    pub import_status: String,
+}
+
+fn default_import_status() -> String {
+    "ok".to_string()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,7 +105,7 @@ pub async fn list(
 
     let sql = format!(
         "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-         sample_rate, bit_depth, kind, play_count, skip_count \
+         sample_rate, bit_depth, kind, play_count, skip_count, import_status \
          FROM tracks {where_clause} \
          ORDER BY {order_expr} \
          LIMIT ? OFFSET ?"
@@ -118,7 +127,7 @@ pub async fn list(
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
     let sql = "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-               sample_rate, bit_depth, kind, play_count, skip_count \
+               sample_rate, bit_depth, kind, play_count, skip_count, import_status \
                FROM tracks WHERE id = ?";
     let params = vec![prax_query::filter::FilterValue::Int(id)];
     let json_row = engine
@@ -416,6 +425,39 @@ pub async fn mark_missing_source(
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
+/// Point a track at a different file (the recovered base file for an
+/// iTunes ` N` collision-suffix entry) and mark it healthy again.
+/// Fails on the `file_path` UNIQUE constraint if another row already
+/// owns `new_path` — callers treat that as "merge instead".
+pub async fn relink_file_path(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+    new_path: &str,
+) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    let sql = "UPDATE tracks SET file_path = ?, import_status = 'ok', file_hash = NULL, \
+               verified_at = CURRENT_TIMESTAMP WHERE id = ?";
+    engine
+        .raw_sql_execute(sql, &[FV::String(new_path.to_string()), FV::Int(local_id)])
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
+/// Does any track already reference `path`? Used before relinking so
+/// a UNIQUE violation is a decision, not a surprise.
+pub async fn path_in_use(engine: &SqliteRawEngine, path: &str) -> Result<bool, TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    let n: i64 = engine
+        .raw_sql_scalar(
+            "SELECT COUNT(*) FROM tracks WHERE file_path = ?",
+            &[FV::String(path.to_string())],
+        )
+        .await
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    Ok(n > 0)
+}
+
 /// Record a freshly-computed file hash (plus bump `verified_at`) — used
 /// by the "Verify Library" walk when content confirms a file is intact.
 pub async fn set_file_hash(
@@ -588,6 +630,7 @@ mod tests {
             kind: Some("flac".into()),
             play_count: 5,
             skip_count: 2,
+            import_status: "ok".to_string(),
         };
         let json = serde_json::to_string(&row).unwrap();
         let back: TrackRow = serde_json::from_str(&json).unwrap();

@@ -16,6 +16,17 @@ pub async fn play_track(state: tauri::State<'_, AppState>, track_id: i64) -> Res
         .await
         .map_err(to_string_err)?;
 
+    // mpv accepts a nonexistent path at `loadfile` time and only fails
+    // asynchronously, which the UI never hears about. Check up front so
+    // the click gets an immediate, specific error and the row is
+    // flagged for the track list.
+    if !std::path::Path::new(&track.file_path).is_file() {
+        if let Err(e) = tracks::mark_missing_source(&state.db.engine, track_id).await {
+            log::warn!("mark_missing_source for {track_id} failed: {e}");
+        }
+        return Err(format!("File not found: {}", track.file_path));
+    }
+
     let prefs = PlaybackPrefs::default();
 
     let fmt = TrackAudioFormat {

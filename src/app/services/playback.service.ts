@@ -1,5 +1,6 @@
 import { Injectable, OnDestroy, inject, signal } from '@angular/core';
 import { type UnlistenFn } from '@tauri-apps/api/event';
+import { LibraryService } from './library.service';
 import { TauriService } from './tauri.service';
 
 export interface TrackRow {
@@ -14,6 +15,8 @@ export interface TrackRow {
   kind: string | null;
   playCount: number;
   skipCount: number;
+  /** File unreachable (verify or a failed play flagged it). */
+  missing: boolean;
 }
 
 export interface TrackRowRaw {
@@ -28,6 +31,7 @@ export interface TrackRowRaw {
   kind: string | null;
   play_count: number;
   skip_count: number;
+  import_status?: string;
 }
 
 export function mapTrack(raw: TrackRowRaw): TrackRow {
@@ -43,6 +47,7 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
     kind: raw.kind,
     playCount: raw.play_count,
     skipCount: raw.skip_count,
+    missing: raw.import_status === 'missing_source',
   };
 }
 
@@ -51,6 +56,7 @@ export type PlaybackState = 'playing' | 'paused' | 'stopped' | 'loading';
 @Injectable({ providedIn: 'root' })
 export class PlaybackService implements OnDestroy {
   private readonly tauri = inject(TauriService);
+  private readonly library = inject(LibraryService);
 
   readonly currentTrackId = signal<number | null>(null);
   readonly state = signal<PlaybackState>('stopped');
@@ -71,6 +77,15 @@ export class PlaybackService implements OnDestroy {
    * engine plays whatever play() is invoked with.
    */
   readonly queue = signal<TrackRow[]>([]);
+
+  /**
+   * Last playback failure the user should see (e.g. "File not found").
+   * Cleared automatically after a few seconds and on the next
+   * successful play().
+   */
+  readonly lastError = signal<string | null>(null);
+  private errorTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly ERROR_VISIBLE_MS = 6000;
 
   private readonly unlisteners: UnlistenFn[] = [];
 
@@ -157,7 +172,42 @@ export class PlaybackService implements OnDestroy {
   }
 
   async play(trackId: number): Promise<void> {
-    await this.tauri.invoke<void>('play_track', { trackId });
+    try {
+      await this.tauri.invoke<void>('play_track', { trackId });
+      this.setError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.setError(message);
+      this.markMissing(trackId, message);
+    }
+  }
+
+  private setError(message: string | null): void {
+    if (this.errorTimer !== null) {
+      clearTimeout(this.errorTimer);
+      this.errorTimer = null;
+    }
+    this.lastError.set(message);
+    if (message !== null) {
+      this.errorTimer = setTimeout(() => {
+        this.lastError.set(null);
+        this.errorTimer = null;
+      }, PlaybackService.ERROR_VISIBLE_MS);
+    }
+  }
+
+  /**
+   * Mirror the backend's `missing_source` flag onto the loaded rows so
+   * the track list dims the row without a full refetch.
+   */
+  private markMissing(trackId: number, message: string): void {
+    if (!message.startsWith('File not found')) return;
+    this.library.tracks.update((rows) =>
+      rows.map((t) => (t.id === trackId && !t.missing ? { ...t, missing: true } : t)),
+    );
+    this.queue.update((rows) =>
+      rows.map((t) => (t.id === trackId && !t.missing ? { ...t, missing: true } : t)),
+    );
   }
 
   async pause(): Promise<void> {

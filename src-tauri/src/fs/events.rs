@@ -66,6 +66,7 @@ pub struct VerifyComplete {
     pub verified: u64,
     pub missing: u64,
     pub mismatched: u64,
+    pub relinked: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

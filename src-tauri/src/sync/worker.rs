@@ -151,7 +151,11 @@ pub async fn reconcile_source(
         &format!("applying tracks: {}", lib.tracks().len()),
     );
 
-    let (track_stats, ingest_candidates) = reconcile_tracks::reconcile(
+    let reconcile_tracks::TrackReconcileOutcome {
+        stats: track_stats,
+        ingest_candidates,
+        aliases,
+    } = reconcile_tracks::reconcile(
         &db.engine,
         obs,
         source_id,
@@ -193,7 +197,8 @@ pub async fn reconcile_source(
         &format!("applying playlists: {}", lib.playlists().len()),
     );
 
-    let pl_stats = reconcile_playlists::reconcile(&db.engine, obs, source_id, &lib).await?;
+    let pl_stats =
+        reconcile_playlists::reconcile(&db.engine, obs, source_id, &lib, &aliases).await?;
 
     obs.progress(&SyncProgress {
         source_id,

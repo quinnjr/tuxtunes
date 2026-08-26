@@ -10,7 +10,14 @@
   } @else {
     <span class="italic">Loading library…</span>
   }
-  @if (syncLabel(); as label) {
+  @if (playback.lastError(); as error) {
+    <span
+      role="alert"
+      class="absolute right-4 max-w-[50%] truncate font-medium text-accent"
+      [title]="error"
+      >{{ error }}</span
+    >
+  } @else if (syncLabel(); as label) {
     <span class="absolute right-4 text-text-secondary">{{ label }}</span>
   }
 </footer>

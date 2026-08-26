@@ -105,6 +105,19 @@ export class TrackListViewComponent implements OnInit {
 
   protected trackById = (_: number, row: TrackRow): number => row.id;
 
+  /** Row classes: selection state wins; missing files are dimmed. */
+  protected rowClass(t: TrackRow): string {
+    const base = 'flex h-[30px] cursor-pointer items-center px-4 text-body ';
+    const dim = t.missing ? 'opacity-50 ' : '';
+    if (this.isSelected(t)) return base + dim + 'mac-row-selected';
+    return base + dim + 'hover:bg-bg-elevated ' + (this.isCurrent(t) ? 'text-accent' : '');
+  }
+
+  /** Tooltip explaining a dimmed row; null for healthy rows. */
+  protected rowTitle(t: TrackRow): string | null {
+    return t.missing ? `File not found: ${t.filePath}` : null;
+  }
+
   protected isCurrent(t: TrackRow): boolean {
     return this.playback.currentTrackId() === t.id;
   }

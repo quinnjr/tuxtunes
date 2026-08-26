@@ -37,6 +37,7 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   kind: null,
   playCount: 0,
   skipCount: 0,
+  missing: false,
   ...overrides,
 });
 

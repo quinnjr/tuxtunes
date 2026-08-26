@@ -467,7 +467,7 @@ fn escape_like(s: &str) -> String {
 // ----- Public command-layer helpers --------------------------------------
 
 const TRACK_LIST_COLUMNS: &str = "id, title, artist, album, duration_ms, file_path, file_hash, \
-     sample_rate, bit_depth, kind, play_count, skip_count, size_bytes";
+     sample_rate, bit_depth, kind, play_count, skip_count, size_bytes, import_status";
 
 /// Evaluate a smart rule and return matching tracks.
 pub async fn evaluate(

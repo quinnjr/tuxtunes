@@ -62,7 +62,7 @@ async fn reconcile_tracks_with_path_mapping_inserts_rows() {
         &noop_log,
     )
     .await;
-    if let Ok((stats, _candidates)) = res {
+    if let Ok(tuxtunes::sync::reconcile_tracks::TrackReconcileOutcome { stats, .. }) = res {
         let total = stats.inserted + stats.updated + stats.deleted + stats.warnings;
         assert!(total > 1000, "expected library walk, got {stats:?}");
         eprintln!("reconcile with mapping: {stats:?}");
@@ -96,17 +96,18 @@ async fn reconcile_tracks_against_real_fixture() {
     .await
     .unwrap();
 
-    let (stats, _candidates) = tuxtunes::sync::reconcile_tracks::reconcile(
-        &db.engine,
-        &tuxtunes::sync::observer::NoopObserver,
-        source_id,
-        &lib,
-        &[],
-        &Default::default(),
-        &noop_log,
-    )
-    .await
-    .expect("reconcile tracks");
+    let tuxtunes::sync::reconcile_tracks::TrackReconcileOutcome { stats, .. } =
+        tuxtunes::sync::reconcile_tracks::reconcile(
+            &db.engine,
+            &tuxtunes::sync::observer::NoopObserver,
+            source_id,
+            &lib,
+            &[],
+            &Default::default(),
+            &noop_log,
+        )
+        .await
+        .expect("reconcile tracks");
 
     // Without path mappings the Windows D:/ paths are unmappable, so
     // every track lands in `warnings` rather than `inserted`. The
@@ -161,6 +162,7 @@ async fn reconcile_playlists_against_real_fixture() {
         &tuxtunes::sync::observer::NoopObserver,
         source_id,
         &lib,
+        &Default::default(),
     )
     .await
     .expect("reconcile playlists");
