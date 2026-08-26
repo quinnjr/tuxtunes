@@ -52,6 +52,8 @@ pub fn run() {
             commands::playback::stop,
             commands::playback::seek,
             commands::playback::set_volume,
+            commands::playback::prefetch_next,
+            commands::playback::clear_prefetch,
             commands::audio::list_audio_devices,
             commands::audio::set_audio_device,
             commands::audio::get_audio_prefs,

@@ -15,6 +15,7 @@ use crate::playback::config::{build_properties, MpvProperty, PlaybackPrefs, Trac
 use crate::playback::events::{self, PlaybackState, PositionUpdate, StateChanged, TrackChanged};
 use libmpv2::events::{Event, PropertyData};
 use libmpv2::{Format, Mpv};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Runtime};
@@ -54,6 +55,14 @@ pub enum EngineCommand {
     ApplyDevice {
         prefs: PlaybackPrefs,
     },
+    /// Append the next track to mpv's own playlist so EOF rolls into it
+    /// gaplessly (no audio-device reopen, no frontend round trip).
+    Prefetch {
+        track_id: i64,
+        file_path: String,
+    },
+    /// Drop any pre-queued track (the "next" changed or went away).
+    ClearPrefetch,
 }
 
 /// Events the engine thread hands off to an async consumer for DB writes.
@@ -215,7 +224,10 @@ fn init_mpv() -> Result<Mpv, libmpv2::Error> {
         // continues. The two strict properties (vid + audio-buffer)
         // remain required because the engine misbehaves without them.
         init.set_property("vid", "no")?;
-        init.set_property("audio-buffer", 2.0_f64)?;
+        // mpv pre-fills the output buffer before audio starts, so this
+        // is added directly to every track's start latency. 0.2 s is
+        // mpv's default; 2.0 s made each next-track switch feel stuck.
+        init.set_property("audio-buffer", 0.2_f64)?;
         for (name, value) in [
             ("gapless-audio", "yes"),
             ("audio-pitch-correction", "no"),
@@ -239,10 +251,21 @@ fn init_mpv() -> Result<Mpv, libmpv2::Error> {
     })
 }
 
-fn apply_props(mpv: &Mpv, props: &[MpvProperty]) {
+/// Apply per-load properties, skipping any whose value is unchanged
+/// since the last application. Re-setting `audio-device` /
+/// `audio-exclusive` makes mpv tear down and reopen the audio output
+/// (hundreds of ms, more in exclusive mode) even when nothing changed,
+/// which is what made every track switch slow.
+fn apply_props(mpv: &Mpv, props: &[MpvProperty], applied: &mut HashMap<&'static str, String>) {
     for p in props {
-        if let Err(e) = mpv.set_property(p.name, p.value.as_str()) {
-            log::warn!("set_property {}={} failed: {e}", p.name, p.value);
+        if applied.get(p.name).is_some_and(|v| *v == p.value) {
+            continue;
+        }
+        match mpv.set_property(p.name, p.value.as_str()) {
+            Ok(()) => {
+                applied.insert(p.name, p.value.clone());
+            }
+            Err(e) => log::warn!("set_property {}={} failed: {e}", p.name, p.value),
         }
     }
 }
@@ -274,7 +297,9 @@ fn handle_command<R: Runtime>(
                 });
             }
             let props = build_properties(&prefs, fmt);
-            apply_props(mpv, &props);
+            apply_props(mpv, &props, &mut state.applied_props);
+            // `replace` discards mpv's playlist, so any prefetch is gone.
+            state.prefetched = None;
             if let Err(e) = mpv.command("loadfile", &[file_path.as_str(), "replace"]) {
                 log::warn!("loadfile failed: {e}");
                 // The previous track has already been credited above, so
@@ -330,7 +355,30 @@ fn handle_command<R: Runtime>(
         EngineCommand::Resume => {
             let _ = mpv.set_property("pause", false);
         }
+        EngineCommand::Prefetch {
+            track_id,
+            file_path,
+        } => {
+            if current_track.is_none() {
+                return;
+            }
+            // One pre-queued track at a time: drop the previous one.
+            if state.prefetched.is_some() {
+                let _ = mpv.command("playlist-clear", &[]);
+                state.prefetched = None;
+            }
+            match mpv.command("loadfile", &[file_path.as_str(), "append"]) {
+                Ok(()) => state.prefetched = Some((track_id, file_path)),
+                Err(e) => log::warn!("prefetch loadfile append failed: {e}"),
+            }
+        }
+        EngineCommand::ClearPrefetch => {
+            if state.prefetched.take().is_some() {
+                let _ = mpv.command("playlist-clear", &[]);
+            }
+        }
         EngineCommand::Stop => {
+            state.prefetched = None;
             let _ = mpv.command("stop", &[]);
             if let Some(prev_id) = *current_track {
                 let _ = track_tx.send(PlaybackTracking::TrackEnded {
@@ -358,7 +406,9 @@ fn handle_command<R: Runtime>(
         EngineCommand::ApplyDevice { prefs } => {
             let device_id = prefs.selected_device_id.clone();
             if let Some(dev) = &device_id {
-                let _ = mpv.set_property("audio-device", dev.as_str());
+                if mpv.set_property("audio-device", dev.as_str()).is_ok() {
+                    state.applied_props.insert("audio-device", dev.clone());
+                }
             }
             let _ = mpv.set_property(
                 "audio-exclusive",
@@ -392,12 +442,17 @@ const POSITION_EMIT_INTERVAL_MS: i64 = 250;
 
 #[derive(Default)]
 struct EventLoopState {
+    /// Last value applied per mpv property by `apply_props`, so an
+    /// unchanged device/exclusive setting isn't re-applied (AO reinit).
+    applied_props: HashMap<&'static str, String>,
     current_track: Option<i64>,
     /// True between `LoadAndPlay` and the matching `FileLoaded`. Used to
     /// attribute a bare `Err` from `wait_event` — libmpv2 reports an
     /// end-file carrying an error code that way, with no event id left
     /// to identify it — to the track that is still trying to load.
     loading: bool,
+    /// Track appended to mpv's playlist behind the current one.
+    prefetched: Option<(i64, String)>,
     last_position_ms: i64,
     last_duration_ms: i64,
     last_emitted_position_ms: i64,
@@ -472,6 +527,40 @@ fn finish_current_track<R: Runtime>(
     natural_eof: bool,
 ) {
     let prev = state.current_track;
+    // Gapless: mpv rolls straight into the pre-queued file, so report
+    // the switch instead of a stop. The FileLoaded that follows emits
+    // Playing as usual.
+    if natural_eof {
+        if let (Some(old), Some((next_id, _))) = (prev, state.prefetched.take()) {
+            let _ = track_tx.send(PlaybackTracking::TrackEnded {
+                track_id: old,
+                position_ms: state.last_position_ms,
+                duration_ms: state.last_duration_ms,
+            });
+            let _ = app.emit(
+                events::TRACK_ENDED,
+                events::TrackEnded {
+                    track_id: old,
+                    next_track_id: Some(next_id),
+                },
+            );
+            state.current_track = Some(next_id);
+            state.loading = true;
+            state.last_position_ms = 0;
+            state.last_duration_ms = 0;
+            state.last_emitted_position_ms = 0;
+            let _ = app.emit(
+                events::TRACK_CHANGED,
+                TrackChanged {
+                    track_id: Some(next_id),
+                    prev_track_id: Some(old),
+                },
+            );
+            state.emit_state(app, PlaybackState::Loading);
+            return;
+        }
+    }
+    state.prefetched = None;
     if let Some(id) = prev {
         let _ = track_tx.send(PlaybackTracking::TrackEnded {
             track_id: id,
@@ -479,7 +568,13 @@ fn finish_current_track<R: Runtime>(
             duration_ms: state.last_duration_ms,
         });
         if natural_eof {
-            let _ = app.emit(events::TRACK_ENDED, events::TrackEnded { track_id: id });
+            let _ = app.emit(
+                events::TRACK_ENDED,
+                events::TrackEnded {
+                    track_id: id,
+                    next_track_id: None,
+                },
+            );
         }
     }
     state.current_track = None;
@@ -667,6 +762,39 @@ mod end_file_tests {
                 position_ms: 12_000,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn end_file_eof_rolls_into_the_prefetched_track() {
+        let (app, mut state, tx, mut rx, seen) = harness();
+        state.prefetched = Some((9, "/next.flac".into()));
+        handle_event(Event::EndFile(0), app.handle(), &mut state, &tx, false);
+        assert_eq!(state.current_track, Some(9));
+        assert!(state.loading);
+        assert!(state.prefetched.is_none());
+        let events = seen.lock().unwrap();
+        assert!(
+            events.iter().any(|e| e.starts_with(events::TRACK_ENDED)
+                && e.contains("\"track_id\":7")
+                && e.contains("\"next_track_id\":9")),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::TRACK_CHANGED) && e.contains("\"track_id\":9")),
+            "{events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.starts_with(events::STATE_CHANGED) && e.contains("stopped")),
+            "no stop during a gapless switch: {events:?}"
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PlaybackTracking::TrackEnded { track_id: 7, .. })
         ));
     }
 

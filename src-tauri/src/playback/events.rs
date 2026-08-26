@@ -35,6 +35,11 @@ pub struct TrackChanged {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TrackEnded {
     pub track_id: i64,
+    /// When the engine had the next track pre-queued (gapless), it has
+    /// already rolled into it: this is that track's id and the frontend
+    /// must not start another. None means playback stopped.
+    #[serde(default)]
+    pub next_track_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -150,9 +155,12 @@ mod tests {
 
     #[test]
     fn track_ended_serializes_with_track_id() {
-        let t = TrackEnded { track_id: 42 };
+        let t = TrackEnded {
+            track_id: 42,
+            next_track_id: None,
+        };
         let json = serde_json::to_string(&t).unwrap();
-        assert_eq!(json, r#"{"track_id":42}"#);
+        assert_eq!(json, r#"{"track_id":42,"next_track_id":null}"#);
     }
 
     #[test]

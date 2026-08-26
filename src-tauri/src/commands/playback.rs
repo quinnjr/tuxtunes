@@ -92,3 +92,31 @@ pub async fn set_volume(state: tauri::State<'_, AppState>, volume: u8) -> Result
         .send(EngineCommand::SetVolume { volume })
         .map_err(to_string_err)
 }
+
+/// Pre-queue the track that should follow the current one so mpv can
+/// switch gaplessly at EOF. Fails (without changing anything) when the
+/// file is missing, so the frontend falls back to its own advance.
+#[tauri::command]
+pub async fn prefetch_next(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
+    let track = tracks::get(&state.db.engine, track_id)
+        .await
+        .map_err(to_string_err)?;
+    if !std::path::Path::new(&track.file_path).is_file() {
+        return Err(format!("File not found: {}", track.file_path));
+    }
+    state
+        .engine
+        .send(EngineCommand::Prefetch {
+            track_id,
+            file_path: track.file_path,
+        })
+        .map_err(|e: EngineError| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_prefetch(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::ClearPrefetch)
+        .map_err(|e: EngineError| e.to_string())
+}

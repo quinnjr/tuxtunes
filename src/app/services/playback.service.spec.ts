@@ -340,6 +340,77 @@ describe('PlaybackService', () => {
     expect(harness.svc.lastError()).toBeNull(); // cleared by the successful start
   });
 
+  it('prefetches the next list row on track-changed, and skips next() when the engine rolled into it', async () => {
+    const harness = build();
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2, missing: true },
+      { ...TRACK, id: 3 },
+    ]);
+    harness.emit('playback:track-changed', { track_id: 1, prev_track_id: null });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('prefetch_next', { trackId: 3 });
+    harness.invoke.mockClear();
+    harness.emit('playback:track-ended', { track_id: 1, next_track_id: 3 });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).not.toHaveBeenCalledWith('play_track', expect.anything());
+    // At the end of the list there is nothing to pre-queue.
+    harness.emit('playback:track-changed', { track_id: 3, prev_track_id: 1 });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).not.toHaveBeenCalledWith('prefetch_next', expect.anything());
+    expect(harness.invoke).not.toHaveBeenCalledWith('clear_prefetch');
+  });
+
+  it('clears a stale prefetch when the next candidate disappears', async () => {
+    const harness = build();
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+    ]);
+    harness.emit('playback:track-changed', { track_id: 1, prev_track_id: null });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('prefetch_next', { trackId: 2 });
+    // The list changed under us: only the current track remains.
+    harness.library.tracks.set([{ ...TRACK, id: 1 }]);
+    harness.emit('playback:track-changed', { track_id: 1, prev_track_id: null });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('clear_prefetch');
+  });
+
+  it('prefetches the queue head and pops it once the engine has switched to it', async () => {
+    const harness = build();
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+    ]);
+    harness.svc.currentTrackId.set(1);
+    harness.svc.enqueue({ ...TRACK, id: 50 });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('prefetch_next', { trackId: 50 });
+    harness.emit('playback:track-ended', { track_id: 1, next_track_id: 50 });
+    expect(harness.svc.queue()).toEqual([]);
+  });
+
+  it('a failed prefetch falls back to the normal EOF advance', async () => {
+    const harness = build(async (cmd) => {
+      if (cmd === 'prefetch_next') throw new Error('File not found');
+      return [];
+    });
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+    ]);
+    harness.emit('playback:track-changed', { track_id: 1, prev_track_id: null });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    harness.emit('playback:track-ended', { track_id: 1, next_track_id: null });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 2 });
+  });
+
   it('track-ended continues down the list when the queue is empty', async () => {
     const harness = build();
     await harness.ready;

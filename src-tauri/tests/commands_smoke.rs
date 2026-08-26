@@ -954,3 +954,81 @@ async fn real_tracks_reach_eof_and_chain() {
         wait(&mut rx, &format!("ended:{{\"track_id\":{id}")).await;
     }
 }
+
+/// With the next track pre-queued, EOF must roll into it: track-ended
+/// carries next_track_id, track-changed names the new track, and no
+/// stopped state is emitted in between.
+#[tokio::test(flavor = "multi_thread")]
+async fn prefetched_track_plays_gaplessly_after_eof() {
+    use tauri::Listener;
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let mut ids = Vec::new();
+    for (name, samples) in [("a.wav", 16_000u32), ("b.wav", 400u32)] {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, short_wav(samples)).unwrap();
+        let id: i64 = state
+            .db
+            .engine
+            .raw_sql_scalar(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+                 VALUES (?, 50, 0, ?, '[]') RETURNING id",
+                &[
+                    prax_query::filter::FilterValue::String(name.to_string()),
+                    prax_query::filter::FilterValue::String(path.display().to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    for name in [
+        tuxtunes::playback::events::TRACK_ENDED,
+        tuxtunes::playback::events::TRACK_CHANGED,
+        tuxtunes::playback::events::STATE_CHANGED,
+    ] {
+        let tx = tx.clone();
+        app.handle().listen(name, move |e| {
+            let _ = tx.send(format!("{name} {}", e.payload()));
+        });
+    }
+    commands::playback::play_track(state.clone(), ids[0])
+        .await
+        .unwrap();
+    commands::playback::prefetch_next(state.clone(), ids[1])
+        .await
+        .unwrap();
+
+    let mut log = Vec::new();
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("events within 10s")
+            .expect("channel open");
+        log.push(msg.clone());
+        if msg.contains(&format!("track-ended {{\"track_id\":{}", ids[1])) {
+            break;
+        }
+    }
+    let first_end = log
+        .iter()
+        .position(|m| m.contains(&format!("track-ended {{\"track_id\":{}", ids[0])))
+        .expect("first track ended");
+    assert!(
+        log[first_end].contains(&format!("\"next_track_id\":{}", ids[1])),
+        "{:?}",
+        log[first_end]
+    );
+    assert!(
+        log[first_end + 1..].iter().any(|m| m.contains("track-changed")
+            && m.contains(&format!("\"track_id\":{}", ids[1]))),
+        "{log:?}"
+    );
+    assert!(
+        !log[..first_end]
+            .iter()
+            .any(|m| m.contains("\"state\":\"stopped\"")),
+        "no stop before the gapless switch: {log:?}"
+    );
+}

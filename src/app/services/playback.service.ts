@@ -161,7 +161,10 @@ export class PlaybackService implements OnDestroy {
         (payload) => {
           this.currentTrackId.set(payload.track_id);
           this.previousTrackId.set(payload.prev_track_id);
-          if (payload.track_id !== null) void this.ensureArtwork(payload.track_id);
+          if (payload.track_id !== null) {
+            void this.ensureArtwork(payload.track_id);
+            void this.prefetchNext(payload.track_id);
+          }
         },
       ),
       await this.tauri.listen<{ state: PlaybackState }>('playback:state-changed', (payload) =>
@@ -196,9 +199,19 @@ export class PlaybackService implements OnDestroy {
       // Auto-advance only fires for natural EOF — the engine
       // distinguishes user-stop / shutdown / redirect upstream and
       // doesn't emit `track-ended` for those.
-      await this.tauri.listen<{ track_id: number }>('playback:track-ended', (payload) => {
-        void this.next(payload.track_id);
-      }),
+      await this.tauri.listen<{ track_id: number; next_track_id?: number | null }>(
+        'playback:track-ended',
+        (payload) => {
+          // Gapless: the engine already rolled into the pre-queued
+          // track; just settle our bookkeeping.
+          if (payload.next_track_id != null) {
+            this.onPrefetchedStarted(payload.next_track_id);
+            return;
+          }
+          this.prefetched = null;
+          void this.next(payload.track_id);
+        },
+      ),
       // Tray menu actions route through the frontend so the
       // state-machine logic (toggle on current state, advance from
       // queue) stays in one place.
@@ -348,14 +361,17 @@ export class PlaybackService implements OnDestroy {
 
   enqueue(track: TrackRow): void {
     this.queue.update((q) => [...q, track]);
+    this.refreshPrefetch();
   }
 
   playNext(track: TrackRow): void {
     this.queue.update((q) => [track, ...q]);
+    this.refreshPrefetch();
   }
 
   removeFromQueue(index: number): void {
     this.queue.update((q) => q.filter((_, i) => i !== index));
+    this.refreshPrefetch();
   }
 
   reorderQueue(fromIndex: number, toIndex: number): void {
@@ -369,6 +385,7 @@ export class PlaybackService implements OnDestroy {
       next.splice(toIndex, 0, moved);
       return next;
     });
+    this.refreshPrefetch();
   }
 
   /**
@@ -387,6 +404,60 @@ export class PlaybackService implements OnDestroy {
       this.queue.set(rest);
       if (await this.tryPlay(head.id)) return head;
     }
+  }
+
+  /** What the engine has pre-queued behind the current track, if anything. */
+  private prefetched: { id: number; fromQueue: boolean } | null = null;
+
+  /**
+   * The track that would follow `afterId`: the queue head, else the
+   * next non-missing row in the visible list. Pure — no playback.
+   */
+  private nextCandidate(afterId: number): { id: number; fromQueue: boolean } | null {
+    const head = this.queue().find((t) => !t.missing);
+    if (head) return { id: head.id, fromQueue: true };
+    const rows = this.library.tracks();
+    const start = rows.findIndex((t) => t.id === afterId);
+    if (start === -1) return null;
+    const row = rows.slice(start + 1).find((t) => !t.missing);
+    return row ? { id: row.id, fromQueue: false } : null;
+  }
+
+  /**
+   * Hand the engine the next track so EOF switches gaplessly instead
+   * of stopping, reopening the audio device and waiting for us. A
+   * failed prefetch (missing file) just leaves the normal EOF path.
+   */
+  private async prefetchNext(afterId: number): Promise<void> {
+    const cand = this.nextCandidate(afterId);
+    try {
+      if (cand === null) {
+        if (this.prefetched !== null) await this.tauri.invoke<void>('clear_prefetch');
+        this.prefetched = null;
+        return;
+      }
+      if (this.prefetched?.id === cand.id) return;
+      await this.tauri.invoke<void>('prefetch_next', { trackId: cand.id });
+      this.prefetched = cand;
+    } catch {
+      this.prefetched = null;
+    }
+  }
+
+  /** Re-evaluate the pre-queued track after the queue changed. */
+  private refreshPrefetch(): void {
+    const current = this.currentTrackId();
+    if (current !== null) void this.prefetchNext(current);
+  }
+
+  private onPrefetchedStarted(nextId: number): void {
+    if (this.prefetched?.fromQueue && this.prefetched.id === nextId) {
+      this.queue.update((q) => {
+        const i = q.findIndex((t) => t.id === nextId);
+        return i === -1 ? q : q.filter((_, idx) => idx !== i);
+      });
+    }
+    this.prefetched = null;
   }
 
   /**
@@ -448,6 +519,7 @@ export class PlaybackService implements OnDestroy {
 
   clearQueue(): void {
     this.queue.set([]);
+    this.refreshPrefetch();
   }
 
   /**
