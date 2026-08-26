@@ -96,6 +96,14 @@ export class SidebarComponent implements OnInit {
     return this.ui.libraryView() === view && !this.ui.columnBrowserOpen();
   }
 
+  /**
+   * A node is a folder if the backend says so or if it has children —
+   * an older sync could have stored a folder as 'regular'.
+   */
+  protected isFolder(node: PlaylistNode): boolean {
+    return node.playlist.kind === 'folder' || node.children.length > 0;
+  }
+
   protected isPlaylistActive(p: Playlist): boolean {
     return this.library.activePlaylistId() === p.id;
   }
@@ -114,8 +122,9 @@ export class SidebarComponent implements OnInit {
   }
 
   /** Folders expand/collapse; playlists open in the track list. */
-  protected onPlaylistClick(p: Playlist): void {
-    if (p.kind === 'folder') {
+  protected onPlaylistClick(node: PlaylistNode): void {
+    const p = node.playlist;
+    if (this.isFolder(node)) {
       this.toggleFolder(p);
       return;
     }

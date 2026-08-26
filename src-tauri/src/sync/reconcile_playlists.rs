@@ -50,6 +50,17 @@ pub async fn reconcile(
             .await
             .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
 
+    // Folder-ness is derived from structure, not from itl-rs's
+    // `is_folder()` heuristic ("has no tracks"): iTunes folders carry
+    // the union of their children's tracks, and genuinely empty
+    // playlists exist, so that heuristic inverts both cases.
+    let parent_pids: std::collections::HashSet<u64> = lib
+        .playlists()
+        .iter()
+        .filter_map(|p| p.parent_persistent_id())
+        .filter(|pid| *pid != 0)
+        .collect();
+
     let mut keep: Vec<u64> = Vec::with_capacity(lib.playlists().len());
     let mut pending_parent_links: Vec<(i64, u64)> = Vec::new();
 
@@ -71,21 +82,26 @@ pub async fn reconcile(
         }
         keep.push(pid);
 
-        let (kind, smart_rule_json) = classify(p);
+        let (kind, smart_rule_json) = classify(p.is_smart(), parent_pids.contains(&pid));
 
         // Translate ITL track IDs to local row IDs; skip any track we
         // didn't import (zero pid, unmappable path, etc.).
-        let track_entries: Vec<i64> = p
-            .track_ids()
-            .iter()
-            .filter_map(|itl_id| {
-                let track_pid = itl_to_pid.get(itl_id)?;
-                // A track merged into another (same file) keeps its
-                // playlist slots via the survivor.
-                let track_pid = aliases.get(track_pid).unwrap_or(track_pid);
-                track_pid_to_local.get(track_pid).copied()
-            })
-            .collect();
+        // A folder's own entry list is the union of its children —
+        // never something to show as a playlist of its own.
+        let track_entries: Vec<i64> = if kind == PlaylistKind::Folder {
+            Vec::new()
+        } else {
+            p.track_ids()
+                .iter()
+                .filter_map(|itl_id| {
+                    let track_pid = itl_to_pid.get(itl_id)?;
+                    // A track merged into another (same file) keeps its
+                    // playlist slots via the survivor.
+                    let track_pid = aliases.get(track_pid).unwrap_or(track_pid);
+                    track_pid_to_local.get(track_pid).copied()
+                })
+                .collect()
+        };
 
         let upsert = PlaylistUpsert {
             persistent_id: pid,
@@ -126,10 +142,14 @@ pub async fn reconcile(
     Ok(stats)
 }
 
-fn classify(p: &itl_rs::Playlist) -> (PlaylistKind, Option<String>) {
-    if p.is_folder() {
+/// `has_children` wins: anything another playlist calls its parent is
+/// a folder whatever its own flags or track count say. Smart detection
+/// is itl-rs's (unreliable on modern libraries, but harmless: a smart
+/// playlist mis-typed as regular still lists its resolved tracks).
+fn classify(is_smart: bool, has_children: bool) -> (PlaylistKind, Option<String>) {
+    if has_children {
         (PlaylistKind::Folder, None)
-    } else if p.is_smart() {
+    } else if is_smart {
         (PlaylistKind::Smart, None)
     } else {
         (PlaylistKind::Regular, None)
@@ -139,5 +159,18 @@ fn classify(p: &itl_rs::Playlist) -> (PlaylistKind, Option<String>) {
 impl From<TracksError> for PlaylistsError {
     fn from(e: TracksError) -> Self {
         PlaylistsError::Query(anyhow::Error::msg(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_prefers_structure_over_flags() {
+        assert_eq!(classify(false, true).0, PlaylistKind::Folder);
+        assert_eq!(classify(true, true).0, PlaylistKind::Folder);
+        assert_eq!(classify(true, false).0, PlaylistKind::Smart);
+        assert_eq!(classify(false, false).0, PlaylistKind::Regular);
     }
 }

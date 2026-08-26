@@ -89,14 +89,14 @@
         type="button"
         role="treeitem"
         [attr.aria-selected]="isPlaylistActive(node.playlist)"
-        [attr.aria-expanded]="node.playlist.kind === 'folder' ? isExpanded(node.playlist) : null"
+        [attr.aria-expanded]="isFolder(node) ? isExpanded(node.playlist) : null"
         [attr.data-playlist-id]="node.playlist.id"
         [style.padding-left.rem]="0.5 + depth * 0.75"
         [class]="'mac-sidebar-item w-full ' + (isPlaylistActive(node.playlist) ? 'selected' : '')"
         [title]="node.playlist.name"
-        (click)="onPlaylistClick(node.playlist)"
+        (click)="onPlaylistClick(node)"
       >
-        @switch (node.playlist.kind) {
+        @switch (isFolder(node) ? 'folder' : node.playlist.kind) {
           @case ('folder') {
             <svg
               class="h-4 w-4 shrink-0 transition-transform"
@@ -138,7 +138,7 @@
         }
         <span class="truncate">{{ node.playlist.name }}</span>
       </button>
-      @if (node.playlist.kind === 'folder' && isExpanded(node.playlist)) {
+      @if (isFolder(node) && isExpanded(node.playlist)) {
         <ng-container
           *ngTemplateOutlet="nodes; context: { $implicit: node.children, depth: depth + 1 }"
         />

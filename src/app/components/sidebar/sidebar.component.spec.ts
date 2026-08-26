@@ -8,7 +8,8 @@ import { SidebarComponent, buildPlaylistTree } from './sidebar.component';
 interface SidebarInternals {
   setView(v: string): void;
   isActive(v: string): boolean;
-  onPlaylistClick(p: Playlist): void;
+  onPlaylistClick(node: { playlist: Playlist; children: unknown[] }): void;
+  isFolder(node: { playlist: Playlist; children: unknown[] }): boolean;
   isExpanded(p: Playlist): boolean;
 }
 
@@ -122,7 +123,7 @@ describe('SidebarComponent', () => {
     const { fixture, cmp, library } = setup(RAW_PLAYLISTS);
     await settle(fixture);
     const folder = library.playlists().find((p) => p.id === 5)!;
-    cmp.onPlaylistClick(folder);
+    cmp.onPlaylistClick({ playlist: folder, children: [{}] });
     fixture.detectChanges();
     expect(cmp.isExpanded(folder)).toBe(true);
     const el = fixture.nativeElement as HTMLElement;
@@ -131,12 +132,39 @@ describe('SidebarComponent', () => {
     expect(library.activePlaylistId()).toBeNull();
   });
 
+  it("a 'regular' node with children is treated as a folder (old syncs stored folders that way)", async () => {
+    const { fixture, cmp, library, stub } = setup([
+      {
+        id: 1,
+        name: 'Genre',
+        kind: 'regular',
+        parent_id: null,
+        sort_order: 0,
+        cached_track_count: 900,
+      },
+      { id: 2, name: 'Band', kind: 'regular', parent_id: 1, sort_order: 0, cached_track_count: 9 },
+    ]);
+    await settle(fixture);
+    const genre = library.playlists().find((p) => p.id === 1)!;
+    const node = { playlist: genre, children: [{}] };
+    expect(cmp.isFolder(node)).toBe(true);
+    stub.invoke.mockClear();
+    cmp.onPlaylistClick(node);
+    await settle(fixture);
+    expect(cmp.isExpanded(genre)).toBe(true);
+    expect(library.activePlaylistId()).toBeNull();
+    expect(stub.invoke).not.toHaveBeenCalledWith('open_playlist', expect.anything());
+    const el = fixture.nativeElement as HTMLElement;
+    const names = [...el.querySelectorAll('[data-playlist-id]')].map((b) => b.textContent?.trim());
+    expect(names).toEqual(['Genre', 'Band']);
+  });
+
   it('clicking a playlist opens it in the tracks view and deactivates library views', async () => {
     const { fixture, cmp, ui, library, stub } = setup(RAW_PLAYLISTS);
     await settle(fixture);
     ui.libraryView.set('albums');
     ui.columnBrowserOpen.set(true);
-    cmp.onPlaylistClick(library.playlists().find((p) => p.id === 6)!);
+    cmp.onPlaylistClick({ playlist: library.playlists().find((p) => p.id === 6)!, children: [] });
     await settle(fixture);
     expect(ui.libraryView()).toBe('tracks');
     expect(ui.columnBrowserOpen()).toBe(false);
