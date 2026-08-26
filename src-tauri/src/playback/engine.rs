@@ -135,7 +135,7 @@ impl PlaybackEngine {
 
                 loop {
                     while let Ok(cmd) = rx.try_recv() {
-                        handle_command(&mpv, cmd, &mut state.current_track, &app);
+                        handle_command(&mpv, cmd, &mut state, &app, &track_tx);
                     }
 
                     if let Some(Ok(ev)) = mpv.wait_event(0.05) {
@@ -183,6 +183,11 @@ fn init_mpv() -> Result<Mpv, libmpv2::Error> {
     Mpv::with_initializer(|init| {
         if null_ao {
             init.set_property("ao", "null")?;
+            // Tests: don't pace the null output at real time, so a whole
+            // song reaches EOF in milliseconds.
+            if let Err(e) = init.set_property("ao-null-untimed", true) {
+                log::warn!("mpv init: skipping ao-null-untimed: {e}");
+            }
         }
         // Best-effort init: an unknown property name on older/newer
         // libmpv versions shouldn't kill startup. Each setter logs and
@@ -224,9 +229,11 @@ fn apply_props(mpv: &Mpv, props: &[MpvProperty]) {
 fn handle_command<R: Runtime>(
     mpv: &Mpv,
     cmd: EngineCommand,
-    current_track: &mut Option<i64>,
+    state: &mut EventLoopState,
     app: &AppHandle<R>,
+    track_tx: &mpsc::UnboundedSender<PlaybackTracking>,
 ) {
+    let current_track = &mut state.current_track;
     match cmd {
         EngineCommand::LoadAndPlay {
             track_id,
@@ -234,6 +241,16 @@ fn handle_command<R: Runtime>(
             prefs,
             fmt,
         } => {
+            // Starting a track while another plays: mpv will raise
+            // EndFile(STOP) for the old one *after* we record the new
+            // current track, so account for the old one here instead.
+            if let Some(prev_id) = *current_track {
+                let _ = track_tx.send(PlaybackTracking::TrackEnded {
+                    track_id: prev_id,
+                    position_ms: state.last_position_ms,
+                    duration_ms: state.last_duration_ms,
+                });
+            }
             let props = build_properties(&prefs, fmt);
             apply_props(mpv, &props);
             if let Err(e) = mpv.command("loadfile", &[file_path.as_str(), "replace"]) {
@@ -267,6 +284,13 @@ fn handle_command<R: Runtime>(
         }
         EngineCommand::Stop => {
             let _ = mpv.command("stop", &[]);
+            if let Some(prev_id) = *current_track {
+                let _ = track_tx.send(PlaybackTracking::TrackEnded {
+                    track_id: prev_id,
+                    position_ms: state.last_position_ms,
+                    duration_ms: state.last_duration_ms,
+                });
+            }
             *current_track = None;
             let _ = app.emit(
                 events::STATE_CHANGED,
@@ -296,8 +320,10 @@ fn handle_command<R: Runtime>(
             // chips and the settings panel can reflect what's
             // actually active. mpv exposes the resolved sample-rate /
             // bit-depth via `audio-out-params` after the next file
-            // load — we emit nulls here and let the engine refresh
-            // them when FileLoaded fires.
+            // load, but nothing currently reads that back: we emit
+            // nulls here and no repopulation happens on FileLoaded (its
+            // handler only emits Playing state). Refreshing these from
+            // `audio-out-params` is a deferred Phase-6 item.
             let _ = app.emit(
                 events::DEVICE_CHANGED,
                 events::DeviceChanged {
@@ -394,6 +420,20 @@ fn handle_event<R: Runtime>(
             state.emit_state(app, PlaybackState::Playing);
         }
         Event::EndFile(reason) => {
+            // libmpv2's EndFileReason is a `c_uint` alias from
+            // libmpv2_sys — 0=EOF, 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT.
+            // STOP/REDIRECT arrive for the *previous* file after a
+            // `loadfile … replace` or a Stop command, by which time
+            // `current_track` already names the new track (or was
+            // cleared by Stop). Touching state here would wipe the new
+            // track — and then its own EOF would never emit
+            // `track-ended`, silently killing auto-advance. Only a
+            // genuine end of the current file is handled here.
+            const REASON_EOF: libmpv2::EndFileReason = 0;
+            const REASON_ERROR: libmpv2::EndFileReason = 4;
+            if reason != REASON_EOF && reason != REASON_ERROR {
+                return;
+            }
             let prev = state.current_track;
             if let Some(id) = prev {
                 let _ = track_tx.send(PlaybackTracking::TrackEnded {
@@ -401,12 +441,6 @@ fn handle_event<R: Runtime>(
                     position_ms: state.last_position_ms,
                     duration_ms: state.last_duration_ms,
                 });
-                // Distinguish a natural EOF (advance the queue) from a
-                // user-initiated stop or shutdown (don't). libmpv2's
-                // EndFileReason is a `c_uint` alias from libmpv2_sys —
-                // 0=EOF, 2=STOP, 3=QUIT, 4=ERROR, 5=REDIRECT — and only
-                // EOF means the track played through to its end.
-                const REASON_EOF: libmpv2::EndFileReason = 0;
                 if reason == REASON_EOF {
                     let _ = app.emit(events::TRACK_ENDED, events::TrackEnded { track_id: id });
                 }
@@ -423,5 +457,109 @@ fn handle_event<R: Runtime>(
             );
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod end_file_tests {
+    use super::*;
+    use tauri::Listener;
+
+    #[allow(clippy::type_complexity)]
+    fn harness() -> (
+        tauri::App<tauri::test::MockRuntime>,
+        EventLoopState,
+        mpsc::UnboundedSender<PlaybackTracking>,
+        mpsc::UnboundedReceiver<PlaybackTracking>,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let app = tauri::test::mock_app();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        for name in [
+            events::TRACK_ENDED,
+            events::TRACK_CHANGED,
+            events::STATE_CHANGED,
+        ] {
+            let seen = std::sync::Arc::clone(&seen);
+            app.handle().listen(name, move |e| {
+                seen.lock().unwrap().push(format!("{name} {}", e.payload()));
+            });
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let state = EventLoopState {
+            current_track: Some(7),
+            last_position_ms: 12_000,
+            last_duration_ms: 200_000,
+            ..Default::default()
+        };
+        (app, state, tx, rx, seen)
+    }
+
+    #[test]
+    fn end_file_stop_after_replace_leaves_the_new_track_alone() {
+        let (app, mut state, tx, mut rx, seen) = harness();
+        // The old file's EndFile(STOP) arrives after the new track was recorded.
+        handle_event(Event::EndFile(2), app.handle(), &mut state, &tx);
+        assert_eq!(
+            state.current_track,
+            Some(7),
+            "replace must not clear the new track"
+        );
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "no events for a replaced file: {:?}",
+            seen.lock().unwrap()
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "tracking for the old track is sent by the command, not here"
+        );
+        // Redirect (5) and quit (3) are the same story.
+        handle_event(Event::EndFile(5), app.handle(), &mut state, &tx);
+        assert_eq!(state.current_track, Some(7));
+    }
+
+    #[test]
+    fn end_file_eof_emits_track_ended_and_clears() {
+        let (app, mut state, tx, mut rx, seen) = harness();
+        handle_event(Event::EndFile(0), app.handle(), &mut state, &tx);
+        assert_eq!(state.current_track, None);
+        let events = seen.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::TRACK_ENDED) && e.contains("\"track_id\":7")),
+            "{events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with(events::TRACK_CHANGED) && e.contains("\"track_id\":null")),
+            "{events:?}"
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PlaybackTracking::TrackEnded {
+                track_id: 7,
+                position_ms: 12_000,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn end_file_error_clears_without_track_ended() {
+        let (app, mut state, tx, _rx, seen) = harness();
+        handle_event(Event::EndFile(4), app.handle(), &mut state, &tx);
+        assert_eq!(state.current_track, None);
+        let events = seen.lock().unwrap();
+        assert!(
+            !events.iter().any(|e| e.starts_with(events::TRACK_ENDED)),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.starts_with(events::TRACK_CHANGED)),
+            "{events:?}"
+        );
     }
 }

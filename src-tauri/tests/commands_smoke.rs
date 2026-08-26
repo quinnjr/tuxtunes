@@ -312,6 +312,42 @@ async fn smart_rule_evaluate_and_preview_via_command() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn evaluate_smart_rule_matches_genre_via_command() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    state
+        .db
+        .engine
+        .raw_sql_execute(
+            "INSERT INTO tracks (title, genre, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('Jazz Track', 'Jazz', 1000, 0, '/tmp/jazz', '[]'), \
+                    ('Rock Track', 'Rock', 1000, 0, '/tmp/rock', '[]')",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let rule: SmartRule = serde_json::from_value(serde_json::json!({
+        "match_all": true,
+        "live_updating": true,
+        "limit": null,
+        "root": {
+            "match_all": true,
+            "children": [
+                {"field": "genre", "op": "is", "value": "Jazz"}
+            ]
+        }
+    }))
+    .unwrap();
+
+    let rows = commands::smart::evaluate_smart_rule(state.clone(), rule)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Jazz Track");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn playlist_crud_via_commands() {
     let (app, _tmp) = fixture().await;
     let state = app.state::<AppState>();
@@ -739,4 +775,65 @@ async fn open_playlist_errors_for_unknown_playlist_id() {
         .await
         .unwrap_err();
     assert!(err.contains("not found"), "{err:?}");
+}
+
+/// Play real library files end to end (opt-in: `TUXTUNES_TEST_TRACKS` =
+/// comma-separated audio paths). Proves EOF → `track-ended` → next
+/// `play_track` chains with actual mp3/m4a decoding, not just a WAV.
+#[tokio::test(flavor = "multi_thread")]
+async fn real_tracks_reach_eof_and_chain() {
+    use tauri::Listener;
+    let Ok(list) = std::env::var("TUXTUNES_TEST_TRACKS") else {
+        eprintln!("skipping: TUXTUNES_TEST_TRACKS not set");
+        return;
+    };
+    let paths: Vec<String> = list.split(',').map(str::to_string).collect();
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let mut ids = Vec::new();
+    for (i, p) in paths.iter().enumerate() {
+        let id: i64 = state
+            .db
+            .engine
+            .raw_sql_scalar(
+                "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+                 VALUES (?, 0, 0, ?, '[]') RETURNING id",
+                &[
+                    prax_query::filter::FilterValue::String(format!("real{i}")),
+                    prax_query::filter::FilterValue::String(p.clone()),
+                ],
+            )
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let t2 = tx.clone();
+    app.handle()
+        .listen(tuxtunes::playback::events::TRACK_ENDED, move |e| {
+            let _ = t2.send(format!("ended:{}", e.payload()));
+        });
+    app.handle()
+        .listen(tuxtunes::playback::events::STATE_CHANGED, move |e| {
+            let _ = tx.send(format!("state:{}", e.payload()));
+        });
+    async fn wait(rx: &mut tokio::sync::mpsc::UnboundedReceiver<String>, needle: &str) -> String {
+        let deadline = std::time::Duration::from_secs(90);
+        loop {
+            let msg = tokio::time::timeout(deadline, rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("timed out waiting for {needle}"))
+                .expect("channel open");
+            eprintln!("evt {msg}");
+            if msg.contains(needle) {
+                return msg;
+            }
+        }
+    }
+    for id in &ids {
+        commands::playback::play_track(state.clone(), *id)
+            .await
+            .unwrap();
+        wait(&mut rx, &format!("ended:{{\"track_id\":{id}")).await;
+    }
 }

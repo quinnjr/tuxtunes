@@ -112,10 +112,10 @@ pub fn build_properties(prefs: &PlaybackPrefs, track: TrackAudioFormat) -> Vec<M
         value: prefs.replaygain_mode.as_mpv().into(),
     });
 
-    out.push(MpvProperty {
-        name: "volume",
-        value: prefs.volume.to_string(),
-    });
+    // Volume is deliberately NOT pushed per load: it is owned by the
+    // SetVolume command and the persisted-volume restore at startup.
+    // Emitting it here reset every new track to `prefs.volume` (100 by
+    // default for play_track's ad-hoc prefs), clobbering the slider.
 
     out
 }
@@ -219,7 +219,9 @@ mod tests {
     }
 
     #[test]
-    fn volume_always_appears_in_output() {
+    fn volume_never_appears_in_per_load_output() {
+        // Per-load props must not touch volume, or every track start
+        // would reset the user's level (see build_properties).
         let prefs = PlaybackPrefs {
             volume: 42,
             ..Default::default()
@@ -232,8 +234,7 @@ mod tests {
                 is_dsd: false,
             },
         );
-        let vol = p.iter().find(|x| x.name == "volume").unwrap();
-        assert_eq!(vol.value, "42");
+        assert!(p.iter().all(|x| x.name != "volume"), "{p:?}");
     }
 
     #[test]
