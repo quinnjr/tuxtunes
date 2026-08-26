@@ -1,6 +1,6 @@
 # Maintainer: Joseph R. Quinn <quinn.josephr@gmail.com>
 pkgname=tuxtunes-git
-pkgver=0.1.0.r155.g236797b
+pkgver=0.1.0.r157.g71151bd
 pkgrel=1
 pkgdesc="Music library manager and player (Tauri + Angular)"
 arch=('x86_64' 'aarch64')
@@ -24,7 +24,7 @@ makedepends=(
 )
 provides=('tuxtunes')
 conflicts=('tuxtunes')
-# Set TUXTUNES_SRC=/path/to/checkout to build from a local clone.
+# Set TUXTUNES_SRC=file:///path/to/checkout to build from a local clone.
 source=("$pkgname::git+${TUXTUNES_SRC:-$url.git}#branch=develop"
         'tuxtunes.desktop')
 sha256sums=('SKIP'
