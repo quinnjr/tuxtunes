@@ -34,6 +34,7 @@ const TRACK: TrackRow = {
   playCount: 0,
   skipCount: 0,
   missing: false,
+  artworkPath: null,
 };
 
 function setup() {

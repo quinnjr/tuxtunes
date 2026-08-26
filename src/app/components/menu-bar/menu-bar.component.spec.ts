@@ -9,7 +9,8 @@ interface MenuBarInternals {
   openMenu(): 'file' | 'settings' | null;
   toggle(menu: 'file' | 'settings'): void;
   close(): void;
-  addFiles(): Promise<void>;
+  addFile(): Promise<void>;
+  addFolder(): Promise<void>;
   importItunes(): void;
   openPreferences(): void;
 }
@@ -47,11 +48,20 @@ describe('MenuBarComponent', () => {
     expect(cmp.openMenu()).toBe('settings');
   });
 
-  it('addFiles() delegates to LibraryService.addTrackFromPicker and closes the menu', async () => {
+  it('addFile() delegates to LibraryService.addTrackFromPicker and closes the menu', async () => {
     const { cmp, library } = setup();
     const spy = vi.spyOn(library, 'addTrackFromPicker').mockResolvedValue(null);
     cmp.toggle('file');
-    await cmp.addFiles();
+    await cmp.addFile();
+    expect(spy).toHaveBeenCalled();
+    expect(cmp.openMenu()).toBeNull();
+  });
+
+  it('addFolder() delegates to LibraryService.addFolderFromPicker and closes the menu', async () => {
+    const { cmp, library } = setup();
+    const spy = vi.spyOn(library, 'addFolderFromPicker').mockResolvedValue(null);
+    cmp.toggle('file');
+    await cmp.addFolder();
     expect(spy).toHaveBeenCalled();
     expect(cmp.openMenu()).toBeNull();
   });

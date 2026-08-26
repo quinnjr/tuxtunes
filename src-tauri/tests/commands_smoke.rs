@@ -173,9 +173,10 @@ async fn show_in_files_command_runs_without_crashing() {
         .raw_sql_scalar("SELECT id FROM tracks WHERE title = 'show'", &[])
         .await
         .unwrap();
-    // xdg-open may not exist in CI; we just want the function to walk
-    // through to spawn() and return. Failure is also a covered branch.
-    let _ = commands::library::show_in_files(state, id).await;
+    // Never actually launch a file manager from the test suite.
+    std::env::set_var("TUXTUNES_NO_XDG_OPEN", "1");
+    let res = commands::library::show_in_files(state, id).await;
+    assert!(res.is_ok(), "{res:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -523,15 +524,16 @@ async fn verify_failure_emits_verify_failed_with_message() {
 
     let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_clone = Arc::clone(&captured);
-    app.handle().listen(tuxtunes::fs::events::VERIFY_FAILED, move |event| {
-        let payload: serde_json::Value =
-            serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
-        let message = payload
-            .get("message")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
-        *captured_clone.lock().unwrap() = message;
-    });
+    app.handle()
+        .listen(tuxtunes::fs::events::VERIFY_FAILED, move |event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+            let message = payload
+                .get("message")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            *captured_clone.lock().unwrap() = message;
+        });
 
     tuxtunes::commands::library::run_verify_and_report(&engine, &handle).await;
 

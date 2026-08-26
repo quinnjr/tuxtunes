@@ -377,6 +377,13 @@ fn handle_event<R: Runtime>(
             _ => {}
         },
         Event::FileLoaded => {
+            // The command handler emits `Loading` directly (it has no
+            // EventLoopState), and mpv's `pause=false` property change
+            // can land here before the file is loaded — both leave
+            // `last_emitted_state` claiming `Playing` while the UI is
+            // sitting on `Loading`. FileLoaded is the authoritative
+            // "audio is running" moment, so always emit it.
+            state.last_emitted_state = None;
             state.emit_state(app, PlaybackState::Playing);
         }
         Event::EndFile(reason) => {

@@ -116,6 +116,90 @@ pub async fn probe_and_add(engine: &SqliteRawEngine, path: &Path) -> Result<i64,
     Ok(value.get("id").and_then(|v| v.as_i64()).unwrap_or(-1))
 }
 
+/// Extensions considered audio when walking a folder. Mirrors the
+/// picker filter in `pick_and_add_track`, plus the iTunes containers
+/// a consolidated library carries.
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "flac", "mp3", "m4a", "m4p", "m4b", "wav", "ogg", "opus", "aiff", "aif", "dsf", "dff", "wma",
+    "aac",
+];
+
+fn is_audio(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| AUDIO_EXTENSIONS.iter().any(|a| a.eq_ignore_ascii_case(e)))
+}
+
+/// Every audio file under `dir`, depth-first, sorted for a stable
+/// insertion order. Symlinked directories are not followed. Unreadable
+/// directories are skipped rather than aborting the walk.
+pub fn collect_audio_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if ft.is_dir() {
+                stack.push(path);
+            } else if ft.is_file() && is_audio(&path) {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Outcome of [`add_folder`]; serialized for the UI.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct AddFolderSummary {
+    pub added: u64,
+    /// Already in the library (same path) — left untouched.
+    pub skipped: u64,
+    /// Files lofty could not read; listed so the user can see which.
+    pub failed: Vec<String>,
+}
+
+/// Add every audio file under `dir` that the library doesn't already
+/// reference. Per-file probe failures are recorded, not fatal.
+pub async fn add_folder(
+    engine: &SqliteRawEngine,
+    dir: &Path,
+) -> Result<AddFolderSummary, IngestError> {
+    let files = tokio::task::spawn_blocking({
+        let d = dir.to_path_buf();
+        move || collect_audio_files(&d)
+    })
+    .await
+    .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
+
+    let mut summary = AddFolderSummary::default();
+    for path in files {
+        let in_use = crate::db::tracks::path_in_use(engine, &path.to_string_lossy())
+            .await
+            .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
+        if in_use {
+            summary.skipped += 1;
+            continue;
+        }
+        match probe_and_add(engine, &path).await {
+            Ok(_) => summary.added += 1,
+            Err(IngestError::Probe { path, source }) => {
+                log::warn!("add_folder: skipping {path}: {source}");
+                summary.failed.push(path);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +252,44 @@ mod tests {
 
         let e2 = IngestError::Db(anyhow::anyhow!("underlying"));
         assert!(e2.to_string().contains("underlying"));
+    }
+
+    #[tokio::test]
+    async fn add_folder_walks_recursively_skips_known_paths_and_records_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Db::open(&tmp.path().join("t.db")).await.unwrap();
+        let root = tmp.path().join("music");
+        std::fs::create_dir_all(root.join("Artist/Album")).unwrap();
+        write_minimal_wav(&root.join("top.wav"));
+        write_minimal_wav(&root.join("Artist/Album/01.WAV"));
+        write_minimal_wav(&root.join("Artist/Album/02.wav"));
+        std::fs::write(root.join("Artist/Album/cover.jpg"), b"jpg").unwrap();
+        std::fs::write(root.join("Artist/broken.flac"), b"not audio").unwrap();
+
+        let files = collect_audio_files(&root);
+        assert_eq!(files.len(), 4, "{files:?}");
+
+        // Pre-register one file so it counts as skipped.
+        probe_and_add(&db.engine, &root.join("top.wav"))
+            .await
+            .unwrap();
+
+        let summary = add_folder(&db.engine, &root).await.unwrap();
+        assert_eq!(summary.added, 2);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.failed.len(), 1);
+        assert!(summary.failed[0].ends_with("broken.flac"));
+
+        let n: i64 = db
+            .engine
+            .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+
+        // Re-running is a no-op.
+        let again = add_folder(&db.engine, &root).await.unwrap();
+        assert_eq!(again.added, 0);
+        assert_eq!(again.skipped, 3);
     }
 }

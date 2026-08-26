@@ -25,6 +25,7 @@ fn fake_track(title: &str) -> TrackRow {
         play_count: 0,
         skip_count: 0,
         import_status: "ok".to_string(),
+        artwork_path: None,
     }
 }
 

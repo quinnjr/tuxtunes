@@ -419,6 +419,7 @@ mod tests {
             play_count: 0,
             skip_count: 0,
             import_status: "ok".to_string(),
+            artwork_path: None,
         };
         let source = std::path::Path::new(&row.file_path);
         let tf = TrackFields::from_track_row(&row, source);

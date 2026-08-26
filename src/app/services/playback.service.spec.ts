@@ -70,6 +70,7 @@ const TRACK: TrackRow = {
   playCount: 0,
   skipCount: 0,
   missing: false,
+  artworkPath: null,
 };
 
 describe('PlaybackService', () => {
@@ -140,8 +141,13 @@ describe('PlaybackService', () => {
     expect(invoke).toHaveBeenCalledWith('set_volume', { volume: 50 });
   });
 
-  it('togglePlay() pauses while playing, resumes while paused, no-ops otherwise', async () => {
+  it('togglePlay() pauses while playing or loading, resumes while paused, no-ops otherwise', async () => {
     const { svc, invoke } = build();
+    svc.state.set('loading');
+    expect(svc.isActive()).toBe(true);
+    await svc.togglePlay();
+    expect(invoke).toHaveBeenCalledWith('pause');
+    invoke.mockClear();
     svc.state.set('playing');
     await svc.togglePlay();
     expect(invoke).toHaveBeenCalledWith('pause');
@@ -281,6 +287,29 @@ describe('PlaybackService', () => {
     harness.emit('playback:track-ended', { track_id: 1 });
     for (let i = 0; i < 3; i += 1) await Promise.resolve();
     expect(harness.invoke).toHaveBeenCalledWith('play_track', { trackId: 2 });
+  });
+
+  it('track-changed resolves artwork for the new track when none is cached', async () => {
+    const harness = build(async (cmd, args) => {
+      if (cmd === 'resolve_track_artwork') {
+        return (args as { trackId: number }).trackId === 2 ? '/cache/x.jpg' : null;
+      }
+      return [];
+    });
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1, artworkPath: '/have.jpg' },
+      { ...TRACK, id: 2 },
+    ]);
+    harness.emit('playback:track-changed', { track_id: 1, prev_track_id: null });
+    for (let i = 0; i < 3; i += 1) await Promise.resolve();
+    expect(harness.invoke).not.toHaveBeenCalledWith('resolve_track_artwork', expect.anything());
+    expect(harness.svc.currentArtworkPath()).toBe('/have.jpg');
+
+    harness.emit('playback:track-changed', { track_id: 2, prev_track_id: 1 });
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('resolve_track_artwork', { trackId: 2 });
+    expect(harness.svc.currentArtworkPath()).toBe('/cache/x.jpg');
   });
 
   it('auto-advances on track-ended', async () => {

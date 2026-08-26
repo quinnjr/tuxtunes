@@ -38,6 +38,7 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   playCount: 0,
   skipCount: 0,
   missing: false,
+  artworkPath: null,
   ...overrides,
 });
 
@@ -75,7 +76,8 @@ describe('NowPlayingPanelComponent', () => {
   it('coverUrl returns null when no track and asset URL otherwise', () => {
     const { cmp } = setup();
     expect(cmp.coverUrl(null)).toBeNull();
-    expect(cmp.coverUrl(TRACK(1, { filePath: '/tmp/a/b.flac' }))).toBe('asset:///tmp/a/cover.jpg');
+    expect(cmp.coverUrl(TRACK(1, { artworkPath: null }))).toBeNull();
+    expect(cmp.coverUrl(TRACK(1, { artworkPath: '/cache/ab.jpg' }))).toBe('asset:///cache/ab.jpg');
   });
 
   it('close() sets nowPlayingOpen to false', () => {

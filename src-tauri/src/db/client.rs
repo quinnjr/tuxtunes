@@ -239,7 +239,9 @@ mod tests {
         // First Db::open should detect the pre-existing `tracks` table (via
         // the 0001 backfill probe), skip re-running 0001, and apply 0002
         // since its indexes are absent.
-        let db = Db::open(tmp.path()).await.expect("upgrade open should succeed");
+        let db = Db::open(tmp.path())
+            .await
+            .expect("upgrade open should succeed");
 
         assert_eq!(
             composite_sync_index_count(&db.engine).await,

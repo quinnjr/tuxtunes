@@ -29,11 +29,19 @@
       >
         <button
           type="button"
-          (click)="addFiles()"
+          (click)="addFile()"
           class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
           <fa-icon [icon]="faPlus" />
-          Add Files…
+          Add File…
+        </button>
+        <button
+          type="button"
+          (click)="addFolder()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faFolderPlus" />
+          Add Folder…
         </button>
         <button
           type="button"

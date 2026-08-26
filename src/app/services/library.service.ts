@@ -64,6 +64,12 @@ interface PlaylistRaw {
   cached_track_count: number | null;
 }
 
+export interface AddFolderSummary {
+  added: number;
+  skipped: number;
+  failed: string[];
+}
+
 export type DistinctColumn = 'genre' | 'artist' | 'album';
 
 export interface DistinctValue {
@@ -281,6 +287,18 @@ export class LibraryService {
     return mapped;
   }
 
+  /**
+   * Pick a folder and add its audio files. Resolves to the backend's
+   * summary, or null if the dialog was cancelled. Refreshes the track
+   * list and stats on success.
+   */
+  async addFolderFromPicker(): Promise<AddFolderSummary | null> {
+    const raw = await this.tauri.invoke<AddFolderSummary | null>('pick_and_add_folder');
+    if (!raw) return null;
+    await Promise.all([this.refreshTracks(), this.refreshStats()]);
+    return raw;
+  }
+
   async refreshAlbums(): Promise<void> {
     const raws = await this.tauri.invoke<AlbumSummaryRaw[]>('list_albums');
     this.albums.set(
@@ -326,6 +344,29 @@ export class LibraryService {
         ),
       );
     }
+    return path;
+  }
+
+  /**
+   * Resolve cover art for the album a track belongs to and patch the
+   * result onto every loaded row of that album (tracks list and album
+   * summaries), so the player and the grid update without a refetch.
+   */
+  async resolveTrackArtwork(trackId: number): Promise<string | null> {
+    const path =
+      (await this.tauri.invoke<string | null | undefined>('resolve_track_artwork', {
+        trackId,
+      })) ?? null;
+    if (path === null) return null;
+    const source = this.tracksById().get(trackId);
+    this.tracks.update((rows) =>
+      rows.map((t) =>
+        (t.id === trackId || (t.album === source?.album && t.artist === source.artist)) &&
+        t.artworkPath !== path
+          ? { ...t, artworkPath: path }
+          : t,
+      ),
+    );
     return path;
   }
 

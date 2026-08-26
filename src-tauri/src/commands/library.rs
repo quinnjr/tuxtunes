@@ -93,18 +93,17 @@ pub async fn tracks_for_album(
         .map_err(|e| e.to_string())
 }
 
-/// Find (and cache) cover art for an album on demand. Probes the
-/// album's first few files for an embedded picture or a sidecar image,
-/// copies the hit into `$APPDATA/artwork/`, stamps `artwork_path` on
-/// the album's tracks, and returns the cached path — or None when the
-/// album has no discoverable art. Cheap to call repeatedly: the cache
-/// is content-addressed and the DB write is a no-op once stamped.
-#[tauri::command]
-pub async fn resolve_album_artwork(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    album_artist: String,
-    album: String,
+/// Shared body for the artwork commands: probe the album's first few
+/// files for an embedded picture or a sidecar image, copy the hit into
+/// `$APPDATA/artwork/`, stamp `artwork_path` on the album's tracks,
+/// and return the cached path — or None when nothing was found. Cheap
+/// to call repeatedly: the cache is content-addressed and the DB write
+/// is a no-op once stamped.
+async fn resolve_artwork_for_album(
+    app: &tauri::AppHandle,
+    engine: &prax_sqlite::raw::SqliteRawEngine,
+    album_artist: &str,
+    album: &str,
 ) -> Result<Option<String>, String> {
     use tauri::Manager;
     let cache_dir = app
@@ -112,10 +111,16 @@ pub async fn resolve_album_artwork(
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("artwork");
-    let engine = &state.db.engine;
-    let paths: Vec<std::path::PathBuf> = albums::tracks_for_album(engine, &album_artist, &album)
+    let tracks = albums::tracks_for_album(engine, album_artist, album)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    // Already resolved for this album (by another track's lookup)?
+    if let Some(existing) = tracks.iter().find_map(|t| t.artwork_path.clone()) {
+        if std::path::Path::new(&existing).is_file() {
+            return Ok(Some(existing));
+        }
+    }
+    let paths: Vec<std::path::PathBuf> = tracks
         .into_iter()
         .map(|t| std::path::PathBuf::from(t.file_path))
         .collect();
@@ -129,10 +134,51 @@ pub async fn resolve_album_artwork(
         return Ok(None);
     };
     let path_str = path.to_string_lossy().into_owned();
-    albums::set_album_artwork(engine, &album_artist, &album, &path_str)
+    albums::set_album_artwork(engine, album_artist, album, &path_str)
         .await
         .map_err(|e| e.to_string())?;
     Ok(Some(path_str))
+}
+
+/// Find (and cache) cover art for an album on demand (album grid).
+#[tauri::command]
+pub async fn resolve_album_artwork(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    album_artist: String,
+    album: String,
+) -> Result<Option<String>, String> {
+    resolve_artwork_for_album(&app, &state.db.engine, &album_artist, &album).await
+}
+
+/// Find (and cache) cover art for the album a track belongs to
+/// (transport bar / Now Playing). Uses the same grouping as
+/// `list_albums` so the grid and the player share one cached image.
+#[tauri::command]
+pub async fn resolve_track_artwork(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    track_id: i64,
+) -> Result<Option<String>, String> {
+    let engine = &state.db.engine;
+    let row = engine
+        .raw_sql_optional(
+            "SELECT COALESCE(NULLIF(album_artist, ''), NULLIF(artist, ''), 'Unknown Artist') \
+                    AS album_artist, \
+                    COALESCE(NULLIF(album, ''), 'Unknown Album') AS album \
+             FROM tracks WHERE id = ?",
+            &[FilterValue::Int(track_id)],
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("track {track_id} not found"))?;
+    let v = row.into_json();
+    let album_artist = v["album_artist"]
+        .as_str()
+        .unwrap_or("Unknown Artist")
+        .to_string();
+    let album = v["album"].as_str().unwrap_or("Unknown Album").to_string();
+    resolve_artwork_for_album(&app, engine, &album_artist, &album).await
 }
 
 #[tauri::command]
@@ -166,6 +212,26 @@ pub async fn pick_and_add_track(
         .await
         .map_err(|e| e.to_string())?;
     Ok(Some(row))
+}
+
+/// Pick a folder and add every audio file under it (recursively) that
+/// the library doesn't already reference. Returns counts; the UI
+/// refreshes its lists afterwards.
+#[tauri::command]
+pub async fn pick_and_add_folder(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<ingest::AddFolderSummary>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let Some(folder) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let dir = folder.into_path().map_err(|e| e.to_string())?;
+    ingest::add_folder(&state.db.engine, &dir)
+        .await
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 /// Runs the verify walk and reports failures on the `fs:verify-failed`
@@ -228,6 +294,12 @@ pub async fn show_in_files(state: tauri::State<'_, AppState>, track_id: i64) -> 
         .parent()
         .map(std::path::Path::to_path_buf)
         .ok_or_else(|| "no parent directory".to_string())?;
+    // Tests exercise this command against temp paths; popping a file
+    // manager window on the developer's desktop is never wanted there.
+    if std::env::var_os("TUXTUNES_NO_XDG_OPEN").is_some() {
+        log::info!("TUXTUNES_NO_XDG_OPEN set; not opening {}", parent.display());
+        return Ok(());
+    }
     std::process::Command::new("xdg-open")
         .arg(parent)
         .spawn()

@@ -34,6 +34,7 @@ const TRACK = (id: number): TrackRow => ({
   playCount: 0,
   skipCount: 0,
   missing: false,
+  artworkPath: null,
 });
 
 interface AlbumGridInternals {

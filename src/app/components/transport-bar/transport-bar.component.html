@@ -6,9 +6,9 @@
     <button
       class="mac-btn h-9 w-9 text-xl text-accent hover:text-accent-hover"
       (click)="togglePlay()"
-      [attr.aria-label]="playback.state() === 'playing' ? 'Pause' : 'Play'"
+      [attr.aria-label]="playback.isActive() ? 'Pause' : 'Play'"
     >
-      <fa-icon [icon]="playback.state() === 'playing' ? faPause : faPlay" />
+      <fa-icon [icon]="playback.isActive() ? faPause : faPlay" />
     </button>
     <button class="mac-btn h-8 w-8 text-base" (click)="stop()" aria-label="Stop">
       <fa-icon [icon]="faStop" />
@@ -19,7 +19,11 @@
   </div>
 
   <div class="group mac-pill-lcd mx-4 flex h-16 items-center gap-3 px-3">
-    <div class="h-9 w-9 flex-shrink-0 rounded-md bg-bg-tertiary"></div>
+    <div class="h-9 w-9 flex-shrink-0 overflow-hidden rounded-md bg-bg-tertiary">
+      @if (coverUrl(); as src) {
+        <img [src]="src" alt="" class="h-full w-full object-cover" />
+      }
+    </div>
     <div class="flex min-w-0 flex-1 flex-col justify-center gap-1">
       @if (currentTrack(); as t) {
         <div class="flex items-baseline justify-center gap-1 truncate text-center">

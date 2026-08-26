@@ -22,6 +22,9 @@ pub struct TrackRow {
     /// callers constructing rows by hand (tests) don't need to care.
     #[serde(default = "default_import_status")]
     pub import_status: String,
+    /// Cached cover image, if one has been resolved for the album.
+    #[serde(default)]
+    pub artwork_path: Option<String>,
 }
 
 fn default_import_status() -> String {
@@ -105,7 +108,7 @@ pub async fn list(
 
     let sql = format!(
         "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-         sample_rate, bit_depth, kind, play_count, skip_count, import_status \
+         sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
          FROM tracks {where_clause} \
          ORDER BY {order_expr} \
          LIMIT ? OFFSET ?"
@@ -127,7 +130,7 @@ pub async fn list(
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
     let sql = "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-               sample_rate, bit_depth, kind, play_count, skip_count, import_status \
+               sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
                FROM tracks WHERE id = ?";
     let params = vec![prax_query::filter::FilterValue::Int(id)];
     let json_row = engine
@@ -634,6 +637,7 @@ mod tests {
             play_count: 5,
             skip_count: 2,
             import_status: "ok".to_string(),
+            artwork_path: None,
         };
         let json = serde_json::to_string(&row).unwrap();
         let back: TrackRow = serde_json::from_str(&json).unwrap();

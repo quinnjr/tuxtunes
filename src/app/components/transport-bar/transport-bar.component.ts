@@ -1,3 +1,4 @@
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { Component, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import {
@@ -75,6 +76,14 @@ export class TransportBarComponent {
     if (t.bitDepth != null && t.bitDepth >= 24) return true;
     const kind = (t.kind ?? '').toLowerCase();
     return ['flac', 'wav', 'aiff', 'alac'].includes(kind);
+  }
+
+  /** Asset URL for the current track's cached cover, or null. */
+  protected readonly coverUrl = computed(this.#computeCoverUrl.bind(this));
+
+  #computeCoverUrl(): string | null {
+    const path = this.playback.currentArtworkPath();
+    return path ? convertFileSrc(path) : null;
   }
 
   protected async togglePlay(): Promise<void> {

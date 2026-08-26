@@ -44,14 +44,10 @@ export class NowPlayingPanelComponent {
     this.ui.nowPlayingOpen.set(false);
   }
 
+  /** Asset URL for the current track's cached cover, or null. */
   protected coverUrl(track: TrackRow | null): string | null {
-    if (!track) return null;
-    // Phase 4's ingest stores artwork as cover.<ext> next to the
-    // track file; the backend exposes it via Track.artwork_path. The
-    // current TrackRow shape doesn't carry that, so fall back to a
-    // sibling cover.jpg from the file path.
-    const dir = track.filePath.replace(/\/[^/]+$/, '');
-    return convertFileSrc(`${dir}/cover.jpg`);
+    if (!track?.artworkPath) return null;
+    return convertFileSrc(track.artworkPath);
   }
 
   protected formatTime(ms: number): string {

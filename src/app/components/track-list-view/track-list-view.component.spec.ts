@@ -45,6 +45,7 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   playCount: 0,
   skipCount: 0,
   missing: false,
+  artworkPath: null,
   ...overrides,
 });
 

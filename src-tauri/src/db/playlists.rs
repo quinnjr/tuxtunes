@@ -305,7 +305,7 @@ pub async fn tracks_for_regular(
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let sql = format!(
             "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-             sample_rate, bit_depth, kind, play_count, skip_count, import_status \
+             sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
              FROM tracks WHERE id IN ({placeholders})"
         );
         let params: Vec<FilterValue> = chunk.iter().map(|id| FilterValue::Int(*id)).collect();

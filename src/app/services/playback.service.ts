@@ -1,4 +1,4 @@
-import { Injectable, OnDestroy, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { type UnlistenFn } from '@tauri-apps/api/event';
 import { LibraryService } from './library.service';
 import { TauriService } from './tauri.service';
@@ -17,6 +17,8 @@ export interface TrackRow {
   skipCount: number;
   /** File unreachable (verify or a failed play flagged it). */
   missing: boolean;
+  /** Cached cover image path, once resolved for the album. */
+  artworkPath: string | null;
 }
 
 export interface TrackRowRaw {
@@ -32,6 +34,7 @@ export interface TrackRowRaw {
   play_count: number;
   skip_count: number;
   import_status?: string;
+  artwork_path?: string | null;
 }
 
 export function mapTrack(raw: TrackRowRaw): TrackRow {
@@ -48,6 +51,7 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
     playCount: raw.play_count,
     skipCount: raw.skip_count,
     missing: raw.import_status === 'missing_source',
+    artworkPath: raw.artwork_path ?? null,
   };
 }
 
@@ -105,6 +109,7 @@ export class PlaybackService implements OnDestroy {
         (payload) => {
           this.currentTrackId.set(payload.track_id);
           this.previousTrackId.set(payload.prev_track_id);
+          if (payload.track_id !== null) void this.ensureArtwork(payload.track_id);
         },
       ),
       await this.tauri.listen<{ state: PlaybackState }>('playback:state-changed', (payload) =>
@@ -157,7 +162,10 @@ export class PlaybackService implements OnDestroy {
   /** State-aware play/pause — used by both the transport bar and the tray. */
   async togglePlay(): Promise<void> {
     switch (this.state()) {
-      case 'playing': {
+      // `loading` means a file is being started — audio follows within
+      // milliseconds, so the user's intent is "pause".
+      case 'playing':
+      case 'loading': {
         await this.pause();
         break;
       }
@@ -179,6 +187,38 @@ export class PlaybackService implements OnDestroy {
       const message = error instanceof Error ? error.message : String(error);
       this.setError(message);
       this.markMissing(trackId, message);
+    }
+  }
+
+  /**
+   * Whether a track is audibly active — `loading` is the sub-second
+   * window between the click and mpv's FileLoaded, and should already
+   * present as "pause-able".
+   */
+  readonly isActive = computed(this.#computeIsActive.bind(this));
+
+  /** Cover for the current track, via the library's cached rows. */
+  readonly currentArtworkPath = computed(this.#computeCurrentArtworkPath.bind(this));
+
+  #computeIsActive(): boolean {
+    const s = this.state();
+    return s === 'playing' || s === 'loading';
+  }
+
+  #computeCurrentArtworkPath(): string | null {
+    const id = this.currentTrackId();
+    if (id === null) return null;
+    return this.library.tracksById().get(id)?.artworkPath ?? null;
+  }
+
+  /** Kick off a cover lookup for a track that has none cached yet. */
+  private async ensureArtwork(trackId: number): Promise<void> {
+    const row = this.library.tracksById().get(trackId);
+    if (row?.artworkPath) return;
+    try {
+      await this.library.resolveTrackArtwork(trackId);
+    } catch {
+      // Artwork is decorative; never surface lookup failures.
     }
   }
 

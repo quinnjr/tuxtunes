@@ -132,7 +132,7 @@ pub async fn tracks_for_album(
     let (where_clause, params) = album_match(album_artist, album);
     let sql = format!(
         "SELECT id, title, artist, album, duration_ms, file_path, file_hash, \
-         sample_rate, bit_depth, kind, play_count, skip_count, import_status \
+         sample_rate, bit_depth, kind, play_count, skip_count, import_status, artwork_path \
          FROM tracks \
          WHERE {where_clause} \
          ORDER BY disc_number ASC NULLS LAST, track_number ASC NULLS LAST, \

@@ -277,3 +277,42 @@ describe('sortTracks', () => {
     expect(out.map((t) => t.id)).toEqual([1, 2, 3]);
   });
 });
+
+describe('LibraryService.resolveTrackArtwork', () => {
+  it('patches the path onto the track and its album mates, returns null on a miss', async () => {
+    const { svc, invoke } = build(async (cmd, args) =>
+      cmd === 'resolve_track_artwork' && (args as { trackId: number }).trackId === 1
+        ? '/cache/a.jpg'
+        : null,
+    );
+    svc.tracks.set(
+      [
+        { ...RAW_TRACK, id: 1, album: 'Same', artist: 'X' },
+        { ...RAW_TRACK, id: 2, album: 'Same', artist: 'X' },
+        { ...RAW_TRACK, id: 3, album: 'Other', artist: 'X' },
+      ].map((r) => mapTrack(r)),
+    );
+    expect(await svc.resolveTrackArtwork(1)).toBe('/cache/a.jpg');
+    expect(invoke).toHaveBeenCalledWith('resolve_track_artwork', { trackId: 1 });
+    expect(svc.tracks().map((t) => t.artworkPath)).toEqual(['/cache/a.jpg', '/cache/a.jpg', null]);
+    expect(await svc.resolveTrackArtwork(3)).toBeNull();
+    expect(svc.tracks()[2].artworkPath).toBeNull();
+  });
+
+  it('addFolderFromPicker returns null on cancel and refreshes on success', async () => {
+    let cancelled = true;
+    const { svc, invoke } = build(async (cmd) => {
+      if (cmd === 'pick_and_add_folder')
+        return cancelled ? null : { added: 2, skipped: 1, failed: [] };
+      if (cmd === 'get_library_stats')
+        return { track_count: 3, total_duration_ms: 0, total_size_bytes: 0 };
+      return [];
+    });
+    expect(await svc.addFolderFromPicker()).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith('list_tracks', expect.anything());
+    cancelled = false;
+    expect(await svc.addFolderFromPicker()).toEqual({ added: 2, skipped: 1, failed: [] });
+    expect(invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
+    expect(svc.stats()?.trackCount).toBe(3);
+  });
+});
