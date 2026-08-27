@@ -1,44 +1,77 @@
-<section class="flex h-full flex-col gap-4 bg-[var(--color-bg-primary)] p-6">
+<section class="flex h-full flex-col gap-6 bg-bg-primary p-6">
   <div>
-    <h2 class="mb-2 text-lg font-semibold text-[var(--color-text-primary)]">Audio Output</h2>
-    <p class="mb-4 text-xs text-[var(--color-text-muted)]">
+    <h2 class="mb-1 text-body font-semibold uppercase tracking-wide text-text-muted">
+      Audio Output
+    </h2>
+    <p class="mb-3 text-footnote text-text-muted">
       Pick the device TuxTunes should play audio through. Exclusive mode takes sole ownership of the
       device — other apps will fail to play audio while TuxTunes is active.
     </p>
   </div>
 
-  <div class="flex flex-col gap-2">
-    @for (dev of devices(); track dev.id) {
+  <div class="overflow-hidden rounded-lg border border-border bg-bg-surface">
+    @for (dev of devices(); track dev.id; let last = $last) {
       <button
         type="button"
         (click)="select(dev.id)"
         [class]="
-          selectedId() === dev.id
-            ? 'flex items-center justify-between rounded border border-[var(--color-accent)] bg-[var(--color-bg-elevated)] px-4 py-2 text-left'
-            : 'flex items-center justify-between rounded border border-[var(--color-border)] bg-[var(--color-bg-surface)] px-4 py-2 text-left transition hover:border-[var(--color-border-strong)]'
+          'flex w-full items-center justify-between px-4 py-2.5 text-left transition ' +
+          (last ? '' : 'hairline-b') +
+          (selectedId() === dev.id ? ' bg-bg-elevated' : ' hover:bg-bg-elevated/60')
         "
       >
         <div>
-          <div class="text-sm font-semibold text-[var(--color-text-primary)]">
+          <div class="text-body text-text-primary">
             {{ dev.description }}
           </div>
-          <div class="font-mono text-xs text-[var(--color-text-muted)]">{{ dev.id }}</div>
+          <div class="tnum text-caption text-text-muted">{{ dev.id }}</div>
         </div>
-        <div class="flex gap-1">
+        <div class="flex items-center gap-2">
           @if (dev.supports_exclusive) {
-            <span class="rounded bg-[var(--color-bg-tertiary)] px-2 py-0.5 font-mono text-xs">
+            <span class="rounded bg-bg-tertiary px-2 py-0.5 text-caption text-text-secondary">
               exclusive
             </span>
+          }
+          @if (selectedId() === dev.id) {
+            <span class="text-accent">✓</span>
           }
         </div>
       </button>
     } @empty {
-      <div class="text-sm italic text-[var(--color-text-muted)]">No audio devices found.</div>
+      <div class="px-4 py-3 text-body italic text-text-muted">No audio devices found.</div>
     }
   </div>
 
-  <label class="mt-4 flex cursor-pointer items-center gap-2 text-sm">
-    <input type="checkbox" [checked]="exclusive()" (change)="toggleExclusive()" />
-    <span class="text-[var(--color-text-primary)]">Use exclusive mode</span>
+  <label
+    class="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-bg-surface px-4 py-2.5 text-body"
+  >
+    <span class="text-text-primary">Use exclusive mode</span>
+    <input
+      type="checkbox"
+      [checked]="exclusive()"
+      (change)="toggleExclusive()"
+      class="accent-accent"
+    />
   </label>
+
+  <div>
+    <h3 class="mb-1 text-caption font-semibold uppercase tracking-wide text-text-muted">
+      ReplayGain
+    </h3>
+    <p class="mb-3 text-footnote text-text-muted">
+      Apply normalized loudness gain so tracks play at consistent volume. Track gain levels each
+      file individually; album gain preserves intra-album dynamics.
+    </p>
+    <div class="mac-segmented w-fit">
+      @for (opt of replayGainOptions; track opt.id) {
+        <button
+          type="button"
+          (click)="setReplayGain(opt.id)"
+          [class]="'mac-segment ' + (replayGainMode() === opt.id ? 'selected' : '')"
+        >
+          {{ opt.label }}
+        </button>
+      }
+    </div>
+  </div>
 </section>

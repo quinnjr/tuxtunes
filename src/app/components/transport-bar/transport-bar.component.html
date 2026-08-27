@@ -1,42 +1,41 @@
-<div
-  class="grid h-24 grid-cols-[240px_1fr_240px] items-center border-b border-[var(--color-border-strong)] bg-[var(--color-bg-transport)] px-4"
->
-  <div class="flex items-center gap-3 text-[var(--color-text-secondary)]">
-    <button class="text-2xl transition hover:text-[var(--color-accent)]" aria-label="Previous">
+<div class="mac-toolbar grid h-24 grid-cols-[240px_1fr_240px] items-center px-4">
+  <div class="flex items-center gap-1 text-text-secondary">
+    <button class="mac-btn h-8 w-8 text-base" (click)="previous()" aria-label="Previous">
       <fa-icon [icon]="faPrev" />
     </button>
     <button
-      class="text-3xl text-[var(--color-accent)] transition hover:text-[var(--color-accent-hover)]"
+      class="mac-btn h-9 w-9 text-xl text-accent hover:text-accent-hover"
       (click)="togglePlay()"
-      [attr.aria-label]="playback.state() === 'playing' ? 'Pause' : 'Play'"
+      [attr.aria-label]="playback.isActive() ? 'Pause' : 'Play'"
     >
-      <fa-icon [icon]="playback.state() === 'playing' ? faPause : faPlay" />
+      <fa-icon [icon]="playback.isActive() ? faPause : faPlay" />
     </button>
-    <button
-      class="text-2xl transition hover:text-[var(--color-accent)]"
-      (click)="stop()"
-      aria-label="Stop"
-    >
+    <button class="mac-btn h-8 w-8 text-base" (click)="stop()" aria-label="Stop">
       <fa-icon [icon]="faStop" />
     </button>
-    <button class="text-2xl transition hover:text-[var(--color-accent)]" aria-label="Next">
+    <button class="mac-btn h-8 w-8 text-base" (click)="next()" aria-label="Next">
       <fa-icon [icon]="faNext" />
     </button>
   </div>
 
-  <div
-    class="mx-4 flex h-16 items-center rounded border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-4 shadow-inner"
-  >
-    <div class="h-12 w-12 flex-shrink-0 rounded bg-[var(--color-bg-tertiary)]"></div>
-    <div class="ml-3 flex min-w-0 flex-1 flex-col">
+  <div class="group mac-pill-lcd mx-4 flex h-16 items-center gap-3 px-3">
+    <div class="h-9 w-9 flex-shrink-0 overflow-hidden rounded-md bg-bg-tertiary">
+      @if (coverUrl(); as src) {
+        <img [src]="src" alt="" class="h-full w-full object-cover" />
+      }
+    </div>
+    <div class="flex min-w-0 flex-1 flex-col justify-center gap-1">
       @if (currentTrack(); as t) {
-        <span class="truncate text-sm font-semibold text-[var(--color-text-primary)]">
-          {{ t.title }}
-        </span>
-        <span class="truncate text-xs text-[var(--color-text-muted)]">
+        <div class="flex items-baseline justify-center gap-1 truncate text-center">
+          <span class="truncate text-body font-medium text-text-primary">
+            {{ t.title }}
+          </span>
+        </div>
+        <span class="truncate text-center text-caption text-text-secondary">
           {{ t.artist ?? '' }} — {{ t.album ?? '' }}
         </span>
-        <div class="mt-1 flex items-center gap-2">
+        <div class="mt-0.5 flex items-center gap-2">
+          <span class="transport-readout tnum">{{ formatTime(playback.positionMs()) }}</span>
           <input
             type="range"
             min="0"
@@ -45,18 +44,44 @@
             (change)="onSeek($event)"
             class="h-1 flex-1 cursor-pointer"
           />
-          <span class="font-mono text-xs text-[var(--color-text-muted)]">
-            {{ formatTime(playback.positionMs()) }} / {{ formatTime(t.durationMs) }}
-          </span>
+          <span class="transport-readout tnum">{{ formatTime(t.durationMs) }}</span>
         </div>
       } @else {
-        <span class="text-sm font-semibold text-[var(--color-text-primary)]">Nothing playing</span>
-        <span class="text-xs text-[var(--color-text-muted)]">—</span>
+        <span class="text-center text-body font-medium text-text-primary">Nothing playing</span>
+        <span class="text-center text-caption text-text-muted">—</span>
       }
     </div>
+    <button
+      type="button"
+      (click)="toggleNowPlaying()"
+      title="Open Now Playing (Q)"
+      class="mac-btn h-6 w-6 flex-shrink-0 text-xs opacity-0 transition group-hover:opacity-100"
+      aria-label="Open Now Playing"
+    >
+      ⤢
+    </button>
   </div>
 
-  <div class="flex items-center justify-end gap-3 text-[var(--color-text-secondary)]">
+  <div class="flex items-center justify-end gap-3 text-text-secondary">
+    @if (qualityChip(); as q) {
+      <span
+        [class]="
+          'rounded-md border px-1.5 py-0.5 text-caption2 uppercase tnum ' +
+          (isLossless() ? 'border-accent text-accent' : 'border-border text-text-muted')
+        "
+        title="Source sample rate / bit depth"
+      >
+        {{ q }}
+      </span>
+    }
+    @if (kindChip(); as k) {
+      <span
+        class="rounded-md bg-bg-elevated px-1.5 py-0.5 text-caption2 uppercase tnum text-text-secondary"
+        title="Container / codec"
+      >
+        {{ k }}
+      </span>
+    }
     <fa-icon [icon]="faVolumeUp" />
     <input
       type="range"

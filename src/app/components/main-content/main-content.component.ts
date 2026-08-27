@@ -1,26 +1,63 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
-import { SettingsAudioComponent } from '../settings-audio/settings-audio.component';
+import { LibraryView, UiService } from '../../services/ui.service';
+import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
+import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
+import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
-
-type ViewMode = 'tracks' | 'albums' | 'artists' | 'settings';
 
 @Component({
   selector: 'app-main-content',
-  imports: [TrackListViewComponent, SettingsAudioComponent],
+  imports: [
+    AlbumGridViewComponent,
+    ArtistSplitViewComponent,
+    ColumnBrowserComponent,
+    TrackListViewComponent,
+  ],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './main-content.component.html',
 })
 export class MainContentComponent {
+  protected readonly ui = inject(UiService);
   protected readonly library = inject(LibraryService);
-  protected readonly viewMode = signal<ViewMode>('tracks');
-  protected readonly modes: readonly ViewMode[] = [
-    'tracks',
-    'albums',
-    'artists',
-    'settings',
-  ] as const;
+  protected readonly viewMode = this.ui.libraryView;
+  protected readonly modes: readonly LibraryView[] = ['tracks', 'albums', 'artists'] as const;
 
-  protected setMode(mode: ViewMode): void {
-    this.viewMode.set(mode);
+  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * The segmented control always addresses the whole library, so
+   * picking a mode leaves any active playlist. Switching to "tracks"
+   * needs an explicit reload because the track list only fetches on
+   * mount and the view may already be 'tracks'.
+   */
+  protected setMode(mode: LibraryView): void {
+    const hadPlaylist = this.library.activePlaylistId() !== null;
+    this.library.activePlaylistId.set(null);
+    this.ui.libraryView.set(mode);
+    if (hadPlaylist && mode === 'tracks') void this.ui.guard(this.library.refreshTracks());
+  }
+
+  protected toggleBrowser(): void {
+    this.ui.columnBrowserOpen.update((v) => !v);
+  }
+
+  /**
+   * Debounce search-box input by 200ms before re-running list_tracks.
+   * Avoids a query per keystroke while still feeling instant.
+   */
+  protected onSearchInput(event: Event): void {
+    const value = (event.target as HTMLInputElement).value;
+    this.library.setSearch(value);
+    if (this.searchTimer !== null) clearTimeout(this.searchTimer);
+    this.searchTimer = setTimeout(() => {
+      void this.ui.guard(this.library.refreshTracks());
+      this.searchTimer = null;
+    }, 200);
+  }
+
+  protected clearSearch(): void {
+    this.library.setSearch('');
+    void this.ui.guard(this.library.refreshTracks());
   }
 }

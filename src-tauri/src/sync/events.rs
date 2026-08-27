@@ -6,6 +6,7 @@ pub const PROGRESS: &str = "sync:progress";
 pub const WARNING: &str = "sync:warning";
 pub const COMPLETE: &str = "sync:complete";
 pub const FAILED: &str = "sync:failed";
+pub const LOG: &str = "sync:log";
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -33,8 +34,21 @@ pub enum WarningKind {
     MissingSourceFile,
     UnmappablePath,
     SmartRuleDecodeFailed,
+    /// The criteria decoded, but rules TuxTunes cannot evaluate (media
+    /// kind, playlist membership, …) were dropped; the imported rule may
+    /// match a superset of iTunes' list.
+    SmartRulePartial,
     ConflictResolved,
     UnknownField,
+    /// `auto_copy_files` is set on a source but file ingest is GUI-only
+    /// (the CLI runs reconcile with no FsCoordinator), so the copy was
+    /// skipped. Metadata still reconciled.
+    IngestSkipped,
+    /// A source entry duplicated one already imported this run — either
+    /// the same persistent_id, or the same resolved file path under a
+    /// different id (the same physical file imported twice in iTunes).
+    /// The repeat was skipped. Real iTunes libraries contain such dupes.
+    DuplicateTrack,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -61,6 +75,14 @@ pub struct SyncFailed {
     pub error: String,
 }
 
+/// One narrative line streamed from the import log file to the UI.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LogLine {
+    pub source_id: i64,
+    pub seq: u64,
+    pub line: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,6 +107,7 @@ mod tests {
         assert_eq!(WARNING, "sync:warning");
         assert_eq!(COMPLETE, "sync:complete");
         assert_eq!(FAILED, "sync:failed");
+        assert_eq!(LOG, "sync:log");
     }
 
     #[test]
@@ -120,5 +143,18 @@ mod tests {
         ] {
             assert!(json.contains(key), "missing {key}: {json}");
         }
+    }
+
+    #[test]
+    fn log_line_serializes_snake_case() {
+        let l = LogLine {
+            source_id: 7,
+            seq: 3,
+            line: "applying tracks: 100".into(),
+        };
+        let json = serde_json::to_string(&l).unwrap();
+        assert!(json.contains(r#""source_id":7"#));
+        assert!(json.contains(r#""seq":3"#));
+        assert!(json.contains(r#""line":"applying tracks: 100""#));
     }
 }

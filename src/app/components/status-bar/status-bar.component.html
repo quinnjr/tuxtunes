@@ -1,0 +1,23 @@
+<footer
+  class="hairline-t relative flex h-7 items-center justify-center gap-3 bg-bg-primary px-4 text-caption text-text-muted"
+>
+  @if (summary(); as s) {
+    <span class="tnum">{{ s.songs }}</span>
+    <span class="text-border-strong">·</span>
+    <span class="tnum">{{ s.duration }}</span>
+    <span class="text-border-strong">·</span>
+    <span class="tnum">{{ s.size }}</span>
+  } @else {
+    <span class="italic">Loading library…</span>
+  }
+  @if (ui.lastError(); as error) {
+    <span
+      role="alert"
+      class="absolute right-4 max-w-[50%] truncate font-medium text-accent"
+      [title]="error"
+      >{{ error }}</span
+    >
+  } @else if (syncLabel(); as label) {
+    <span class="absolute right-4 text-text-secondary">{{ label }}</span>
+  }
+</footer>

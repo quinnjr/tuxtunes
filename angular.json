@@ -2,7 +2,7 @@
   "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
   "version": 1,
   "cli": {
-    "packageManager": "npm"
+    "packageManager": "pnpm"
   },
   "newProjectRoot": "projects",
   "projects": {
@@ -77,6 +77,9 @@
         },
         "serve": {
           "builder": "@angular/build:dev-server",
+          "options": {
+            "port": 4300
+          },
           "configurations": {
             "production": {
               "buildTarget": "tuxtunes:build:production"
@@ -86,6 +89,29 @@
             }
           },
           "defaultConfiguration": "development"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "buildTarget": "tuxtunes:build:development",
+            "tsConfig": "tsconfig.spec.json",
+            "runner": "vitest",
+            "include": ["src/**/*.spec.ts"],
+            "coverageInclude": ["src/app/**/*.ts"],
+            "coverageExclude": [
+              "src/app/**/*.spec.ts",
+              "src/app/test-helpers.ts",
+              "src/app/models/generated/**"
+            ],
+            "providersFile": "src/test-providers.ts",
+            "setupFiles": ["src/test-setup.ts"]
+          },
+          "configurations": {
+            "ci": {
+              "watch": false,
+              "coverage": true
+            }
+          }
         }
       }
     }

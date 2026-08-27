@@ -20,14 +20,30 @@ impl Default for Strategy {
     }
 }
 
+/// Per-field strategy for reconciling ITL source values against local
+/// (TuxTunes) state on sync.
+///
+/// Only `rating` and `play_count` are actually applied today — itl-rs
+/// exposes no source value for `skip_count`, `last_played`, `last_skipped`,
+/// or `loved`, so those four fields are accepted here for forward
+/// compatibility (and because the shape is shared with the frontend) but
+/// are currently no-ops in sync reconciliation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct ConflictRules {
     pub rating: Strategy,
     pub play_count: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `skip_count` value to reconcile against.
     pub skip_count: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `last_played` value to reconcile against.
     pub last_played: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `last_skipped` value to reconcile against.
     pub last_skipped: Strategy,
+    /// Accepted for forward compatibility; currently a no-op — itl-rs
+    /// exposes no source `loved` value to reconcile against.
     pub loved: Strategy,
     /// What to do with tracks that exist locally but not in the source.
     pub deletes: DeleteStrategy,
@@ -176,5 +192,58 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         let back: ConflictRules = serde_json::from_str(&json).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn lww_int_tie_takes_source() {
+        // Equal values should resolve TakeSource (no-op tie-break).
+        assert_eq!(
+            resolve_int(Strategy::LastWriteWins, 5, 5, false),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_datetime_prefer_local_short_circuits() {
+        // PreferLocal must keep local regardless of which side has a value.
+        assert_eq!(
+            resolve_datetime(Strategy::PreferLocal, Some(100), Some(50)),
+            Decision::KeepLocal
+        );
+    }
+
+    #[test]
+    fn lww_datetime_neither_side_present_takes_source() {
+        // No timestamps either side → deterministic TakeSource fallback.
+        assert_eq!(
+            resolve_datetime(Strategy::LastWriteWins, None, None),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_bool_lww_inequality_takes_source() {
+        // LWW on bool with no timestamp context defaults to source so
+        // the resolution stays deterministic.
+        assert_eq!(
+            resolve_bool(Strategy::LastWriteWins, true, false),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_bool_lww_tie_takes_source() {
+        assert_eq!(
+            resolve_bool(Strategy::LastWriteWins, true, true),
+            Decision::TakeSource
+        );
+    }
+
+    #[test]
+    fn resolve_bool_prefer_local_keeps_local() {
+        assert_eq!(
+            resolve_bool(Strategy::PreferLocal, true, false),
+            Decision::KeepLocal
+        );
     }
 }

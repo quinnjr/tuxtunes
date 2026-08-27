@@ -71,24 +71,35 @@ fn fixture_shape_matches_reconciler_assumptions() {
         playlists.len(),
     );
 
-    // Classifier assumptions.
+    // Classifier assumptions (itl-rs ≥ 1.1: folder flag byte + iTunes 12
+    // SmartCriteria field).
     let folders = playlists.iter().filter(|p| p.is_folder()).count();
-    let smart = playlists.iter().filter(|p| p.is_smart()).count();
+    let smart = playlists
+        .iter()
+        .filter(|p| !p.is_folder() && p.is_smart())
+        .count();
     let regular = playlists.len() - folders - smart;
     println!("classification: {regular} regular, {smart} smart, {folders} folder");
     assert!(folders > 0, "expected some folder playlists");
-    // Smart count is known-low on iTunes 12+ (Part B scoped out); we
-    // only assert it's not negative / nonsensical.
-    assert!(smart <= playlists.len());
+    assert!(
+        smart > 0,
+        "expected iTunes 12 smart playlists to be detected"
+    );
 
-    // Folder playlists have no direct tracks (by itl-rs definition).
-    for p in playlists.iter().filter(|p| p.is_folder()) {
-        assert!(
-            p.track_ids().is_empty(),
-            "folder {:?} has {} tracks",
-            p.title(),
-            p.track_ids().len(),
-        );
+    // Every playlist that names a parent points at a folder.
+    let folder_pids: std::collections::HashSet<u64> = playlists
+        .iter()
+        .filter(|p| p.is_folder())
+        .map(|p| p.persistent_id())
+        .collect();
+    for p in playlists.iter().filter_map(|p| p.parent_persistent_id()) {
+        assert!(folder_pids.contains(&p), "parent {p:016x} is not a folder");
+    }
+
+    // Smart criteria decode (or are reported as unsupported) — never panic.
+    for p in playlists.iter().filter(|p| !p.is_folder() && p.is_smart()) {
+        let crit = p.smart_criteria().expect("smart playlists carry criteria");
+        let _ = tuxtunes::sync::slst::decode(crit, p.smart_info());
     }
 
     // At least one playlist has a parent (folder nesting present).

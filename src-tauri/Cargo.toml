@@ -2,10 +2,13 @@
 name = "tuxtunes"
 version = "0.1.0"
 edition = "2021"
+default-run = "tuxtunes"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "test", "protocol-asset"] }
 tauri-plugin-dialog = "2"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -16,7 +19,7 @@ prax-migrate = "0.8"
 prax-codegen = "0.8"
 prax-schema = "0.8"
 prax-query = "0.8"
-itl-rs = "0.2"
+itl-rs = "1.2"
 lofty = "0.22"
 plist = "1"
 libmpv2 = { version = "5", default-features = false }
@@ -28,6 +31,10 @@ log = "0.4"
 env_logger = "0.11"
 twox-hash = "1"
 byteorder = "1"
+trash = "5.2.5"
+zbus = { version = "5", features = ["tokio"], default-features = false }
+notify-rust = "4"
+libc = "0.2.189"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

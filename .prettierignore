@@ -11,3 +11,13 @@ src/app/models/generated/
 docs/plans/
 docs/superpowers/
 **/*.lock
+pnpm-lock.yaml
+
+# makepkg build artifacts
+packaging/src/
+packaging/pkg/
+packaging/tuxtunes-git/
+packaging/*.pkg.tar.*
+
+# remember plugin session memory
+.remember/

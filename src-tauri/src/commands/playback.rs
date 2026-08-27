@@ -1,7 +1,7 @@
 //! Playback Tauri commands.
 
 use crate::db::tracks;
-use crate::playback::config::{PlaybackPrefs, TrackAudioFormat};
+use crate::playback::config::TrackAudioFormat;
 use crate::playback::{EngineCommand, EngineError};
 use crate::runtime::AppState;
 
@@ -16,7 +16,21 @@ pub async fn play_track(state: tauri::State<'_, AppState>, track_id: i64) -> Res
         .await
         .map_err(to_string_err)?;
 
-    let prefs = PlaybackPrefs::default();
+    // mpv accepts a nonexistent path at `loadfile` time and only fails
+    // asynchronously, which the UI never hears about. Check up front so
+    // the click gets an immediate, specific error and the row is
+    // flagged for the track list.
+    if !std::path::Path::new(&track.file_path).is_file() {
+        if let Err(e) = tracks::mark_missing_source(&state.db.engine, track_id).await {
+            log::warn!("mark_missing_source for {track_id} failed: {e}");
+        }
+        return Err(format!("File not found: {}", track.file_path));
+    }
+
+    // Must be the persisted prefs, not defaults: `build_properties`
+    // re-applies audio-device / audio-exclusive / replaygain before every
+    // loadfile, so defaults here would clobber what ApplyDevice set.
+    let prefs = crate::commands::audio::load_playback_prefs(&state.db.engine).await;
 
     let fmt = TrackAudioFormat {
         sample_rate: track.sample_rate.map(|r| r as u32),
@@ -77,4 +91,32 @@ pub async fn set_volume(state: tauri::State<'_, AppState>, volume: u8) -> Result
         .engine
         .send(EngineCommand::SetVolume { volume })
         .map_err(to_string_err)
+}
+
+/// Pre-queue the track that should follow the current one so mpv can
+/// switch gaplessly at EOF. Fails (without changing anything) when the
+/// file is missing, so the frontend falls back to its own advance.
+#[tauri::command]
+pub async fn prefetch_next(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
+    let track = tracks::get(&state.db.engine, track_id)
+        .await
+        .map_err(to_string_err)?;
+    if !std::path::Path::new(&track.file_path).is_file() {
+        return Err(format!("File not found: {}", track.file_path));
+    }
+    state
+        .engine
+        .send(EngineCommand::Prefetch {
+            track_id,
+            file_path: track.file_path,
+        })
+        .map_err(|e: EngineError| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_prefetch(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state
+        .engine
+        .send(EngineCommand::ClearPrefetch)
+        .map_err(|e: EngineError| e.to_string())
 }

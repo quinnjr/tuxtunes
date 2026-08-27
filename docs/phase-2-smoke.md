@@ -12,14 +12,14 @@ Manual verification that the playback engine plays a file end-to-end.
 ## Steps
 
 1. App window opens. Transport bar at top says "Nothing playing".
-2. Click **Add Files…** in the sidebar. Pick a FLAC, MP3, or WAV.
+2. Click **File ▸ Add File…** (or **Add Folder…**) in the menu bar. Pick a FLAC, MP3, or WAV.
 3. Track appears in the main list.
 4. Double-click the track. Transport bar updates with title/artist/album;
    play icon flips to pause.
 5. Click pause. Icon flips back. Click again: resumes.
 6. Drag seek slider. Position jumps; playback continues.
 7. Drag volume slider. Volume audibly changes.
-8. Let track play past 50% (or 30s). Close the app cleanly. Reopen.
+8. Let track play past the halfway point — at least 30s. Close the app cleanly. Reopen.
    Track's `play_count` in the `All Songs` list increments by one
    (verify by inspecting with `sqlite3 ~/.local/share/tuxtunes/tuxtunes.db
 "SELECT title, play_count, skip_count FROM tracks"`).

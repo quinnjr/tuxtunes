@@ -1,4 +1,12 @@
-import { Component, inject, signal } from '@angular/core';
+import {
+  Component,
+  inject,
+  signal,
+  effect,
+  viewChild,
+  ElementRef,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { ConflictRules, PathMapping, Strategy } from '../../models/sync';
@@ -14,11 +22,33 @@ interface PathRow {
 @Component({
   selector: 'app-import-wizard',
   imports: [FormsModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './import-wizard.component.html',
 })
 export class ImportWizardComponent {
   protected readonly sync = inject(SyncService);
+  private readonly ui = inject(UiService);
   protected readonly open = inject(UiService).importWizardOpen;
+
+  private readonly logBox = viewChild<ElementRef<HTMLElement>>('logBox');
+  private readonly pinned = signal(true);
+
+  constructor() {
+    // Autoscroll to the newest line while the user is pinned to the bottom.
+    effect(() => {
+      this.sync.logLines(); // track new lines
+      if (!this.pinned()) return;
+      const el = this.logBox()?.nativeElement;
+      if (el) requestAnimationFrame(() => (el.scrollTop = el.scrollHeight));
+    });
+  }
+
+  protected onLogScroll(): void {
+    const el = this.logBox()?.nativeElement;
+    if (!el) return;
+    // Re-pin when the user scrolls back to within ~24px of the bottom.
+    this.pinned.set(el.scrollHeight - el.scrollTop - el.clientHeight < 24);
+  }
 
   protected readonly step = signal<WizardStep>('pick');
   protected readonly filePath = signal('');
@@ -59,10 +89,12 @@ export class ImportWizardComponent {
   }
 
   protected async pickFile(): Promise<void> {
-    const picked = await dialogOpen({
-      filters: [{ name: 'iTunes Library', extensions: ['itl'] }],
-      multiple: false,
-    });
+    const picked = await this.ui.guard(
+      dialogOpen({
+        filters: [{ name: 'iTunes Library', extensions: ['itl'] }],
+        multiple: false,
+      }),
+    );
     if (typeof picked === 'string') this.filePath.set(picked);
   }
 
@@ -83,15 +115,19 @@ export class ImportWizardComponent {
     this.step.set('conflict');
   }
 
+  /** Create the source; on failure stay on this step with the error shown. */
   protected async submitConflict(): Promise<void> {
     const mappings: PathMapping[] = this.pathRows().filter((r) => r.from && r.to);
-    const id = await this.sync.addSource({
-      name: this.name(),
-      source_path: this.filePath(),
-      path_mappings: mappings,
-      conflict_rules: this.rules(),
-      auto_copy_files: this.autoCopy(),
-    });
+    const id = await this.ui.guard(
+      this.sync.addSource({
+        name: this.name(),
+        source_path: this.filePath(),
+        path_mappings: mappings,
+        conflict_rules: this.rules(),
+        auto_copy_files: this.autoCopy(),
+      }),
+    );
+    if (id === null) return;
     this.step.set('progress');
     await this.sync.runNow(id);
   }

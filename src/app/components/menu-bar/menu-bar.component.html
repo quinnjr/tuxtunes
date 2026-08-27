@@ -1,0 +1,93 @@
+<nav
+  class="mac-toolbar relative z-40 flex h-8 shrink-0 items-center gap-1 px-2 text-body text-text-secondary"
+>
+  <!-- Outside-click / Escape catcher; only mounted while a menu is open. -->
+  @if (openMenu() !== null) {
+    <div
+      class="fixed inset-0 z-30"
+      role="presentation"
+      (click)="close()"
+      (keydown.escape)="close()"
+    ></div>
+  }
+
+  <div class="relative z-40">
+    <button
+      type="button"
+      (click)="toggle('file')"
+      [class]="
+        (openMenu() === 'file' ? 'bg-bg-elevated text-text-primary ' : '') +
+        'mac-btn h-6 px-3 text-body'
+      "
+    >
+      File
+    </button>
+    @if (openMenu() === 'file') {
+      <div
+        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
+        role="menu"
+      >
+        <button
+          type="button"
+          (click)="addFile()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faPlus" />
+          Add File…
+        </button>
+        <button
+          type="button"
+          (click)="addFolder()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faFolderPlus" />
+          Add Folder…
+        </button>
+        <button
+          type="button"
+          (click)="newSmartPlaylist()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faWand" />
+          New Smart Playlist…
+        </button>
+        <button
+          type="button"
+          (click)="importItunes()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faFileImport" />
+          Import iTunes library…
+        </button>
+      </div>
+    }
+  </div>
+
+  <div class="relative z-40">
+    <button
+      type="button"
+      (click)="toggle('settings')"
+      [class]="
+        (openMenu() === 'settings' ? 'bg-bg-elevated text-text-primary ' : '') +
+        'mac-btn h-6 px-3 text-body'
+      "
+    >
+      Settings
+    </button>
+    @if (openMenu() === 'settings') {
+      <div
+        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
+        role="menu"
+      >
+        <button
+          type="button"
+          (click)="openPreferences()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faGear" />
+          Preferences…
+        </button>
+      </div>
+    }
+  </div>
+</nav>

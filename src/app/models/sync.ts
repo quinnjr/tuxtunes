@@ -91,8 +91,11 @@ export type WarningKind =
   | 'missing_source_file'
   | 'unmappable_path'
   | 'smart_rule_decode_failed'
+  | 'smart_rule_partial'
   | 'conflict_resolved'
-  | 'unknown_field';
+  | 'unknown_field'
+  | 'ingest_skipped'
+  | 'duplicate_track';
 
 export interface SyncWarning {
   sourceId: number;

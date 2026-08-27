@@ -1,6 +1,7 @@
-import { Injectable, OnDestroy, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriService } from './tauri.service';
+import { toErrorMessage } from '../utils/errors';
 import {
   ConflictRules,
   PathMapping,
@@ -32,6 +33,22 @@ export class SyncService implements OnDestroy {
   readonly warnings = signal<SyncWarning[]>([]);
   readonly lastComplete = signal<SyncComplete | null>(null);
   readonly lastError = signal<SyncFailed | null>(null);
+  readonly logLines = signal<string[]>([]);
+
+  /**
+   * Coarse run state derived from the event signals. `runNow()` resets
+   * all four signals before invoking, so a present `progress` with
+   * neither `lastComplete` nor `lastError` set unambiguously means the
+   * current run is still in flight (`running`); a present `lastError`
+   * means it ended in failure (`error`); otherwise `idle`.
+   */
+  readonly runState = computed<'idle' | 'running' | 'error'>(this.#computeRunState.bind(this));
+
+  #computeRunState(): 'idle' | 'running' | 'error' {
+    if (this.progress() && !this.lastComplete() && !this.lastError()) return 'running';
+    if (this.lastError()) return 'error';
+    return 'idle';
+  }
 
   private readonly unlisteners: UnlistenFn[] = [];
 
@@ -97,6 +114,9 @@ export class SyncService implements OnDestroy {
       await this.tauri.listen<{ source_id: number; error: string }>('sync:failed', (raw) =>
         this.lastError.set({ sourceId: raw.source_id, error: raw.error }),
       ),
+      await this.tauri.listen<{ source_id: number; seq: number; line: string }>('sync:log', (raw) =>
+        this.logLines.update((cur) => [...cur, raw.line].slice(-1000)),
+      ),
     );
   }
 
@@ -116,6 +136,14 @@ export class SyncService implements OnDestroy {
     this.warnings.set([]);
     this.lastComplete.set(null);
     this.lastError.set(null);
-    await this.tauri.invoke<void>('run_sync_now', { sourceId });
+    this.logLines.set([]);
+    try {
+      await this.tauri.invoke<void>('run_sync_now', { sourceId });
+    } catch (error) {
+      this.lastError.set({
+        sourceId,
+        error: toErrorMessage(error),
+      });
+    }
   }
 }

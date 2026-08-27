@@ -27,7 +27,7 @@
 The existing `Cargo.toml` and `src/main.rs` at the repo root are placeholders from the initial commit. The Tauri scaffold will create a proper project structure with `src-tauri/` for Rust and `src/` for Angular. Remove the old placeholder files first.
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes
+cd /home/joseph/Projects/tuxtunes
 rm -f Cargo.toml src/main.rs && rmdir src
 npm create tauri-app@latest . -- --template angular --manager npm
 ```
@@ -86,7 +86,7 @@ Note: We are NOT adding libmpv as a crate dependency yet. We will integrate mpv 
 **Step 3: Add Angular dependencies**
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes
+cd /home/joseph/Projects/tuxtunes
 npm install @tauri-apps/api@^2
 npm install @angular/cdk@^21
 ```
@@ -94,7 +94,7 @@ npm install @angular/cdk@^21
 **Step 4: Verify build compiles**
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes
+cd /home/joseph/Projects/tuxtunes
 npm run build
 cd src-tauri && cargo check
 ```
@@ -121,7 +121,7 @@ git commit -m "feat: scaffold Tauri 2 + Angular 21 project"
 **Step 1: Install TailwindCSS 4**
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes
+cd /home/joseph/Projects/tuxtunes
 npm install -D tailwindcss @tailwindcss/postcss postcss
 ```
 
@@ -487,7 +487,7 @@ Create `src-tauri/src/db/playlists.rs`:
 **Step 5: Run tests**
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes/src-tauri
+cd /home/joseph/Projects/tuxtunes/src-tauri
 cargo test
 ```
 
@@ -1086,7 +1086,7 @@ mod tests {
 **Step 2: Run tests**
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes/src-tauri
+cd /home/joseph/Projects/tuxtunes/src-tauri
 cargo test db::tracks
 ```
 
@@ -1557,7 +1557,7 @@ And in the `tests` module, call it as `super::make_test_track(...)`.
 **Step 2: Run tests**
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes/src-tauri
+cd /home/joseph/Projects/tuxtunes/src-tauri
 cargo test db::playlists
 ```
 
@@ -1763,7 +1763,7 @@ Add `mod import;` to `src-tauri/src/lib.rs`.
 **Step 2: Run tests**
 
 ```bash
-cd /home/joseph/Projects/PegasusHeavyIndustries/tuxtunes/src-tauri
+cd /home/joseph/Projects/tuxtunes/src-tauri
 cargo test import::path_rewriter
 ```
 

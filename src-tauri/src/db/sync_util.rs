@@ -66,12 +66,19 @@ pub async fn load_pid_to_local_id_map(
 }
 
 /// Delete rows in `table` under `sync_source_id` whose `persistent_id`
-/// is not in `keep`. Stages the keep set in a temp table to side-step
-/// SQLite's per-statement parameter limit — important at real iTunes
-/// scale (~50K tracks).
+/// is not in `keep`. Stages the keep set in a `_sync_keep` TEMP table
+/// to side-step SQLite's per-statement parameter limit — important at
+/// real iTunes scale (~50K tracks).
 ///
-/// The staging inserts are wrapped in a single transaction via
-/// `raw_sql_batch` so WAL is fsync'd once rather than once per batch.
+/// The whole sequence runs on ONE checked-out connection as ONE
+/// `BEGIN IMMEDIATE` transaction. Both halves of that matter: the temp
+/// table is per-connection (a second `pool.get()` may return a
+/// different connection that cannot see it), and the GUI sync worker
+/// only serializes runs within its own process — `tuxtunes-cli` hits
+/// the same database file, so the staging + final DELETE must be atomic
+/// across processes, not just across tasks. IMMEDIATE takes the write
+/// lock up front; a concurrent writer waits on busy_timeout instead of
+/// interleaving.
 pub async fn delete_by_keep_set(
     engine: &SqliteRawEngine,
     table: &'static str,
@@ -85,23 +92,18 @@ pub async fn delete_by_keep_set(
             .await;
     }
 
-    engine
-        .raw_sql_execute(
-            "CREATE TEMP TABLE IF NOT EXISTS _sync_keep \
-             (persistent_id TEXT PRIMARY KEY) WITHOUT ROWID",
-            &[],
-        )
-        .await?;
-    engine
-        .raw_sql_execute("DELETE FROM _sync_keep", &[])
-        .await?;
-
-    // Build one SQL string: BEGIN; N multi-row INSERTs; COMMIT. Inlining
-    // the hex values is safe because they come from `pid_hex`
-    // (always 16 chars of [0-9a-f]); there is no user-supplied input.
+    // Build one SQL string: BEGIN IMMEDIATE; staging; final DELETE;
+    // COMMIT. Inlining the hex values is safe because they come from
+    // `pid_hex` (always 16 chars of [0-9a-f]), and `sync_source_id` is
+    // an i64; there is no user-supplied input.
     const BATCH: usize = 500;
-    let mut batch_sql = String::with_capacity(keep.len() * 20 + 64);
-    batch_sql.push_str("BEGIN;\n");
+    let mut batch_sql = String::with_capacity(keep.len() * 20 + 256);
+    batch_sql.push_str("BEGIN IMMEDIATE;\n");
+    batch_sql.push_str(
+        "CREATE TEMP TABLE IF NOT EXISTS _sync_keep \
+         (persistent_id TEXT PRIMARY KEY) WITHOUT ROWID;\n",
+    );
+    batch_sql.push_str("DELETE FROM _sync_keep;\n");
     for chunk in keep.chunks(BATCH) {
         batch_sql.push_str("INSERT INTO _sync_keep (persistent_id) VALUES ");
         for (i, pid) in chunk.iter().enumerate() {
@@ -112,14 +114,196 @@ pub async fn delete_by_keep_set(
         }
         batch_sql.push_str(";\n");
     }
+    batch_sql.push_str(&format!(
+        "DELETE FROM {table} WHERE sync_source_id = {sync_source_id} \
+         AND persistent_id NOT IN (SELECT persistent_id FROM _sync_keep);\n"
+    ));
     batch_sql.push_str("COMMIT;");
-    engine.raw_sql_batch(&batch_sql).await?;
 
-    let sql = format!(
-        "DELETE FROM {table} WHERE sync_source_id = ? \
-         AND persistent_id NOT IN (SELECT persistent_id FROM _sync_keep)"
-    );
-    engine
-        .raw_sql_execute(&sql, &[FilterValue::Int(sync_source_id)])
-        .await
+    let conn = engine.pool().get().await?;
+    conn.execute_batch(&batch_sql).await?;
+    // sqlite3_changes() is per-connection and reflects the last DML run
+    // on it — the final DELETE above — even after COMMIT. Reading it on
+    // the same connection is what makes the count trustworthy.
+    let rows = conn.query("SELECT changes()").await?;
+    let deleted = rows
+        .first()
+        .and_then(|r| r.as_object())
+        .and_then(|o| o.values().next())
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    Ok(deleted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+    use serde::Deserialize;
+
+    async fn tmp() -> Db {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp.path()).await.unwrap();
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 'x', '/x', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn pid_hex_zero_pads_to_sixteen_chars() {
+        assert_eq!(pid_hex(0), "0000000000000000");
+        assert_eq!(pid_hex(0xDEAD_BEEF), "00000000deadbeef");
+        assert_eq!(pid_hex(u64::MAX), "ffffffffffffffff");
+    }
+
+    #[test]
+    fn opt_str_handles_some_and_none() {
+        assert!(matches!(opt_str(Some("hi")), FilterValue::String(s) if s == "hi"));
+        assert!(matches!(opt_str(None), FilterValue::Null));
+    }
+
+    #[test]
+    fn opt_int_handles_some_and_none() {
+        assert!(matches!(opt_int(Some(42)), FilterValue::Int(42)));
+        assert!(matches!(opt_int(None), FilterValue::Null));
+    }
+
+    #[test]
+    fn sqlite_bool_decodes_integers_to_bool() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(deserialize_with = "sqlite_bool")]
+            flag: bool,
+        }
+        let one: Holder = serde_json::from_str(r#"{"flag":1}"#).unwrap();
+        assert!(one.flag);
+        let zero: Holder = serde_json::from_str(r#"{"flag":0}"#).unwrap();
+        assert!(!zero.flag);
+        // Non-integer (e.g. native bool) falls through to false. The
+        // helper is forgiving rather than strict — a sync source with
+        // unexpected JSON shape still loads cleanly.
+        let str_val: Holder = serde_json::from_str(r#"{"flag":"true"}"#).unwrap();
+        assert!(!str_val.flag);
+    }
+
+    #[tokio::test]
+    async fn load_pid_to_local_id_map_round_trips() {
+        let db = tmp().await;
+        // Two synced rows + one un-synced (NULL persistent_id) the
+        // helper should ignore.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+                 sort_order, track_entries) \
+                 VALUES (1, ?, 'a', 'regular', 0, '[]'), \
+                        (1, ?, 'b', 'regular', 0, '[]'), \
+                        (1, NULL, 'c', 'regular', 0, '[]')",
+                &[
+                    FilterValue::String(pid_hex(0xAABB)),
+                    FilterValue::String(pid_hex(0xCCDD)),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let map = load_pid_to_local_id_map(&db.engine, "playlists", 1)
+            .await
+            .unwrap();
+        assert_eq!(map.len(), 2);
+        assert!(map.contains_key(&0xAABB));
+        assert!(map.contains_key(&0xCCDD));
+    }
+
+    #[tokio::test]
+    async fn load_pid_to_local_id_map_skips_unparseable_persistent_ids() {
+        let db = tmp().await;
+        // Manually-inserted rubbish persistent_id should be silently
+        // dropped, not abort the load.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+                 sort_order, track_entries) \
+                 VALUES (1, 'not-hex', 'a', 'regular', 0, '[]')",
+                &[],
+            )
+            .await
+            .unwrap();
+        let map = load_pid_to_local_id_map(&db.engine, "playlists", 1)
+            .await
+            .unwrap();
+        assert!(map.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_by_keep_set_with_empty_keep_clears_source() {
+        let db = tmp().await;
+        // Insert two rows under sync_source 1 and one under a fictional
+        // source 99 that the delete must not touch.
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (99, 'y', '/y', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+                 sort_order, track_entries) \
+                 VALUES (1, ?, 'a', 'regular', 0, '[]'), \
+                        (1, ?, 'b', 'regular', 0, '[]'), \
+                        (99, ?, 'c', 'regular', 0, '[]')",
+                &[
+                    FilterValue::String(pid_hex(1)),
+                    FilterValue::String(pid_hex(2)),
+                    FilterValue::String(pid_hex(3)),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let deleted = delete_by_keep_set(&db.engine, "playlists", 1, &[])
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2);
+        // Source 99 untouched.
+        let remaining: i64 = db
+            .engine
+            .raw_sql_scalar("SELECT COUNT(*) FROM playlists", &[])
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_by_keep_set_chunks_more_than_batch() {
+        let db = tmp().await;
+        // BATCH = 500 — insert 600 rows so the keep set spans two chunks
+        // and exercises the multi-INSERT path.
+        let mut sql = String::from(
+            "INSERT INTO playlists (sync_source_id, persistent_id, name, kind, \
+             sort_order, track_entries) VALUES ",
+        );
+        for i in 1u64..=600 {
+            if i > 1 {
+                sql.push(',');
+            }
+            sql.push_str(&format!("(1, '{:016x}', 'p', 'regular', 0, '[]')", i));
+        }
+        db.engine.raw_sql_execute(&sql, &[]).await.unwrap();
+
+        // Keep the first 550, drop 50.
+        let keep: Vec<u64> = (1u64..=550).collect();
+        let deleted = delete_by_keep_set(&db.engine, "playlists", 1, &keep)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 50);
+    }
 }

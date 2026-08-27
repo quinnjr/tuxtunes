@@ -1,0 +1,62 @@
+# Maintainer: Joseph R. Quinn <quinn.josephr@gmail.com>
+pkgname=tuxtunes-git
+pkgver=0.1.0.r184.gc3b004d
+pkgrel=1
+pkgdesc="Music library manager and player (Tauri + Angular)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/quinnjr/tuxtunes"
+license=('custom')
+depends=(
+  'webkit2gtk-4.1'
+  'gtk3'
+  'libayatana-appindicator'
+  'mpv'
+  'sqlite'
+  'dbus'
+  'openssl'
+  'xdg-utils'
+)
+makedepends=(
+  'git'
+  'cargo'
+  'nodejs'
+  'pnpm'
+)
+provides=('tuxtunes')
+conflicts=('tuxtunes')
+# Set TUXTUNES_SRC=file:///path/to/checkout to build from a local clone.
+source=("$pkgname::git+${TUXTUNES_SRC:-$url.git}#branch=develop"
+        'tuxtunes.desktop')
+sha256sums=('SKIP'
+            'SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  local ver
+  ver=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+  printf '%s.r%s.g%s' "$ver" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$pkgname"
+  pnpm install --frozen-lockfile
+  cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export NG_CLI_ANALYTICS=false
+  pnpm exec tauri build --no-bundle -- --frozen
+}
+
+package() {
+  cd "$pkgname"
+  install -Dm755 src-tauri/target/release/tuxtunes "$pkgdir/usr/bin/tuxtunes"
+  install -Dm755 src-tauri/target/release/tuxtunes-cli "$pkgdir/usr/bin/tuxtunes-cli"
+  install -Dm644 "$srcdir/tuxtunes.desktop" "$pkgdir/usr/share/applications/tuxtunes.desktop"
+  install -Dm644 src-tauri/icons/32x32.png      "$pkgdir/usr/share/icons/hicolor/32x32/apps/tuxtunes.png"
+  install -Dm644 src-tauri/icons/128x128.png    "$pkgdir/usr/share/icons/hicolor/128x128/apps/tuxtunes.png"
+  install -Dm644 src-tauri/icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/tuxtunes.png"
+  install -Dm644 src-tauri/icons/icon.png       "$pkgdir/usr/share/icons/hicolor/512x512/apps/tuxtunes.png"
+}

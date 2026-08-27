@@ -1,21 +1,75 @@
+/* Inter is the closest freely-licensed stand-in for SF: same humanist
+   proportions, same tight apertures at 13px, which is where nearly all
+   of this UI lives. Bundled locally so the Tauri webview never depends
+   on network fonts. No mono face — numbers get tabular figures from
+   Inter itself (see .tnum) rather than a second typeface. */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
 @import 'tailwindcss';
 
+/* macOS graphite palette. Backgrounds are neutral — no warmth, no tint —
+   so the one saturated color on screen reads as meaning. Apple Music red
+   is reserved for selection, playing state, and primary actions; every
+   other surface, glyph, and border is grayscale. The three near-identical
+   dark grays are deliberate: content, panel, and toolbar must separate by
+   a hair, not by a step. */
 @theme {
-  --color-bg-primary: #1a1a2e;
-  --color-bg-surface: #1e1e34;
-  --color-bg-transport: #15152a;
-  --color-bg-elevated: #232342;
-  --color-bg-tertiary: #0f3460;
-  --color-accent: #e94560;
-  --color-accent-hover: #ff6b81;
-  --color-text-primary: #eaeaea;
-  --color-text-secondary: #a0a0b0;
-  --color-text-muted: #6f6f80;
-  --color-border: #2a2a4a;
-  --color-border-strong: #3a3a5a;
+  --color-bg-primary: #1e1e1e; /* content */
+  --color-bg-surface: #28282a; /* panels, cards */
+  --color-bg-transport: #262628; /* toolbar base, seen through blur */
+  --color-bg-elevated: #323234; /* inset / filled control */
+  --color-bg-tertiary: #3a3a3c; /* art placeholders, chips */
+  --color-accent: #fa233b; /* Apple Music red */
+  --color-accent-hover: #fb4d5c;
+  --color-text-primary: #f5f5f7;
+  --color-text-secondary: #a1a1a6;
+  --color-text-muted: #6e6e73;
+  --color-border: #38383a; /* hairline */
+  --color-border-strong: #48484a;
 
-  --font-sans: 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* The type scale, HIG-named. Five sizes cover the whole app; a
+     density or accessibility pass edits these five lines, not every
+     template. Utilities: text-caption2 … text-headline. */
+  --text-caption2: 10px; /* chips, badges */
+  --text-caption: 11px; /* section headers, readouts, metadata */
+  --text-footnote: 12px; /* secondary rows, sublabels */
+  --text-body: 13px; /* the macOS control size — nearly everything */
+  --text-headline: 15px; /* sheet titles, now-playing track name */
+}
+
+/* The @theme palette above is the dark default. ThemeService sets
+   <html data-theme="light|dark">; the light block swaps the palette.
+   color-scheme is inherited, so setting it on :root flows to every
+   native control (select/option popups, scrollbars) — without it
+   WebKit paints those in its own default scheme regardless of ours. */
+:root {
+  color-scheme: dark;
+}
+
+/* Light mode is not an inversion: content goes pure white so artwork
+   sits on paper, while chrome (sidebar, toolbar) goes slightly gray —
+   the opposite of dark mode, where chrome is lighter than content. The
+   accent darkens on hover instead of brightening, because on white a
+   lighter red loses contrast. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-bg-primary: #ffffff;
+  --color-bg-surface: #f6f6f8;
+  --color-bg-transport: #f1f0f5;
+  --color-bg-elevated: #ececee;
+  --color-bg-tertiary: #e3e3e8;
+  --color-accent: #fa233b;
+  --color-accent-hover: #d31e33;
+  --color-text-primary: #1d1d1f;
+  --color-text-secondary: #6e6e73;
+  --color-text-muted: #aeaeb2;
+  --color-border: #e5e5ea;
+  --color-border-strong: #d1d1d6;
 }
 
 html,
@@ -25,5 +79,327 @@ body {
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
+  font-size: var(--text-body); /* the macOS control size is this app's base */
   -webkit-font-smoothing: antialiased;
+}
+
+/* Sliders (seek, volume) stay native — accent-color is correct in both
+   themes and under forced-colors, which hand-drawn pseudo-element
+   tracks are not. */
+input[type='range'] {
+  accent-color: var(--color-accent);
+}
+
+/* Keyboard focus rings are the one place accent red appears without
+   meaning attached. Offset so the ring never crowds a control's own
+   hairline border. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@layer components {
+  /* Tabular figures for anything that ticks or counts — durations,
+     track numbers, sample rates. Proportional digits make a running
+     clock jitter; this is why the design needs no mono face. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Hairlines as utilities. A single border side is far more common
+     here than a full box, and spelling it out inline three ways
+     invites drift in the color. */
+  .hairline-b {
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .hairline-t {
+    border-top: 1px solid var(--color-border);
+  }
+
+  .hairline-r {
+    border-right: 1px solid var(--color-border);
+  }
+
+  /* Toolbar chrome. The material is translucent so content scrolling
+     underneath tints it; the gradient is a top-light so faint it reads
+     as a bevel rather than a gradient. Anything stronger and the app
+     stops looking like AppKit. */
+  .mac-toolbar {
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in srgb, #ffffff 6%, transparent),
+      transparent 3rem
+    );
+    background-color: color-mix(in srgb, var(--color-bg-transport) 80%, transparent);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  :root[data-theme='light'] .mac-toolbar {
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in srgb, #ffffff 55%, transparent),
+      transparent 3rem
+    );
+  }
+
+  /* Sidebar vibrancy. Heavier blur than the toolbar and lower opacity,
+     because the sidebar is a tall surface — at toolbar settings the
+     content behind it turns into visible smears. */
+  .mac-vibrancy {
+    background-color: color-mix(in srgb, var(--color-bg-surface) 70%, transparent);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    border-right: 1px solid var(--color-border);
+  }
+
+  /* The now-playing widget: the one element allowed to look recessed.
+     The inner shadow does the work of an LCD bezel — it should read as
+     a well cut into the toolbar, never as a raised card. */
+  .mac-pill-lcd {
+    border-radius: 10px;
+    background-color: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    box-shadow: inset 0 1px 2px color-mix(in srgb, #000000 22%, transparent);
+  }
+
+  :root[data-theme='light'] .mac-pill-lcd {
+    box-shadow: inset 0 1px 2px color-mix(in srgb, #000000 8%, transparent);
+  }
+
+  /* Icon buttons carry no border and no background at rest — a toolbar
+     full of outlined buttons is the tell of a web app. Weight arrives
+     only on hover, as a translucent fill that works over both the
+     blurred toolbar and opaque panels. */
+  .mac-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.375rem;
+    color: var(--color-text-secondary);
+    background-color: transparent;
+    border: 0;
+    cursor: default;
+    transition:
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+
+  .mac-btn:hover {
+    background-color: color-mix(in srgb, #ffffff 8%, transparent);
+    color: var(--color-text-primary);
+  }
+
+  .mac-btn:active {
+    background-color: color-mix(in srgb, #ffffff 14%, transparent);
+  }
+
+  .mac-btn:disabled {
+    color: var(--color-text-muted);
+    background-color: transparent;
+  }
+
+  :root[data-theme='light'] .mac-btn:hover {
+    background-color: color-mix(in srgb, #000000 8%, transparent);
+  }
+
+  :root[data-theme='light'] .mac-btn:active {
+    background-color: color-mix(in srgb, #000000 14%, transparent);
+  }
+
+  /* Sidebar rows. Selection here is a filled gray pill, not accent —
+     the sidebar is navigation, and Finder/Music only tint the row's
+     icon. Reserving red for the track list keeps "what is selected"
+     and "where am I" visually distinct. */
+  .mac-sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    font-size: var(--text-body);
+    line-height: 1.4;
+    color: var(--color-text-primary);
+    cursor: default;
+    transition: background-color 120ms ease;
+  }
+
+  .mac-sidebar-item:hover {
+    background-color: color-mix(in srgb, var(--color-bg-elevated) 60%, transparent);
+  }
+
+  .mac-sidebar-item.selected,
+  .mac-sidebar-item[aria-selected='true'],
+  .mac-sidebar-item[aria-current='page'] {
+    background-color: var(--color-bg-elevated);
+    font-weight: 500;
+  }
+
+  .mac-sidebar-item.selected svg,
+  .mac-sidebar-item[aria-selected='true'] svg,
+  .mac-sidebar-item[aria-current='page'] svg {
+    color: var(--color-accent);
+  }
+
+  /* Track-list selection. Full-strength accent only while the list has
+     focus; when focus leaves, the row falls back to gray so the user
+     can tell which pane keystrokes will hit. */
+  .mac-row-selected {
+    background-color: var(--color-bg-elevated);
+    color: var(--color-text-primary);
+  }
+
+  :focus-within > .mac-row-selected,
+  .mac-row-selected:focus {
+    background-color: var(--color-accent);
+    color: #ffffff;
+  }
+  /* Cell text colors for the red state live in the unlayered block at
+     the bottom of this file — see the note there. */
+
+  /* Album cards. The inset ring keeps light artwork from bleeding into
+     a light background without drawing an outline around dark artwork;
+     the lift on hover is shadow only — no scale, which reads as web. */
+  .mac-card {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, #000000 12%, transparent);
+    transition:
+      box-shadow 160ms ease,
+      transform 160ms ease;
+  }
+
+  .mac-card:hover {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, #000000 12%, transparent),
+      0 10px 20px color-mix(in srgb, #000000 35%, transparent);
+    transform: translateY(-2px);
+  }
+
+  :root[data-theme='light'] .mac-card:hover {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, #000000 10%, transparent),
+      0 10px 20px color-mix(in srgb, #000000 14%, transparent);
+  }
+
+  /* Modal sheets (import wizard, preferences). Opaque surface, not
+     vibrancy — a sheet is a document you act on, and blur behind text
+     fields hurts legibility. */
+  .mac-sheet {
+    border-radius: 0.75rem;
+    background-color: var(--color-bg-surface);
+    border: 1px solid var(--color-border);
+    box-shadow: 0 25px 50px -12px color-mix(in srgb, #000000 60%, transparent);
+  }
+
+  .mac-sheet-backdrop {
+    background-color: color-mix(in srgb, #000000 45%, transparent);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+  }
+
+  /* Segmented control — the only pill-shaped thing in the app, and the
+     only place a shadow marks selection instead of color. */
+  .mac-segmented {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 9999px;
+    background-color: var(--color-bg-elevated);
+  }
+
+  .mac-segment {
+    border-radius: 9999px;
+    padding: 0.125rem 0.75rem;
+    font-size: var(--text-body);
+    line-height: 1.6;
+    color: var(--color-text-secondary);
+    background-color: transparent;
+    border: 0;
+    cursor: default;
+    transition:
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+
+  .mac-segment:hover {
+    color: var(--color-text-primary);
+  }
+
+  .mac-segment.selected,
+  .mac-segment[aria-selected='true'] {
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    box-shadow: 0 1px 2px color-mix(in srgb, #000000 30%, transparent);
+  }
+
+  :root[data-theme='light'] .mac-segment.selected,
+  :root[data-theme='light'] .mac-segment[aria-selected='true'] {
+    background-color: #ffffff;
+    box-shadow: 0 1px 2px color-mix(in srgb, #000000 14%, transparent);
+  }
+
+  /* Position/duration text in the transport. Deliberately quiet: it is
+     a label, not the instrument it used to be. Tabular so the elapsed
+     time does not shift the layout every second. */
+  .transport-readout {
+    font-size: var(--text-caption);
+    line-height: 1.4;
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Overlay scrollbars. macOS hides the thumb until the pointer is in
+   the scrolling region, and the bar never takes layout width — so the
+   track stays transparent and only the thumb fades in. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-strong);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-muted);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Unlayered on purpose. The track-list cells carry their own color
+   utilities (text-text-primary / text-text-secondary / text-accent),
+   and Tailwind's utilities layer is declared after @layer components,
+   so a layered override never applies — white-on-red selection ended
+   up as dark-on-red. Unlayered rules beat every layer regardless of
+   specificity, which is exactly the "selection state wins" semantics
+   this needs. */
+:focus-within > .mac-row-selected .text-text-primary,
+:focus-within > .mac-row-selected .text-accent,
+.mac-row-selected:focus .text-text-primary,
+.mac-row-selected:focus .text-accent {
+  color: #ffffff;
+}
+
+:focus-within > .mac-row-selected .text-text-secondary,
+.mac-row-selected:focus .text-text-secondary {
+  color: color-mix(in srgb, #ffffff 78%, transparent);
 }

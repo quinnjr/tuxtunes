@@ -1,0 +1,176 @@
+//! Polling tailer: follows an append-only file and emits each newly
+//! completed line. Robust to partial-line writes; drains on stop.
+//!
+//! The poll loop does blocking `std::fs` reads, so it runs on tokio's
+//! dedicated blocking pool (`spawn_blocking`) rather than an async worker
+//! thread — a tailer polling on an async worker can starve the runtime
+//! that's driving the import it's following.
+
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::JoinHandle;
+
+const POLL: Duration = Duration::from_millis(150);
+
+/// Handle to a spawned tailing task.
+#[must_use]
+pub struct LogTailer {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl LogTailer {
+    /// Follow `path`, calling `emit(seq, line)` for each completed line.
+    /// `seq` is a monotonic counter from 0.
+    pub fn spawn<F>(path: PathBuf, emit: F) -> Self
+    where
+        F: Fn(u64, String) + Send + 'static,
+    {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_loop = Arc::clone(&stop);
+        // Blocking pool: the loop sleeps and does blocking file IO, so it must
+        // not occupy an async worker thread.
+        let handle = tokio::task::spawn_blocking(move || {
+            let mut offset: u64 = 0;
+            let mut pending: Vec<u8> = Vec::new();
+            let mut seq: u64 = 0;
+            loop {
+                let stopping = stop_loop.load(Ordering::Relaxed);
+                offset = drain(&path, offset, &mut pending, &mut seq, &emit);
+                if stopping {
+                    break;
+                }
+                std::thread::sleep(POLL);
+            }
+        });
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    /// Signal stop and await the task's final drain.
+    pub async fn stop(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.await;
+        }
+    }
+}
+
+impl Drop for LogTailer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Read new bytes from `offset`, emit each complete line, return the new
+/// offset. Partial trailing bytes stay in `pending` for the next call.
+fn drain<F>(path: &Path, offset: u64, pending: &mut Vec<u8>, seq: &mut u64, emit: &F) -> u64
+where
+    F: Fn(u64, String),
+{
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return offset,
+    };
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return offset;
+    }
+    let mut buf = Vec::new();
+    let read = match file.read_to_end(&mut buf) {
+        Ok(n) => n as u64,
+        Err(_) => return offset,
+    };
+    pending.extend_from_slice(&buf);
+    while let Some(pos) = pending.iter().position(|&b| b == b'\n') {
+        let end = if pos > 0 && pending[pos - 1] == b'\r' {
+            pos - 1
+        } else {
+            pos
+        };
+        let s = String::from_utf8_lossy(&pending[..end]).into_owned();
+        pending.drain(..=pos);
+        emit(*seq, s);
+        *seq += 1;
+    }
+    offset + read
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn emits_complete_lines_in_order_and_drains_on_stop() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let got = Arc::new(Mutex::new(Vec::<(u64, String)>::new()));
+        let g = Arc::clone(&got);
+        let tailer = LogTailer::spawn(path.clone(), move |seq, line| {
+            g.lock().unwrap().push((seq, line));
+        });
+
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            writeln!(f, "alpha").unwrap();
+            writeln!(f, "beta").unwrap();
+            write!(f, "gamma-partial").unwrap(); // no newline yet
+            f.flush().unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            writeln!(f).unwrap(); // finishes "gamma-partial"
+            f.flush().unwrap();
+        }
+        tailer.stop().await; // final drain
+
+        let lines = got.lock().unwrap().clone();
+        let texts: Vec<String> = lines.iter().map(|(_, l)| l.clone()).collect();
+        assert_eq!(texts, vec!["alpha", "beta", "gamma-partial"]);
+        let seqs: Vec<u64> = lines.iter().map(|(s, _)| *s).collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn drain_strips_crlf_and_holds_partial_line() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        {
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            // CRLF line ending plus a trailing partial (no newline yet).
+            f.write_all(b"alpha\r\nbeta").unwrap();
+            f.flush().unwrap();
+        }
+
+        let got = Arc::new(Mutex::new(Vec::<(u64, String)>::new()));
+        let g = Arc::clone(&got);
+        let push = move |seq: u64, line: String| g.lock().unwrap().push((seq, line));
+
+        let mut pending = Vec::new();
+        let mut seq = 0u64;
+        let offset = drain(&path, 0, &mut pending, &mut seq, &push);
+
+        // Only the completed line is emitted, with the `\r` stripped; the
+        // partial "beta" stays buffered for the next read.
+        assert_eq!(*got.lock().unwrap(), vec![(0, "alpha".to_string())]);
+        assert_eq!(pending, b"beta");
+        assert_eq!(offset, 11); // all bytes consumed: "alpha\r\nbeta"
+    }
+}

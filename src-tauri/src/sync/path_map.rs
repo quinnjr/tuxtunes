@@ -145,4 +145,25 @@ mod tests {
         let out = remap("D:/Music/a.flac", &m).unwrap();
         assert_eq!(out, "/mnt/d/Music/a.flac");
     }
+
+    #[test]
+    fn join_strips_leading_slash_when_target_ends_with_slash() {
+        // Both sides have a slash at the join point — must not produce
+        // a doubled separator. Exercises the `out.ends_with('/') &&
+        // suffix.starts_with('/')` branch.
+        let m = [mapping("D:", "/mnt/d/")];
+        let out = remap("D:/Music/a.flac", &m).unwrap();
+        assert_eq!(out, "/mnt/d/Music/a.flac");
+    }
+
+    #[test]
+    fn join_inserts_separator_when_neither_side_has_one() {
+        // The "from" prefix has no trailing slash and the "suffix" has
+        // no leading slash, so remap must insert one. This relies on
+        // the `from` matching everything up through `D:` followed
+        // immediately by `Music` (no separator).
+        let m = [mapping("D:", "/mnt/d")];
+        let out = remap("D:Music/a.flac", &m).unwrap();
+        assert_eq!(out, "/mnt/d/Music/a.flac");
+    }
 }

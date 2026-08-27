@@ -112,10 +112,10 @@ pub fn build_properties(prefs: &PlaybackPrefs, track: TrackAudioFormat) -> Vec<M
         value: prefs.replaygain_mode.as_mpv().into(),
     });
 
-    out.push(MpvProperty {
-        name: "volume",
-        value: prefs.volume.to_string(),
-    });
+    // Volume is deliberately NOT pushed per load: it is owned by the
+    // SetVolume command and the persisted-volume restore at startup.
+    // Emitting it here reset every new track to `prefs.volume` (100 by
+    // default for play_track's ad-hoc prefs), clobbering the slider.
 
     out
 }
@@ -219,7 +219,9 @@ mod tests {
     }
 
     #[test]
-    fn volume_always_appears_in_output() {
+    fn volume_never_appears_in_per_load_output() {
+        // Per-load props must not touch volume, or every track start
+        // would reset the user's level (see build_properties).
         let prefs = PlaybackPrefs {
             volume: 42,
             ..Default::default()
@@ -232,8 +234,25 @@ mod tests {
                 is_dsd: false,
             },
         );
-        let vol = p.iter().find(|x| x.name == "volume").unwrap();
-        assert_eq!(vol.value, "42");
+        assert!(p.iter().all(|x| x.name != "volume"), "{p:?}");
+    }
+
+    #[test]
+    fn audio_format_for_each_bit_depth() {
+        // Cover the four arms of the bits → mpv-format match: 16, 24,
+        // 32, and the fall-through (e.g. 8-bit, 64-bit) → "float".
+        for (bits, expected) in [(16u8, "s16"), (24, "s24"), (32, "s32"), (8, "float")] {
+            let p = build_properties(
+                &no_device_prefs(),
+                TrackAudioFormat {
+                    sample_rate: None,
+                    bit_depth: Some(bits),
+                    is_dsd: false,
+                },
+            );
+            let fmt = p.iter().find(|x| x.name == "audio-format").unwrap();
+            assert_eq!(fmt.value, expected, "wrong format for {bits}-bit");
+        }
     }
 
     #[test]

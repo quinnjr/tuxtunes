@@ -1,15 +1,99 @@
-<cdk-virtual-scroll-viewport itemSize="36" class="h-full">
-  <div
-    *cdkVirtualFor="let track of library.tracks(); trackBy: trackById"
-    class="flex h-9 cursor-pointer items-center border-b border-[var(--color-border)] px-4 text-sm hover:bg-[var(--color-bg-elevated)]"
-    [class.bg-\[var\(--color-bg-elevated\)\]]="playback.currentTrackId() === track.id"
-    (dblclick)="play(track)"
+<div class="flex h-full flex-col">
+  <header
+    class="hairline-b sticky top-0 z-10 flex h-7 shrink-0 items-center bg-bg-surface px-4 text-caption uppercase tracking-wide text-text-secondary"
   >
-    <span class="flex-1 truncate">{{ track.title }}</span>
-    <span class="w-48 truncate text-[var(--color-text-secondary)]">{{ track.artist ?? '' }}</span>
-    <span class="w-48 truncate text-[var(--color-text-secondary)]">{{ track.album ?? '' }}</span>
-    <span class="w-16 text-right text-[var(--color-text-muted)]">{{
-      formatDuration(track.durationMs)
-    }}</span>
-  </div>
-</cdk-virtual-scroll-viewport>
+    @for (col of visibleColumns(); track col.id) {
+      <button
+        type="button"
+        (click)="cycleSort(col.id)"
+        [class]="
+          (col.widthClass ?? 'flex-1') +
+          ' ' +
+          (col.numeric ? 'text-right' : 'text-left') +
+          ' ' +
+          (isSortColumn(col.id) ? 'text-text-primary' : '') +
+          ' truncate transition hover:text-accent'
+        "
+      >
+        {{ col.label }}
+        <span class="ml-1 text-[8px]">{{ sortIndicator(col.id) }}</span>
+      </button>
+    }
+    <button
+      type="button"
+      (click)="togglePicker($event)"
+      aria-label="Choose columns"
+      class="mac-btn ml-2 h-6 w-6 text-sm"
+    >
+      ⚙
+    </button>
+    @if (pickerOpen()) {
+      <div
+        class="fixed inset-0 z-30"
+        role="presentation"
+        (click)="closePicker()"
+        (keydown.escape)="closePicker()"
+      >
+        <div
+          (click)="$event.stopPropagation()"
+          (keydown)="$event.stopPropagation()"
+          class="absolute right-4 top-7 z-40 min-w-[180px] rounded-lg border border-border-strong bg-bg-surface p-2 shadow-2xl"
+          role="dialog"
+        >
+          <div class="mb-1 text-caption2 uppercase tracking-wide text-text-muted">Columns</div>
+          @for (col of allColumns; track col.id) {
+            <label
+              class="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 text-body normal-case tracking-normal text-text-primary hover:bg-bg-elevated"
+            >
+              <input
+                type="checkbox"
+                [checked]="isColumnVisible(col.id)"
+                (change)="toggleColumn(col.id)"
+              />
+              {{ col.label }}
+            </label>
+          }
+        </div>
+      </div>
+    }
+  </header>
+  <cdk-virtual-scroll-viewport itemSize="30" class="flex-1">
+    <div
+      *cdkVirtualFor="let track of library.tracks(); let i = index; trackBy: trackById"
+      (click)="onRowClick(i, track, $event)"
+      (keydown.enter)="play(track)"
+      (dblclick)="play(track)"
+      (contextmenu)="onRowContextMenu(track, $event)"
+      [class]="rowClass(track)"
+      [attr.title]="rowTitle(track)"
+      [attr.data-missing]="track.missing ? '' : null"
+      role="row"
+      tabindex="0"
+    >
+      @for (col of visibleColumns(); track col.id) {
+        <span
+          [class]="
+            (col.widthClass ?? 'flex-1') +
+            ' ' +
+            (col.numeric ? 'text-right tnum' : '') +
+            ' truncate flex items-center gap-1.5 ' +
+            (col.id === 'title'
+              ? isCurrent(track)
+                ? 'text-accent'
+                : 'text-text-primary'
+              : 'text-text-secondary')
+          "
+        >
+          @if (col.id === 'title' && track.missing) {
+            <span aria-label="File not found" class="text-caption2 leading-none text-accent"
+              >⚠</span
+            >
+          } @else if (col.id === 'title' && isCurrent(track)) {
+            <span aria-hidden="true" class="text-caption2 leading-none text-accent">♫</span>
+          }
+          <span class="truncate">{{ col.format(track) }}</span>
+        </span>
+      }
+    </div>
+  </cdk-virtual-scroll-viewport>
+</div>

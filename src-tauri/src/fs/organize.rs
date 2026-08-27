@@ -1,0 +1,126 @@
+//! Rename managed-library files when metadata changes. Called by the UI
+//! metadata-edit flow (gated on `keep_organized`) and by bulk
+//! "re-organize library" actions.
+
+use crate::db::preferences;
+use crate::db::tracks::{self, TrackRow};
+use crate::fs::events::{OrganizeApplied, OrganizeFailed, ORGANIZE_APPLIED, ORGANIZE_FAILED};
+use crate::fs::path::{render, resolve_collision, TrackFields};
+use prax_sqlite::raw::SqliteRawEngine;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Runtime};
+use tokio::sync::mpsc;
+
+#[derive(Debug)]
+pub enum OrganizeCommand {
+    ReorganizeTrack { track_id: i64 },
+}
+
+pub struct OrganizeWorker {
+    pub tx: mpsc::UnboundedSender<OrganizeCommand>,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl OrganizeWorker {
+    pub fn spawn<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
+        let (tx, mut rx) = mpsc::unbounded_channel::<OrganizeCommand>();
+        let task = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    OrganizeCommand::ReorganizeTrack { track_id } => {
+                        if let Err(e) = organize_one(&engine, &app, track_id).await {
+                            let _ = app.emit(
+                                ORGANIZE_FAILED,
+                                OrganizeFailed {
+                                    track_id,
+                                    error: e.to_string(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        Self { tx, _task: task }
+    }
+}
+
+async fn organize_one<R: Runtime>(
+    engine: &SqliteRawEngine,
+    app: &AppHandle<R>,
+    track_id: i64,
+) -> anyhow::Result<()> {
+    let row: TrackRow = tracks::get(engine, track_id).await?;
+    let root = preferences::get_library_root(engine).await?;
+    let scheme = preferences::get_organize_scheme(engine).await?;
+
+    let old_path = PathBuf::from(&row.file_path);
+    if !old_path.exists() {
+        anyhow::bail!("source file missing at {}", old_path.display());
+    }
+
+    let rel = render(&scheme, &TrackFields::from_track_row(&row, &old_path))?;
+    let new_abs = root.join(&rel);
+    if new_abs == old_path {
+        return Ok(());
+    }
+
+    if let Some(parent) = new_abs.parent() {
+        let parent = parent.to_path_buf();
+        tokio::task::spawn_blocking(move || std::fs::create_dir_all(parent)).await??;
+    }
+    // Suffix mode (matches ingest). Future work: add an `error` mode
+    // per the v1 design for user-initiated edits.
+    let new_abs = resolve_collision(&new_abs);
+    {
+        let old_path = old_path.clone();
+        let new_abs = new_abs.clone();
+        tokio::task::spawn_blocking(move || std::fs::rename(&old_path, &new_abs)).await??;
+    }
+
+    // Prune now-empty parent dirs up to library_root.
+    if let Some(parent) = old_path.parent() {
+        let parent = parent.to_path_buf();
+        let root = root.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut cur = Some(parent);
+            while let Some(p) = cur {
+                if p == root || !p.starts_with(&root) {
+                    break;
+                }
+                match std::fs::read_dir(&p) {
+                    Ok(mut it) => {
+                        if it.next().is_none() {
+                            let _ = std::fs::remove_dir(&p);
+                            cur = p.parent().map(std::path::Path::to_path_buf);
+                        } else {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .await?;
+    }
+
+    let sql = "UPDATE tracks SET file_path = ? WHERE id = ?";
+    use prax_query::filter::FilterValue as FV;
+    engine
+        .raw_sql_execute(
+            sql,
+            &[FV::String(new_abs.display().to_string()), FV::Int(track_id)],
+        )
+        .await?;
+
+    let _ = app.emit(
+        ORGANIZE_APPLIED,
+        OrganizeApplied {
+            track_id,
+            old_path: old_path.display().to_string(),
+            new_path: new_abs.display().to_string(),
+        },
+    );
+    Ok(())
+}

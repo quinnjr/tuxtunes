@@ -1,0 +1,57 @@
+<div class="flex h-full">
+  <aside class="mac-vibrancy flex w-64 flex-col overflow-y-auto p-2">
+    @if (library.artists().length === 0) {
+      <div class="p-2 text-body text-text-muted">No artists in library</div>
+    } @else {
+      @for (a of library.artists(); track trackByArtist($index, a)) {
+        <button
+          type="button"
+          (click)="select(a)"
+          [attr.aria-selected]="selected() === a.artist"
+          class="mac-sidebar-item flex items-baseline justify-between"
+        >
+          <span class="truncate">{{ a.artist }}</span>
+          <span class="tnum ml-2 text-caption text-text-muted">
+            {{ a.trackCount }}
+          </span>
+        </button>
+      }
+    }
+  </aside>
+  <div class="flex flex-1 flex-col overflow-y-auto bg-bg-primary p-6">
+    @if (selected(); as artist) {
+      <h2 class="mb-2 text-lg font-medium text-text-primary">{{ artist }}</h2>
+      <div class="tnum mb-3 text-caption text-text-muted">
+        {{ albumsForSelected().length }}
+        {{ albumsForSelected().length === 1 ? 'album' : 'albums' }} · {{ tracks().length }} tracks
+      </div>
+      @for (al of albumsForSelected(); track trackByAlbum($index, al)) {
+        <section class="mb-4">
+          <header class="mb-1 text-body font-medium text-text-secondary">
+            {{ al.album }}
+            @if (al.year) {
+              <span class="text-text-muted"> · {{ al.year }}</span>
+            }
+          </header>
+          <ul class="divide-y divide-border rounded-md bg-bg-surface text-body">
+            @for (t of tracks(); track trackByTrack($index, t)) {
+              @if (t.album === al.album) {
+                <li
+                  (dblclick)="play(t)"
+                  class="flex cursor-pointer items-center gap-3 px-3 py-1 hover:bg-bg-elevated"
+                >
+                  <span class="flex-1 truncate">{{ t.title }}</span>
+                  <span class="tnum text-text-muted">
+                    {{ formatDuration(t.durationMs) }}
+                  </span>
+                </li>
+              }
+            }
+          </ul>
+        </section>
+      }
+    } @else {
+      <div class="flex h-full items-center justify-center text-text-muted">Select an artist</div>
+    }
+  </div>
+</div>

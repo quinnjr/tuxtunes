@@ -6,16 +6,16 @@ Manual verification that the ITL import wizard performs an end-to-end sync again
 
 - `~/Music/iTunes/iTunes Library.itl` present.
 - Media drive mounted at a known path (e.g., `/run/media/joseph/Local Disk/`).
-- `itl-rs 0.2` on crates.io (pulled by `src-tauri/Cargo.toml`).
+- `itl-rs 1.2` on crates.io (pulled by `src-tauri/Cargo.toml`).
 - `npm ci && npm run codegen && cd src-tauri && cargo build` all clean.
 
 ## Steps
 
 1. `cd .worktrees/feature/phase-3-itl-import && npx tauri dev`
-2. App opens. Click **Import iTunes library…** in the sidebar.
+2. App opens. Click **File ▸ Import iTunes library…** in the menu bar.
 3. Wizard opens at "pick" step. Click **Pick .itl…**. Choose `~/Music/iTunes/iTunes Library.itl`. **Next**.
 4. Wizard advances to "map". Verify default mappings (`D:/` → Linux mount, `C:/` → Linux mount). Adjust `to` paths to match your real mount. **Next**.
-5. Wizard advances to "conflict". Leave defaults (prefer_source for rating/loved, last_write_wins for counts/dates). **Sync now**.
+5. Wizard advances to "conflict". Leave defaults. Only `rating` and `play_count` are actually applied during sync today — the .itl exposes no source values for `skip_count`, `last_played`, `last_skipped`, or `loved`, so their conflict-rule choices are accepted by the UI but currently no-ops. **Sync now**.
 6. Wizard advances to "progress". Watch phase indicator move through decoding → applying_tracks → applying_playlists → finalizing.
 7. On completion, a summary card shows +N/~M/-K for tracks and playlists. Some warnings are expected for DRM/missing files and cloud-only tracks (~18% of tracks in typical iTunes libraries have no local path).
 8. Close the wizard. Switch the main content to **Tracks** view — all synced tracks should appear in the virtual list.

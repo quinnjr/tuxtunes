@@ -1,5 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { TauriService } from './tauri.service';
+import { SmartRule } from '../models/smart';
 import { mapTrack, TrackRow, TrackRowRaw } from './playback.service';
 
 export interface LibraryStats {
@@ -14,12 +15,143 @@ interface LibraryStatsRaw {
   total_size_bytes: number;
 }
 
+export interface AlbumSummary {
+  album: string;
+  albumArtist: string;
+  year: number | null;
+  trackCount: number;
+  totalDurationMs: number;
+  artworkPath: string | null;
+}
+
+interface AlbumSummaryRaw {
+  album: string;
+  album_artist: string;
+  year: number | null;
+  track_count: number;
+  total_duration_ms: number;
+  artwork_path: string | null;
+}
+
+export interface ArtistSummary {
+  artist: string;
+  albumCount: number;
+  trackCount: number;
+}
+
+interface ArtistSummaryRaw {
+  artist: string;
+  album_count: number;
+  track_count: number;
+}
+
+export type PlaylistKind = 'regular' | 'smart' | 'folder';
+
+export interface Playlist {
+  id: number;
+  name: string;
+  kind: PlaylistKind;
+  parentId: number | null;
+  sortOrder: number;
+  trackCount: number | null;
+}
+
+interface PlaylistRaw {
+  id: number;
+  name: string;
+  kind: string;
+  parent_id: number | null;
+  sort_order: number;
+  cached_track_count: number | null;
+}
+
+export interface AddFolderSummary {
+  added: number;
+  skipped: number;
+  failed: string[];
+}
+
+export type DistinctColumn = 'genre' | 'artist' | 'album';
+
+export interface DistinctValue {
+  value: string;
+  count: number;
+}
+
+/**
+ * Filters that compose with the track list and distinct queries.
+ * `genres`/`artists`/`albums` slots OR within a slot, AND across slots
+ * — same shape as the Rust side's TrackFilters.
+ */
+export interface TrackFilters {
+  genres: string[];
+  artists: string[];
+  albums: string[];
+  search: string | null;
+}
+
+export const EMPTY_FILTERS: TrackFilters = {
+  genres: [],
+  artists: [],
+  albums: [],
+  search: null,
+};
+
+export type SortColumn =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'genre'
+  | 'year'
+  | 'duration_ms'
+  | 'rating'
+  | 'play_count'
+  | 'last_played'
+  | 'date_added'
+  | 'bit_rate'
+  | 'sample_rate'
+  | 'kind'
+  | 'size_bytes';
+
+export interface TrackSort {
+  column: SortColumn;
+  descending: boolean;
+}
+
+export const DEFAULT_SORT: TrackSort = {
+  column: 'date_added',
+  descending: true,
+};
+
 @Injectable({ providedIn: 'root' })
 export class LibraryService {
   private readonly tauri = inject(TauriService);
 
   readonly stats = signal<LibraryStats | null>(null);
   readonly tracks = signal<TrackRow[]>([]);
+  readonly albums = signal<AlbumSummary[]>([]);
+  readonly artists = signal<ArtistSummary[]>([]);
+  readonly playlists = signal<Playlist[]>([]);
+
+  /**
+   * Playlist currently shown in the track list, or null for the whole
+   * library. When set, `refreshTracks()` loads the playlist's tracks
+   * (in playlist order) instead of running the filtered library query.
+   */
+  readonly activePlaylistId = signal<number | null>(null);
+  readonly activePlaylist = computed(this.#computeActivePlaylist.bind(this));
+
+  #computeActivePlaylist(): Playlist | null {
+    const id = this.activePlaylistId();
+    if (id === null) return null;
+    return this.playlists().find((p) => p.id === id) ?? null;
+  }
+
+  /** Active column-browser + search filters. Drives refreshTracks(). */
+  readonly filters = signal<TrackFilters>({ ...EMPTY_FILTERS });
+
+  /** Active sort spec. Header clicks in the track list mutate this. */
+  readonly sort = signal<TrackSort>({ ...DEFAULT_SORT });
 
   /**
    * O(1) id → track lookup, derived from `tracks`. Rebuilt once per
@@ -43,9 +175,144 @@ export class LibraryService {
     });
   }
 
+  /**
+   * Convenience: the search slot of `filters`, surfaced as a writable
+   * signal so the search input doesn't need to know about the rest of
+   * the filter shape. Setting this updates `filters` immutably.
+   */
+  readonly search = signal<string>('');
+
+  setSearch(value: string): void {
+    this.search.set(value);
+    const trimmed = value.trim();
+    this.filters.update((f) => ({ ...f, search: trimmed === '' ? null : trimmed }));
+  }
+
   async refreshTracks(limit = 500, offset = 0): Promise<void> {
-    const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', { limit, offset });
+    const playlistId = this.activePlaylistId();
+    if (playlistId !== null) {
+      await this.loadPlaylistTracks(playlistId);
+      return;
+    }
+    const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', {
+      limit,
+      offset,
+      filters: this.filters(),
+      sort: this.sort(),
+    });
     this.tracks.set(raws.map((raw) => mapTrack(raw)));
+  }
+
+  /**
+   * Make `id` the active playlist and load its tracks. Passing null
+   * returns to the whole-library view. Sort resets to playlist order
+   * (the default sort) so the list comes up the way iTunes had it.
+   */
+  async openPlaylist(id: number | null): Promise<void> {
+    this.activePlaylistId.set(id);
+    this.sort.set({ ...DEFAULT_SORT });
+    await this.refreshTracks();
+  }
+
+  /**
+   * Playlists are fetched whole (order is stored on the row) and then
+   * narrowed client-side by the search box and sort spec, since the
+   * backend query has no notion of "the library filtered to a
+   * playlist". Filters from the column browser are ignored here — it
+   * is closed while a playlist is shown.
+   */
+  private async loadPlaylistTracks(id: number): Promise<void> {
+    const raws = await this.tauri.invoke<TrackRowRaw[]>('open_playlist', { playlistId: id });
+    // The user may have switched playlists while the query was in flight.
+    if (this.activePlaylistId() !== id) return;
+    let rows = raws.map((raw) => mapTrack(raw));
+    const search = this.filters().search?.toLowerCase() ?? null;
+    if (search !== null) {
+      rows = rows.filter((t) =>
+        [t.title, t.artist ?? '', t.album ?? ''].some((s) => s.toLowerCase().includes(search)),
+      );
+    }
+    const sort = this.sort();
+    if (sort.column !== DEFAULT_SORT.column || sort.descending !== DEFAULT_SORT.descending) {
+      rows = sortTracks(rows, sort);
+    }
+    this.tracks.set(rows);
+    const count = raws.length;
+    this.playlists.update((all) =>
+      all.map((p) => (p.id === id && p.trackCount !== count ? { ...p, trackCount: count } : p)),
+    );
+  }
+
+  // ----- Smart playlists -------------------------------------------------
+
+  /** Number of tracks a rule currently matches (editor's live badge). */
+  async previewSmartRule(rule: SmartRule): Promise<number> {
+    return this.tauri.invoke<number>('preview_smart_rule', { rule });
+  }
+
+  async getSmartRule(playlistId: number): Promise<SmartRule | null> {
+    return (
+      (await this.tauri.invoke<SmartRule | null | undefined>('get_smart_playlist_rule', {
+        playlistId,
+      })) ?? null
+    );
+  }
+
+  /** Create a user-owned smart playlist; returns its id and refreshes the sidebar. */
+  async createSmartPlaylist(name: string, rule: SmartRule): Promise<number> {
+    const id = await this.tauri.invoke<number>('create_smart_playlist', { name, rule });
+    await this.refreshPlaylists();
+    return id;
+  }
+
+  /** Replace a smart playlist's rule (and name) and refresh the sidebar. */
+  async updateSmartPlaylist(playlistId: number, name: string, rule: SmartRule): Promise<void> {
+    await this.tauri.invoke<void>('update_smart_playlist', { playlistId, rule });
+    await this.tauri.invoke<void>('rename_playlist', { playlistId, name });
+    await this.refreshPlaylists();
+    if (this.activePlaylistId() === playlistId) await this.refreshTracks();
+  }
+
+  async deletePlaylist(playlistId: number): Promise<void> {
+    await this.tauri.invoke<void>('delete_playlist', { playlistId });
+    if (this.activePlaylistId() === playlistId) this.activePlaylistId.set(null);
+    await this.refreshPlaylists();
+  }
+
+  async refreshPlaylists(): Promise<void> {
+    const raws = await this.tauri.invoke<PlaylistRaw[]>('list_playlists');
+    this.playlists.set(
+      raws.map((r) => ({
+        id: r.id,
+        name: r.name,
+        kind: toPlaylistKind(r.kind),
+        parentId: r.parent_id,
+        sortOrder: r.sort_order,
+        trackCount: r.cached_track_count,
+      })),
+    );
+  }
+
+  /**
+   * Toggle the sort column. Clicking the active column flips direction;
+   * a different column resets to ascending. Refreshes the track list.
+   */
+  async cycleSort(column: SortColumn): Promise<void> {
+    const current = this.sort();
+    if (current.column === column) {
+      this.sort.set({ column, descending: !current.descending });
+    } else {
+      this.sort.set({ column, descending: false });
+    }
+    await this.refreshTracks();
+  }
+
+  async getDistinct(column: DistinctColumn): Promise<DistinctValue[]> {
+    const raws = await this.tauri.invoke<DistinctValue[]>('get_distinct', {
+      column,
+      filters: this.filters(),
+    });
+    return raws;
   }
 
   async addTrackFromPicker(): Promise<TrackRow | null> {
@@ -56,4 +323,181 @@ export class LibraryService {
     await this.refreshStats();
     return mapped;
   }
+
+  /**
+   * Pick a folder and add its audio files. Resolves to the backend's
+   * summary, or null if the dialog was cancelled. Refreshes the track
+   * list and stats on success.
+   */
+  async addFolderFromPicker(): Promise<AddFolderSummary | null> {
+    const raw = await this.tauri.invoke<AddFolderSummary | null>('pick_and_add_folder');
+    if (!raw) return null;
+    await Promise.all([this.refreshTracks(), this.refreshStats()]);
+    return raw;
+  }
+
+  async refreshAlbums(): Promise<void> {
+    const raws = await this.tauri.invoke<AlbumSummaryRaw[]>('list_albums');
+    this.albums.set(
+      raws.map((r) => ({
+        album: r.album,
+        albumArtist: r.album_artist,
+        year: r.year,
+        trackCount: r.track_count,
+        totalDurationMs: r.total_duration_ms,
+        artworkPath: r.artwork_path,
+      })),
+    );
+  }
+
+  async refreshArtists(): Promise<void> {
+    const raws = await this.tauri.invoke<ArtistSummaryRaw[]>('list_artists');
+    this.artists.set(
+      raws.map((r) => ({
+        artist: r.artist,
+        albumCount: r.album_count,
+        trackCount: r.track_count,
+      })),
+    );
+  }
+
+  /**
+   * Ask the backend to find and cache cover art for an album whose
+   * summary has no `artworkPath` yet. Updates the matching entry in
+   * `albums` in place on a hit so the grid re-renders that card only.
+   */
+  async resolveAlbumArtwork(albumArtist: string, album: string): Promise<string | null> {
+    const path =
+      (await this.tauri.invoke<string | null | undefined>('resolve_album_artwork', {
+        albumArtist,
+        album,
+      })) ?? null;
+    if (path !== null) {
+      this.albums.update((all) =>
+        all.map((a) =>
+          a.albumArtist === albumArtist && a.album === album && a.artworkPath !== path
+            ? { ...a, artworkPath: path }
+            : a,
+        ),
+      );
+    }
+    return path;
+  }
+
+  /**
+   * Resolve cover art for the album a track belongs to and patch the
+   * result onto every loaded row of that album — both `tracks` rows
+   * that share the source's `(album, artist)` and the matching
+   * `albums` summary (keyed by `(albumArtist, album)`, falling back to
+   * `artist` the way the backend's `COALESCE(album_artist, artist)`
+   * does) — so the player and the grid update without a refetch. Rows
+   * with no album/artist tag never fan out, so one untagged file's
+   * cover can't smear onto every other untagged row.
+   */
+  async resolveTrackArtwork(trackId: number): Promise<string | null> {
+    const path =
+      (await this.tauri.invoke<string | null | undefined>('resolve_track_artwork', {
+        trackId,
+      })) ?? null;
+    if (path === null) return null;
+    const source = this.tracksById().get(trackId);
+    this.tracks.update((rows) =>
+      rows.map((t) =>
+        (t.id === trackId || isAlbumMate(t, source)) && t.artworkPath !== path
+          ? { ...t, artworkPath: path }
+          : t,
+      ),
+    );
+    const albumArtist = source?.albumArtist ?? source?.artist ?? null;
+    if (source?.album != null && albumArtist !== null) {
+      const album = source.album;
+      this.albums.update((all) =>
+        all.map((a) =>
+          a.albumArtist === albumArtist && a.album === album && a.artworkPath !== path
+            ? { ...a, artworkPath: path }
+            : a,
+        ),
+      );
+    }
+    return path;
+  }
+
+  async tracksForAlbum(albumArtist: string, album: string): Promise<TrackRow[]> {
+    const raws = await this.tauri.invoke<TrackRowRaw[]>('tracks_for_album', {
+      albumArtist,
+      album,
+    });
+    return raws.map((raw) => mapTrack(raw));
+  }
+}
+
+function toPlaylistKind(kind: string): PlaylistKind {
+  return kind === 'smart' || kind === 'folder' ? kind : 'regular';
+}
+
+/**
+ * Whether `t` shares `source`'s `(album, artist)` and should therefore be
+ * patched alongside it. Requires both fields non-null on the source so
+ * untagged tracks (`album === null`) never fan out onto one another.
+ */
+function isAlbumMate(t: TrackRow, source: TrackRow | undefined): boolean {
+  if (source?.album == null || source.artist === null) return false;
+  return t.album === source.album && t.artist === source.artist;
+}
+
+/** Comparable value for a sort column; only the columns a TrackRow carries. */
+function sortKey(t: TrackRow, column: SortColumn): string | number | null {
+  switch (column) {
+    case 'title': {
+      return t.title;
+    }
+    case 'artist': {
+      return t.artist;
+    }
+    case 'album': {
+      return t.album;
+    }
+    case 'duration_ms': {
+      return t.durationMs;
+    }
+    case 'play_count': {
+      return t.playCount;
+    }
+    case 'sample_rate': {
+      return t.sampleRate;
+    }
+    case 'kind': {
+      return t.kind;
+    }
+    default: {
+      return null;
+    }
+  }
+}
+
+/**
+ * Stable client-side sort mirroring the backend's semantics: strings
+ * compare case-insensitively, nulls sort last ascending / first
+ * descending. Unknown columns leave the order untouched.
+ */
+export function sortTracks(rows: TrackRow[], sort: TrackSort): TrackRow[] {
+  const dir = sort.descending ? -1 : 1;
+  return rows
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => {
+      const ka = sortKey(a.t, sort.column);
+      const kb = sortKey(b.t, sort.column);
+      if (ka === null && kb === null) return a.i - b.i;
+      // Nulls last ascending, first descending (matches the SQL side).
+      if (ka === null) return dir;
+      if (kb === null) return -dir;
+      let cmp: number;
+      if (typeof ka === 'string' && typeof kb === 'string') {
+        cmp = ka.localeCompare(kb, undefined, { sensitivity: 'base' });
+      } else {
+        cmp = (ka as number) < (kb as number) ? -1 : (ka as number) > (kb as number) ? 1 : 0;
+      }
+      return cmp === 0 ? a.i - b.i : cmp * dir;
+    })
+    .map((x) => x.t);
 }

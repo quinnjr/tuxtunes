@@ -1,0 +1,140 @@
+<div class="flex h-full flex-col">
+  <nav class="mac-toolbar flex px-2">
+    @for (t of tabs; track t.id) {
+      <button
+        type="button"
+        (click)="setTab(t.id)"
+        [class]="
+          'relative px-4 py-2.5 text-body transition ' +
+          (tab() === t.id
+            ? 'font-medium text-text-primary after:absolute after:inset-x-3 after:-bottom-px after:h-[2px] after:rounded-full after:bg-accent'
+            : 'text-text-secondary hover:text-text-primary')
+        "
+      >
+        {{ t.label }}
+      </button>
+    }
+  </nav>
+  <div class="flex-1 overflow-y-auto bg-bg-primary p-4">
+    @switch (tab()) {
+      @case ('playback') {
+        <app-settings-audio class="block" />
+      }
+      @case ('sync') {
+        <section class="flex flex-col gap-3">
+          <header class="flex items-center justify-between">
+            <h2 class="text-body font-semibold uppercase tracking-wide text-text-muted">
+              Sync Sources
+            </h2>
+            <button
+              type="button"
+              (click)="openImportWizard()"
+              class="rounded-md bg-accent px-3 py-1.5 text-body font-medium text-white hover:bg-accent-hover"
+            >
+              Add iTunes library…
+            </button>
+          </header>
+          @if (sync.sources().length === 0) {
+            <p class="text-body text-text-muted">
+              No sync sources yet. Use the wizard above to import an iTunes library.
+            </p>
+          } @else {
+            <ul class="overflow-hidden rounded-lg border border-border bg-bg-surface">
+              @for (s of sync.sources(); track s.id; let last = $last) {
+                <li [class]="'flex items-center gap-3 px-4 py-3 ' + (last ? '' : 'hairline-b')">
+                  <div class="flex flex-1 flex-col">
+                    <span class="text-body text-text-primary">{{ s.name }}</span>
+                    <span class="truncate text-caption text-text-muted">
+                      {{ s.sourcePath }}
+                    </span>
+                    <span class="text-caption2 tnum text-text-muted">
+                      Last sync: {{ formatLastSync(s.lastSyncAt) }}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    (click)="runSync(s.id)"
+                    class="mac-btn h-7 px-3 border border-border hover:border-border-strong"
+                  >
+                    Sync now
+                  </button>
+                </li>
+              }
+            </ul>
+          }
+          @if (sync.runState() === 'running' && sync.progress(); as p) {
+            <div
+              class="rounded-lg border border-border bg-bg-surface p-3 text-footnote text-text-secondary"
+            >
+              <div class="mb-1 flex items-center justify-between">
+                <span class="capitalize">{{ p.phase.replaceAll('_', ' ') }}</span>
+                <span class="tnum">{{ p.current }} / {{ p.total }}</span>
+              </div>
+              @if (p.message) {
+                <div class="text-text-muted">{{ p.message }}</div>
+              }
+            </div>
+          }
+          @if (sync.lastError(); as e) {
+            <p class="text-footnote text-accent">{{ e.error }}</p>
+          }
+        </section>
+      }
+      @case ('maintenance') {
+        <section class="flex flex-col gap-4">
+          <h2 class="text-body font-semibold uppercase tracking-wide text-text-muted">
+            Library Maintenance
+          </h2>
+          <div class="rounded-lg border border-border bg-bg-surface p-4">
+            <h3 class="mb-1 text-body font-medium text-text-primary">Library preferences</h3>
+            <p class="mb-3 text-footnote text-text-muted">
+              Library root, organize scheme, and the keep-organized toggle live in the Preferences
+              dialog.
+            </p>
+            <button
+              type="button"
+              (click)="openLibraryPrefs()"
+              class="mac-btn h-8 px-3 bg-bg-elevated"
+            >
+              Open Preferences…
+            </button>
+          </div>
+          <div class="rounded-lg border border-border bg-bg-surface p-4">
+            <h3 class="mb-1 text-body font-medium text-text-primary">Verify library</h3>
+            <p class="mb-3 text-footnote text-text-muted">
+              Re-hashes every track file and flags mismatches. Long-running on large libraries.
+            </p>
+            <div class="flex items-center gap-3">
+              <button
+                type="button"
+                (click)="verify()"
+                [disabled]="verifyState() === 'running'"
+                class="mac-btn h-8 px-3 bg-bg-elevated disabled:opacity-50"
+              >
+                Verify library
+              </button>
+              @if (verifyState() === 'running') {
+                <span class="text-footnote text-text-muted">Verifying…</span>
+              }
+              @if (verifyState() === 'done') {
+                <span class="text-footnote text-accent">Done</span>
+              }
+            </div>
+            @if (verifyState() === 'error' && verifyError(); as msg) {
+              <p class="mt-2 text-footnote text-accent">{{ msg }}</p>
+            }
+          </div>
+        </section>
+      }
+      @case ('about') {
+        <section class="flex flex-col gap-2">
+          <h2 class="text-body font-semibold uppercase tracking-wide text-text-muted">
+            About TuxTunes
+          </h2>
+          <p class="text-body text-text-secondary">Linux-native iTunes-style music player.</p>
+          <p class="text-caption text-text-muted">Tauri 2 · Angular · libmpv · prax-orm</p>
+        </section>
+      }
+    }
+  </div>
+</div>

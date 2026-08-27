@@ -2,11 +2,11 @@
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
   "productName": "TuxTunes",
   "version": "0.1.0",
-  "identifier": "com.pegasusheavyindustries.tuxtunes",
+  "identifier": "dev.quinnjr.tuxtunes",
   "build": {
-    "devUrl": "http://localhost:4200",
-    "beforeDevCommand": "npm run start",
-    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:4300",
+    "beforeDevCommand": "pnpm run start",
+    "beforeBuildCommand": "pnpm run build",
     "frontendDist": "../dist/tuxtunes/browser"
   },
   "app": {
@@ -18,7 +18,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/artwork/**"]
+      }
     }
   },
   "bundle": {
