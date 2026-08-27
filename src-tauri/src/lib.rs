@@ -259,27 +259,6 @@ pub fn run() {
                     });
             }
 
-            // Restore persisted volume. Sending SetVolume tells mpv to set
-            // the property; the property observer then fires a VolumeChanged
-            // event (idempotent — same value won't persist twice). If no
-            // preference exists, leave mpv at its boot default (100).
-            {
-                let db = std::sync::Arc::clone(&state_ref.db);
-                let engine = std::sync::Arc::clone(&state_ref.engine);
-                runtime.spawn(async move {
-                    use crate::db::preferences::{self, KEY_VOLUME};
-                    use crate::playback::EngineCommand;
-                    match preferences::get::<i64>(&db.engine, KEY_VOLUME).await {
-                        Ok(Some(v)) => {
-                            let clamped = v.clamp(0, 100) as u8;
-                            let _ = engine.send(EngineCommand::SetVolume { volume: clamped });
-                        }
-                        Ok(None) => {}
-                        Err(e) => log::warn!("read persisted volume failed: {e}"),
-                    }
-                });
-            }
-
             // Restore audio device + exclusive + ReplayGain prefs. Sent
             // as a single ApplyDevice command so the engine resolves
             // them as one transition rather than three separate ones.

@@ -1032,3 +1032,66 @@ async fn prefetched_track_plays_gaplessly_after_eof() {
         "no stop before the gapless switch: {log:?}"
     );
 }
+
+/// The saved volume must be mpv's boot value: the first volume
+/// observation (which is persisted) has to report it, and the
+/// preference must still hold it afterwards.
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_volume_is_the_engine_boot_value_and_survives_startup() {
+    use tauri::{Listener, Manager};
+    unsafe {
+        std::env::set_var("TUXTUNES_AO", "null");
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("tuxtunes.db");
+    {
+        let db = tuxtunes::db::Db::open(&db_path).await.unwrap();
+        tuxtunes::db::preferences::set(&db.engine, tuxtunes::db::preferences::KEY_VOLUME, &34i64)
+            .await
+            .unwrap();
+    }
+    let app = tauri::test::mock_app();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.handle()
+        .listen(tuxtunes::playback::events::VOLUME_CHANGED, move |e| {
+            let _ = tx.send(e.payload().to_string());
+        });
+    let state = AppState::new(&db_path, app.handle().clone()).await.unwrap();
+    app.manage(state);
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("volume observation within 5s")
+        .expect("channel open");
+    assert!(
+        first.contains("\"volume\":34"),
+        "boot volume must be the saved one: {first}"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let state = app.state::<AppState>();
+    let saved: Option<i64> =
+        tuxtunes::db::preferences::get(&state.db.engine, tuxtunes::db::preferences::KEY_VOLUME)
+            .await
+            .unwrap();
+    assert_eq!(saved, Some(34));
+}
+
+/// The UI seeds its slider from get_audio_prefs at startup, so the
+/// snapshot must carry the persisted volume (it silently didn't).
+#[tokio::test(flavor = "multi_thread")]
+async fn get_audio_prefs_reports_the_persisted_volume() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+    let before = commands::audio::get_audio_prefs(state.clone())
+        .await
+        .unwrap();
+    assert_eq!(before.volume, 100, "default when nothing is saved");
+    tuxtunes::db::preferences::set(
+        &state.db.engine,
+        tuxtunes::db::preferences::KEY_VOLUME,
+        &34i64,
+    )
+    .await
+    .unwrap();
+    let after = commands::audio::get_audio_prefs(state).await.unwrap();
+    assert_eq!(after.volume, 34);
+}

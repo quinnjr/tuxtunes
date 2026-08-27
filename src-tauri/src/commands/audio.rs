@@ -126,6 +126,10 @@ pub struct AudioPrefsSnapshot {
     pub device_id: Option<String>,
     pub exclusive: bool,
     pub replaygain_mode: ReplayGainMode,
+    /// Persisted level (0–100); the UI seeds its slider from this at
+    /// startup because the engine's first volume event fires before the
+    /// webview is listening.
+    pub volume: u8,
 }
 
 #[tauri::command]
@@ -148,5 +152,11 @@ pub async fn get_audio_prefs(
         device_id,
         exclusive,
         replaygain_mode,
+        volume: preferences::get::<i64>(engine_db, KEY_VOLUME)
+            .await
+            .ok()
+            .flatten()
+            .map(|v| v.clamp(0, 100) as u8)
+            .unwrap_or(100),
     })
 }

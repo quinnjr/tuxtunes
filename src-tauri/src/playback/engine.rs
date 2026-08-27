@@ -94,7 +94,13 @@ impl PlaybackEngine {
     /// and tests (MockRuntime). The handle is captured into the worker
     /// thread, so the Runtime parameter doesn't leak into PlaybackEngine
     /// itself — the struct stays runtime-agnostic.
-    pub fn spawn<R: Runtime>(app: AppHandle<R>) -> Result<Self, EngineError> {
+    /// `initial_volume` seeds mpv before it initialises, so the very
+    /// first `volume` observation — which the tracking consumer persists
+    /// — is already the user's saved level rather than mpv's 100.
+    pub fn spawn<R: Runtime>(
+        app: AppHandle<R>,
+        initial_volume: Option<u8>,
+    ) -> Result<Self, EngineError> {
         let (tx, mut rx) = mpsc::unbounded_channel::<EngineCommand>();
         let (track_tx, track_rx) = mpsc::unbounded_channel::<PlaybackTracking>();
         let devices = Arc::new(Mutex::new(Vec::new()));
@@ -118,7 +124,7 @@ impl PlaybackEngine {
                 unsafe {
                     libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
                 }
-                let mut mpv = match init_mpv() {
+                let mut mpv = match init_mpv(initial_volume) {
                     Ok(m) => {
                         let _ = init_tx.send(Ok(()));
                         m
@@ -140,7 +146,10 @@ impl PlaybackEngine {
                 let _ = mpv.observe_property("pause", Format::Flag, 3);
                 let _ = mpv.observe_property("volume", Format::Int64, 4);
 
-                let mut state = EventLoopState::default();
+                let mut state = EventLoopState {
+                    wanted_volume: initial_volume,
+                    ..Default::default()
+                };
 
                 loop {
                     while let Ok(cmd) = rx.try_recv() {
@@ -170,6 +179,7 @@ impl PlaybackEngine {
                     if file_loaded {
                         let paused = mpv.get_property::<bool>("pause").unwrap_or(false);
                         handle_event(Event::FileLoaded, &app, &mut state, &track_tx, paused);
+                        reassert_volume(&mpv, state.wanted_volume);
                     }
 
                     if rx.is_closed() {
@@ -204,7 +214,7 @@ impl PlaybackEngine {
     }
 }
 
-fn init_mpv() -> Result<Mpv, libmpv2::Error> {
+fn init_mpv(initial_volume: Option<u8>) -> Result<Mpv, libmpv2::Error> {
     // `TUXTUNES_AO=null` skips opening a real audio device, matching
     // libmpv's null AO. Tests and CI set this so AO_INIT_FAILED isn't
     // raised on machines without ALSA/PulseAudio. Production never
@@ -224,6 +234,11 @@ fn init_mpv() -> Result<Mpv, libmpv2::Error> {
         // continues. The two strict properties (vid + audio-buffer)
         // remain required because the engine misbehaves without them.
         init.set_property("vid", "no")?;
+        // Identify the stream to the audio server (PipeWire/Pulse key
+        // per-app volume memory on this).
+        if let Err(e) = init.set_property("audio-client-name", "TuxTunes") {
+            log::warn!("mpv init: skipping audio-client-name: {e}");
+        }
         // mpv pre-fills the output buffer before audio starts, so this
         // is added directly to every track's start latency. 0.2 s is
         // mpv's default; 2.0 s made each next-track switch feel stuck.
@@ -247,8 +262,27 @@ fn init_mpv() -> Result<Mpv, libmpv2::Error> {
         if let Err(e) = init.set_property("volume-max", 100_i64) {
             log::warn!("mpv init: skipping volume-max=100: {e}");
         }
+        if let Some(v) = initial_volume {
+            if let Err(e) = init.set_property("volume", i64::from(v.min(100))) {
+                log::warn!("mpv init: skipping initial volume={v}: {e}");
+            }
+        }
         Ok(())
     })
+}
+
+/// Push the wanted volume to the (possibly brand-new) audio stream.
+///
+/// mpv applies `volume` to the output stream, and PipeWire/WirePlumber's
+/// stream-restore can re-apply its own remembered per-app level to a
+/// freshly created stream, overriding what mpv set at creation while
+/// mpv's `volume` property still reports our value. Writing the same
+/// value is a no-op for mpv, so nudge by one step first.
+fn reassert_volume(mpv: &Mpv, wanted: Option<u8>) {
+    let Some(v) = wanted else { return };
+    let nudge = if v >= 100 { 99 } else { v + 1 };
+    let _ = mpv.set_property("volume", i64::from(nudge));
+    let _ = mpv.set_property("volume", i64::from(v));
 }
 
 /// Apply per-load properties, skipping any whose value is unchanged
@@ -401,6 +435,7 @@ fn handle_command<R: Runtime>(
             let _ = mpv.set_property("time-pos", seconds);
         }
         EngineCommand::SetVolume { volume } => {
+            state.wanted_volume = Some(volume);
             let _ = mpv.set_property("volume", volume as i64);
         }
         EngineCommand::ApplyDevice { prefs } => {
@@ -453,6 +488,9 @@ struct EventLoopState {
     loading: bool,
     /// Track appended to mpv's playlist behind the current one.
     prefetched: Option<(i64, String)>,
+    /// The level the user wants; re-asserted on each stream start (see
+    /// `reassert_volume`).
+    wanted_volume: Option<u8>,
     last_position_ms: i64,
     last_duration_ms: i64,
     last_emitted_position_ms: i64,
