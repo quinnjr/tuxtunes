@@ -15,7 +15,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 prax-orm = { version = "0.8", features = ["sqlite"] }
 prax-sqlite = "0.8"
-prax-migrate = "0.8"
+prax-migrate = "0.12"
 prax-codegen = "0.8"
 prax-schema = "0.8"
 prax-query = "0.8"

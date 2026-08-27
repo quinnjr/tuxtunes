@@ -3449,7 +3449,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d2706b7c3eaf1323c0a6775e23078f7b060199e030c7dbabef57b3671bdc9bd"
 dependencies = [
  "convert_case 0.6.0",
- "prax-schema",
+ "prax-schema 0.8.2",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -3457,14 +3457,14 @@ dependencies = [
 
 [[package]]
 name = "prax-migrate"
-version = "0.8.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fee2fa117013c4c710abaaf07c3eb030f95fdc6bf14008633968341eb938b37"
+checksum = "c86f635c01b41747abcc950d95262b4c2454f5fce995d2bc84f6e4088dcf0616"
 dependencies = [
  "async-trait",
  "chrono",
  "hex",
- "prax-schema",
+ "prax-schema 0.12.0",
  "serde",
  "serde_json",
  "sha2",
@@ -3482,7 +3482,7 @@ dependencies = [
  "pastey",
  "prax-codegen",
  "prax-query",
- "prax-schema",
+ "prax-schema 0.8.2",
 ]
 
 [[package]]
@@ -3528,6 +3528,26 @@ dependencies = [
  "thiserror 2.0.18",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
+]
+
+[[package]]
+name = "prax-schema"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4f012cb808922dfb2c50b7e0c30ee495f8d3fee9c019716e49a47b19fab8039"
+dependencies = [
+ "indexmap 2.14.0",
+ "miette",
+ "parking_lot",
+ "pest",
+ "pest_derive",
+ "regex-lite",
+ "serde",
+ "smol_str",
+ "thiserror 2.0.18",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "walkdir",
 ]
 
 [[package]]
@@ -5474,7 +5494,7 @@ dependencies = [
  "prax-migrate",
  "prax-orm",
  "prax-query",
- "prax-schema",
+ "prax-schema 0.8.2",
  "prax-sqlite",
  "serde",
  "serde_json",
