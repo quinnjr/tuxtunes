@@ -7,4 +7,6 @@
 //! backends stay a thin, swappable leaf.
 
 pub mod layout;
+pub mod manifest;
+pub mod playlists;
 pub mod transport;
