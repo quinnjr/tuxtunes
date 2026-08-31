@@ -9,6 +9,15 @@ export interface NamePromptRequest {
   onSubmit: (name: string) => void | Promise<void>;
 }
 
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  /** Label for the confirming button, e.g. "Delete Folder". */
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void | Promise<void>;
+}
+
 @Injectable({ providedIn: 'root' })
 export class UiService {
   readonly importWizardOpen = signal(false);
@@ -35,6 +44,12 @@ export class UiService {
    * `onSubmit` with the trimmed non-empty name.
    */
   readonly namePrompt = signal<NamePromptRequest | null>(null);
+
+  /**
+   * In-app confirmation dialog for actions that destroy more than the
+   * thing that was clicked (deleting a folder full of playlists).
+   */
+  readonly confirm = signal<ConfirmRequest | null>(null);
 
   /**
    * Most recent user-facing failure (a backend command rejected, a

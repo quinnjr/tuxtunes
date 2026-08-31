@@ -33,6 +33,7 @@
         class="fixed inset-0 z-30"
         role="presentation"
         (click)="closePicker()"
+        (contextmenu)="onPickerBackdropContextMenu($event)"
         (keydown.escape)="closePicker()"
       >
         <div

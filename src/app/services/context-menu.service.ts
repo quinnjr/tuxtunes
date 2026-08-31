@@ -41,7 +41,15 @@ export class ContextMenuService {
   show(event: MouseEvent, items: ContextMenuItem[]): void {
     event.preventDefault();
     event.stopPropagation();
-    this.open.set({ x: event.clientX, y: event.clientY, items });
+    // Keep the menu on screen. The app shell is overflow-hidden, so an
+    // off-viewport menu is simply unreachable. Estimated dimensions
+    // (min-width 200px, ~30px per row) err slightly large, which only
+    // pulls the menu a few px further from the edge.
+    const width = 220;
+    const height = items.length * 30 + 10;
+    const x = Math.max(0, Math.min(event.clientX, window.innerWidth - width));
+    const y = Math.max(0, Math.min(event.clientY, window.innerHeight - height));
+    this.open.set({ x, y, items });
   }
 
   hide(): void {

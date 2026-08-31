@@ -1,4 +1,5 @@
 import { Component, HostListener, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
+import { ConfirmDialogComponent } from './components/confirm-dialog/confirm-dialog.component';
 import { ContextMenuComponent } from './components/context-menu/context-menu.component';
 import { ImportWizardComponent } from './components/import-wizard/import-wizard.component';
 import { MainContentComponent } from './components/main-content/main-content.component';
@@ -16,6 +17,7 @@ import { UiService } from './services/ui.service';
 @Component({
   selector: 'app-root',
   imports: [
+    ConfirmDialogComponent,
     ContextMenuComponent,
     ImportWizardComponent,
     MainContentComponent,
@@ -42,8 +44,10 @@ export class App implements OnInit {
 
   /**
    * The app draws its own context menus; the WebKit default never
-   * belongs in the UI. Editable elements keep it — paste, spell-check
-   * and friends are genuinely useful there.
+   * belongs in the UI. Two exceptions keep it: editable elements
+   * (paste, spell-check) and a live text selection — right-click →
+   * Copy on selected text (a track title, an error message) has no
+   * in-app replacement.
    */
   @HostListener('document:contextmenu', ['$event'])
   onDocumentContextMenu(event: MouseEvent): void {
@@ -53,6 +57,10 @@ export class App implements OnInit {
       target instanceof HTMLTextAreaElement ||
       target?.isContentEditable
     ) {
+      return;
+    }
+    const selection = globalThis.getSelection();
+    if (selection !== null && !selection.isCollapsed && selection.toString().length > 0) {
       return;
     }
     event.preventDefault();

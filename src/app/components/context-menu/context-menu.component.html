@@ -26,7 +26,9 @@
                 (item.destructive ? 'text-accent' : 'text-text-primary')
               "
             >
-              <span class="w-4 shrink-0">{{ item.checked ? '✓' : '' }}</span>
+              @if (hasChecks(state.items)) {
+                <span class="w-4 shrink-0">{{ item.checked ? '✓' : '' }}</span>
+              }
               <span class="flex-1">{{ item.label }}</span>
               @if (hasChildren(item)) {
                 <span class="ml-2 shrink-0">▸</span>
@@ -35,7 +37,11 @@
             @if (hasChildren(item) && submenuIndex() === i) {
               <ul
                 data-submenu
-                class="mac-sheet absolute left-full top-0 z-10 -ml-1 min-w-[180px] rounded-lg py-1 text-body"
+                (mouseenter)="onSubmenuEnter()"
+                [class]="
+                  'mac-sheet absolute top-0 z-10 min-w-[180px] rounded-lg py-1 text-body ' +
+                  (flyoutFlipped(state.x) ? 'right-full -mr-1' : 'left-full -ml-1')
+                "
               >
                 @for (child of item.children; track $index) {
                   @if (isDivider(child)) {
@@ -51,7 +57,9 @@
                           (child.destructive ? 'text-accent' : 'text-text-primary')
                         "
                       >
-                        <span class="w-4 shrink-0">{{ child.checked ? '✓' : '' }}</span>
+                        @if (hasChecks(item.children!)) {
+                          <span class="w-4 shrink-0">{{ child.checked ? '✓' : '' }}</span>
+                        }
                         <span class="flex-1 truncate">{{ child.label }}</span>
                       </button>
                     </li>

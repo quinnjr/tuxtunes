@@ -35,6 +35,18 @@ describe('ContextMenuService', () => {
     expect(evt.stopPropagation).toHaveBeenCalled();
   });
 
+  it('show() clamps the position so the menu stays inside the viewport', () => {
+    // jsdom default viewport: 1024x768.
+    const svc = new ContextMenuService();
+    const many = Array.from({ length: 20 }, (_, i) => ({ label: `Item ${i}` }));
+    svc.show(fakeMouseEvent(1010, 760), many);
+    const state = svc.open()!;
+    expect(state.x).toBeLessThanOrEqual(1024 - 200);
+    expect(state.y).toBeLessThanOrEqual(768 - 20 * 30);
+    expect(state.x).toBeGreaterThanOrEqual(0);
+    expect(state.y).toBeGreaterThanOrEqual(0);
+  });
+
   it('hide() returns to null', () => {
     const svc = new ContextMenuService();
     svc.show(fakeMouseEvent(0, 0), [{ label: 'X' }]);

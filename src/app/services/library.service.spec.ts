@@ -257,8 +257,43 @@ describe('LibraryService playlists', () => {
     const { svc, invoke } = build(async (cmd) => (cmd === 'create_playlist' ? 7 : []));
     const id = await svc.createPlaylist('  Mix  ');
     expect(id).toBe(7);
-    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Mix' });
+    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Mix', parentId: null });
     expect(invoke).toHaveBeenCalledWith('list_playlists');
+  });
+
+  it('createPlaylist forwards a parent folder id', async () => {
+    const { svc, invoke } = build(async (cmd) => (cmd === 'create_playlist' ? 7 : []));
+    await svc.createPlaylist('Inside', 4);
+    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Inside', parentId: 4 });
+  });
+
+  it('createPlaylist still returns the id when the sidebar refresh fails', async () => {
+    const { svc } = build(async (cmd) => {
+      if (cmd === 'create_playlist') return 7;
+      throw new Error('list_playlists exploded');
+    });
+    await expect(svc.createPlaylist('Mix')).resolves.toBe(7);
+  });
+
+  it('createPlaylistWithTracks creates, adds, and refreshes the sidebar once', async () => {
+    const { svc, invoke } = build(async (cmd) => (cmd === 'create_playlist' ? 7 : []));
+    const id = await svc.createPlaylistWithTracks('Road Trip', [3, 4]);
+    expect(id).toBe(7);
+    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Road Trip', parentId: null });
+    expect(invoke).toHaveBeenCalledWith('add_tracks_to_playlist', {
+      playlistId: 7,
+      trackIds: [3, 4],
+    });
+    const refreshes = invoke.mock.calls.filter((c) => c[0] === 'list_playlists');
+    expect(refreshes).toHaveLength(1);
+  });
+
+  it('addTracksToPlaylist reloads the open playlist when it is the target', async () => {
+    const { svc, invoke } = build(async (cmd) => (cmd === 'open_playlist' ? raws : []));
+    await svc.openPlaylist(9);
+    invoke.mockClear();
+    await svc.addTracksToPlaylist(9, [5]);
+    expect(invoke).toHaveBeenCalledWith('open_playlist', { playlistId: 9 });
   });
 
   it('renamePlaylist invokes the command and refreshes the sidebar', async () => {

@@ -286,8 +286,8 @@ describe('SidebarComponent', () => {
     expect(user.map((i) => i.label)).not.toContain('Edit Smart Playlist…');
   });
 
-  it('right-click on a folder offers rename and delete', async () => {
-    const { fixture, cmp, library } = setup(RAW_PLAYLISTS);
+  it('right-click on a folder offers rename and delete, and New Playlist… targets the folder', async () => {
+    const { fixture, cmp, ui, library, stub } = setup(RAW_PLAYLISTS);
     await settle(fixture);
     const ctx = TestBed.inject(ContextMenuService);
     const show = vi.spyOn(ctx, 'show');
@@ -296,11 +296,37 @@ describe('SidebarComponent', () => {
       new MouseEvent('contextmenu'),
     );
     const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    expect(items.map((i) => i.label)).toContain('Rename…');
+    expect(items.map((i) => i.label)).toContain('Rename until next sync…');
     expect(items.map((i) => i.label)).toContain('Remove until next sync');
+
+    await items.find((i) => i.label === 'New Playlist…')!.action?.();
+    await ui.namePrompt()!.onSubmit('In Folder');
+    expect(stub.invoke).toHaveBeenCalledWith('create_playlist', {
+      name: 'In Folder',
+      parentId: 5,
+    });
   });
 
-  it('Rename… opens the name prompt and submits through renamePlaylist', async () => {
+  it('deleting a folder with children asks for confirmation first', async () => {
+    const { fixture, cmp, ui, library, stub } = setup(RAW_PLAYLISTS);
+    await settle(fixture);
+    const ctx = TestBed.inject(ContextMenuService);
+    const show = vi.spyOn(ctx, 'show');
+    cmp.onPlaylistContextMenu(
+      { playlist: library.playlists().find((p) => p.id === 5)!, children: [{}] },
+      new MouseEvent('contextmenu'),
+    );
+    const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    await items.find((i) => i.label === 'Remove until next sync')!.action?.();
+    expect(stub.invoke).not.toHaveBeenCalledWith('delete_playlist', expect.anything());
+    const confirm = ui.confirm();
+    expect(confirm).not.toBeNull();
+    expect(confirm!.message).toContain('Rock');
+    await confirm!.onConfirm();
+    expect(stub.invoke).toHaveBeenCalledWith('delete_playlist', { playlistId: 5 });
+  });
+
+  it('Rename… opens the name prompt with the current name read at click time', async () => {
     const { fixture, cmp, ui, library, stub } = setup(RAW_PLAYLISTS);
     await settle(fixture);
     const ctx = TestBed.inject(ContextMenuService);
@@ -310,8 +336,13 @@ describe('SidebarComponent', () => {
       new MouseEvent('contextmenu'),
     );
     const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    // A sync-driven refresh may replace the playlists while the menu is
+    // open; the prompt must show the current name, not the captured one.
+    library.playlists.update((all) =>
+      all.map((p) => (p.id === 7 ? { ...p, name: 'Chill (synced)' } : p)),
+    );
     await items.find((i) => i.label === 'Rename…')!.action?.();
-    expect(ui.namePrompt()?.initial).toBe('Chill');
+    expect(ui.namePrompt()?.initial).toBe('Chill (synced)');
     await ui.namePrompt()!.onSubmit('Chillier');
     expect(stub.invoke).toHaveBeenCalledWith('rename_playlist', {
       playlistId: 7,
@@ -331,7 +362,7 @@ describe('SidebarComponent', () => {
     await items[0].action?.();
     expect(ui.namePrompt()?.title).toBe('New Playlist');
     await ui.namePrompt()!.onSubmit('Fresh');
-    expect(stub.invoke).toHaveBeenCalledWith('create_playlist', { name: 'Fresh' });
+    expect(stub.invoke).toHaveBeenCalledWith('create_playlist', { name: 'Fresh', parentId: null });
 
     await items[1].action?.();
     expect(ui.smartEditor()).toEqual({ playlistId: null });

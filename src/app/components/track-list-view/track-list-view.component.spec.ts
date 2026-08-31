@@ -32,6 +32,7 @@ interface ListInternals {
   isColumnVisible(id: SortColumn): boolean;
   closePicker(): void;
   onHeaderContextMenu(event: MouseEvent): void;
+  onPickerBackdropContextMenu(event: MouseEvent): void;
 }
 
 const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
@@ -268,11 +269,55 @@ describe('TrackListViewComponent', () => {
     await addTo.children!.find((c) => c.label === 'New Playlist…')!.action?.();
     expect(ui.namePrompt()).not.toBeNull();
     await ui.namePrompt()!.onSubmit('Fresh');
-    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Fresh' });
+    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Fresh', parentId: null });
     expect(invoke).toHaveBeenCalledWith('add_tracks_to_playlist', {
       playlistId: 9,
       trackIds: [1],
     });
+  });
+
+  it('Remove from Playlist is not offered while a synced playlist is open', () => {
+    const { cmp, ctx, library } = setup();
+    library.tracks.set([TRACK(1)]);
+    library.playlists.set([
+      {
+        id: 3,
+        name: 'Synced',
+        kind: 'regular',
+        parentId: null,
+        sortOrder: 0,
+        trackCount: 1,
+        synced: true,
+      },
+    ]);
+    library.activePlaylistId.set(3);
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onRowContextMenu(TRACK(1), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items.map((i) => i.label)).not.toContain('Remove from Playlist');
+  });
+
+  it('a right-click while the column picker is open closes it without opening the header menu', () => {
+    const { cmp, ctx } = setup();
+    cmp.togglePicker({ stopPropagation: vi.fn() } as unknown as MouseEvent);
+    expect(cmp.pickerOpen()).toBe(true);
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onPickerBackdropContextMenu({
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    expect(cmp.pickerOpen()).toBe(false);
+    expect(showSpy).not.toHaveBeenCalled();
+  });
+
+  it('toggleColumn refuses to hide the last visible column', () => {
+    const { cmp } = setup();
+    cmp.visibleColumnIds.set(['title']);
+    cmp.toggleColumn('title');
+    expect(cmp.isColumnVisible('title')).toBe(true);
   });
 
   it('Remove from Playlist appears only while a regular playlist is open', async () => {

@@ -263,18 +263,21 @@ export class TrackListViewComponent implements OnInit {
             title: 'New Playlist',
             initial: '',
             onSubmit: async (name) => {
-              const id = await this.ui.guard(this.library.createPlaylist(name));
-              if (id !== null) await this.ui.guard(this.library.addTracksToPlaylist(id, ids));
+              await this.ui.guard(this.library.createPlaylistWithTracks(name, ids));
             },
           }),
       },
     ];
   }
 
-  /** "Remove from Playlist" — only while a manual playlist is on screen. */
+  /**
+   * "Remove from Playlist" — only while one of the user's own manual
+   * playlists is on screen. A synced playlist's rows come back on the
+   * next sync (and the backend refuses to write them anyway).
+   */
   private removeFromPlaylistItems(targets: TrackRow[]): ContextMenuItem[] {
     const active = this.library.activePlaylist();
-    if (active === null || active.kind !== 'regular') return [];
+    if (active?.kind !== 'regular' || active.synced) return [];
     const single = targets.length === 1;
     return [
       {
@@ -328,9 +331,24 @@ export class TrackListViewComponent implements OnInit {
   }
 
   protected toggleColumn(id: SortColumn): void {
-    this.visibleColumnIds.update((ids) =>
-      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
-    );
+    this.visibleColumnIds.update((ids) => {
+      if (!ids.includes(id)) return [...ids, id];
+      // Never hide the last column — an empty table has no way back in.
+      if (ids.length === 1) return ids;
+      return ids.filter((x) => x !== id);
+    });
+  }
+
+  /**
+   * The picker's full-screen backdrop lives inside the header, so a
+   * right-click on it would bubble into onHeaderContextMenu and open
+   * the column menu over the picker. Swallow it and close the picker
+   * instead — same as a plain click.
+   */
+  protected onPickerBackdropContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.closePicker();
   }
 
   protected isColumnVisible(id: SortColumn): boolean {
