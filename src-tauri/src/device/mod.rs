@@ -6,4 +6,5 @@
 //! the [`transport::DeviceTransport`] trait, so the platform-specific
 //! backends stay a thin, swappable leaf.
 
+pub mod layout;
 pub mod transport;

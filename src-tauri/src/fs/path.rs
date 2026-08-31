@@ -138,7 +138,13 @@ fn sanitize_component(raw: &str) -> String {
         .to_string()
 }
 
-fn expand_tokens(template: &str, t: &TrackFields<'_>) -> Result<String, PathRenderError> {
+/// Expand `{token}` placeholders against `t`, leaving `/` separators in
+/// place. Shared with [`crate::device::layout`], which applies its own,
+/// stricter per-segment sanitiser for FAT-family device filesystems.
+pub(crate) fn expand_tokens(
+    template: &str,
+    t: &TrackFields<'_>,
+) -> Result<String, PathRenderError> {
     let mut out = String::with_capacity(template.len() * 2);
     let mut chars = template.chars().peekable();
     while let Some(c) = chars.next() {
