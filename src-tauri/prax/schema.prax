@@ -42,6 +42,23 @@ enum ImportStatus {
     missing_source
 }
 
+/// How TuxTunes reaches a sync device.
+enum DeviceKind {
+    /// Native MTP via libmtp (Linux, macOS).
+    mtp
+    /// Windows Portable Devices.
+    wpd
+    /// A mounted path: gvfs/mtpfs, an SD card, a mass-storage DAP.
+    filesystem
+}
+
+/// What a manifest row on a device refers to.
+enum DeviceObjectKind {
+    track
+    playlist
+    artwork
+}
+
 // =============================================================================
 // MODELS
 // =============================================================================
@@ -130,6 +147,9 @@ model Track {
     import_status   ImportStatus @default(ok)
     verified_at     DateTime?
 
+    /// Manifest rows for every device this track has been pushed to.
+    device_objects  DeviceObject[]
+
     @@map("tracks")
     @@index([artist])
     @@index([album])
@@ -208,6 +228,81 @@ model PlaylistTombstone {
 
     @@id([sync_source_id, persistent_id])
     @@map("playlist_tombstones")
+}
+
+/// A device TuxTunes can push tracks and playlists to.
+model Device {
+    id               Int         @id @auto
+    name             String
+    kind             DeviceKind  @default(filesystem)
+
+    /// Stable across replugging: "<vendor>:<product>:<serial>". A device
+    /// with no serial falls back to a storage id and sets `key_is_weak`.
+    device_key       String      @unique
+    /// Suppresses destructive pruning — a weak key could match the
+    /// wrong device, and deleting another device's files is unforgivable.
+    key_is_weak      Boolean     @default(false)
+
+    /// Device-rooted directory the sync writes under.
+    root_path        String      @default("/Music")
+    /// Host path for `kind = filesystem` devices; null otherwise.
+    mount_path       String?
+
+    last_seen_at     DateTime?
+    last_sync_at     DateTime?
+
+    // Initialized to [] / {} by the application on insert.
+    /// `[{ kind: playlist|album|smart|all, id }]`.
+    selection        Json
+    /// Codec allow/deny lists and rate/depth ceilings.
+    profile_override Json
+    /// `{ dsd: "skip" | "flac", fallback: "flac" }`.
+    transcode_policy Json
+    /// Per-StatsSource read offsets and play-count high-water marks.
+    stats_cursors    Json
+    conflict_rules   Json
+
+    layout_template  String      @default("{album_artist}/{album}/{disc}-{track} {title}.{ext}")
+    auto_sync        Boolean     @default(false)
+    /// Whether deselected tracks are deleted from the device. Only ever
+    /// deletes objects recorded in `device_objects`.
+    mirror_deletes   Boolean     @default(true)
+    /// Whether to additionally register native MTP playlist objects.
+    write_playlist_objects Boolean @default(true)
+
+    objects          DeviceObject[]
+
+    @@map("devices")
+}
+
+/// The manifest: exactly what TuxTunes has written to a device.
+///
+/// This table is the sole authority for pruning. A device path with no
+/// row here is never deleted, so files the user added by hand survive.
+model DeviceObject {
+    id              Int              @id @auto
+    device_id       Int
+    device          Device           @relation(fields: [device_id], references: [id], onDelete: Cascade)
+    kind            DeviceObjectKind
+
+    track_id        Int?
+    track           Track?           @relation(fields: [track_id], references: [id], onDelete: SetNull)
+    persistent_id   String?
+
+    device_path     String
+    /// Transport-side handle, where the transport exposes one.
+    object_id       String?
+    /// `Track.file_hash` at push time; drives the replace decision.
+    source_hash     String?
+    /// "copy:<codec>" for a bit-exact push, or the target codec name.
+    encoded_codec   String
+    size_bytes      Int
+    pushed_at       DateTime         @default(now())
+
+    @@map("device_objects")
+    @@unique([device_id, device_path])
+    @@index([device_id, track_id])
+    @@index([device_id, kind])
 }
 
 /// Singleton app settings (key/value JSON).
