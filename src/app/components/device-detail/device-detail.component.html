@@ -1,0 +1,174 @@
+<section class="flex h-full flex-1 flex-col bg-bg-primary">
+  @if (device(); as device) {
+    <header class="mac-toolbar flex items-center gap-3 px-4 py-2">
+      <div class="flex min-w-0 flex-col">
+        <span class="truncate font-medium text-text-primary" data-testid="device-name">
+          {{ device.name }}
+        </span>
+        <span class="truncate text-caption text-text-muted">
+          {{ device.mountPath ?? device.deviceKey }} › {{ device.rootPath }}
+        </span>
+      </div>
+      <div class="ml-auto flex items-center gap-2">
+        <button
+          type="button"
+          class="mac-btn px-3 py-1 text-body"
+          [disabled]="running()"
+          (click)="preview()"
+        >
+          Preview
+        </button>
+        @if (running()) {
+          <button
+            type="button"
+            class="mac-btn px-3 py-1 text-body"
+            data-testid="cancel-sync"
+            (click)="cancel()"
+          >
+            Cancel
+          </button>
+        } @else {
+          <button
+            type="button"
+            class="rounded-md bg-accent px-3 py-1 text-body text-white disabled:opacity-50"
+            data-testid="run-sync"
+            [disabled]="selectedCount() === 0"
+            (click)="sync()"
+          >
+            Sync
+          </button>
+        }
+      </div>
+    </header>
+
+    <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
+      @if (running()) {
+        <div class="flex flex-col gap-1" data-testid="progress">
+          <div class="flex items-baseline justify-between text-caption text-text-secondary">
+            <span class="capitalize">{{ devices.progress()?.phase?.replace('_', ' ') }}</span>
+            <span class="tabular-nums text-text-muted">{{ percent() }}%</span>
+          </div>
+          <div class="h-1.5 overflow-hidden rounded-full bg-bg-surface">
+            <div class="h-full rounded-full bg-accent" [style.width.%]="percent()"></div>
+          </div>
+          <span class="truncate text-caption text-text-muted">
+            {{ devices.progress()?.message }}
+          </span>
+        </div>
+      }
+
+      @if (devices.lastPlan(); as plan) {
+        <div class="rounded-md border border-border bg-bg-surface p-3" data-testid="plan-summary">
+          <div class="text-body text-text-primary">
+            {{ plan.adds }} to copy bit-exact · {{ plan.replaces }} to replace ·
+            {{ plan.unchanged }} already there · {{ plan.deletes }} to remove ·
+            {{ plan.skips }} skipped
+          </div>
+          <div class="mt-1 text-caption text-text-muted">
+            {{ bytes(plan.bytesOut) }} to transfer
+            @if (plan.freeBytes !== null) {
+              <span>, {{ bytes(plan.freeBytes) }} free</span>
+            }
+          </div>
+          @if (usedPercent(); as used) {
+            <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-bg-primary">
+              <div class="h-full rounded-full bg-text-muted" [style.width.%]="used"></div>
+            </div>
+          }
+        </div>
+      }
+
+      @if (devices.lastComplete(); as done) {
+        <div class="text-body text-text-secondary" data-testid="last-complete">
+          Last sync: {{ done.added }} added, {{ done.replaced }} replaced,
+          {{ done.unchanged }} unchanged, {{ done.deleted }} removed,
+          {{ done.playlistsWritten }} playlist{{ done.playlistsWritten === 1 ? '' : 's' }} written,
+          {{ bytes(done.bytesWritten) }} transferred.
+        </div>
+      }
+
+      <div class="flex flex-col gap-2">
+        <h2 class="text-caption font-semibold uppercase tracking-wide text-text-muted">
+          What to sync
+        </h2>
+        @if (syncablePlaylists().length === 0) {
+          <p class="italic text-text-muted">No playlists to choose from yet.</p>
+        } @else {
+          <div class="flex flex-col gap-0.5">
+            @for (playlist of syncablePlaylists(); track playlist.id) {
+              <label
+                class="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-bg-surface"
+              >
+                <input
+                  type="checkbox"
+                  [attr.data-testid]="'select-' + playlist.id"
+                  [checked]="isSelected(playlist)"
+                  (change)="toggle(playlist)"
+                />
+                <span class="truncate text-body text-text-primary">{{ playlist.name }}</span>
+                @if (playlist.kind === 'smart') {
+                  <span class="text-caption text-text-muted">smart</span>
+                }
+              </label>
+            }
+          </div>
+        }
+      </div>
+
+      <div class="flex flex-col gap-2">
+        <h2 class="text-caption font-semibold uppercase tracking-wide text-text-muted">Options</h2>
+        <label class="flex items-center gap-2 text-body text-text-secondary">
+          <input
+            type="checkbox"
+            data-testid="mirror-deletes"
+            [checked]="device.mirrorDeletes"
+            (change)="onMirrorDeletesChange(device, $event)"
+          />
+          <span>Remove deselected tracks from the device</span>
+        </label>
+        <p class="pl-6 text-caption text-text-muted">
+          Only files TuxTunes put there are ever removed.
+          @if (device.keyIsWeak) {
+            This device has no serial number, so removal stays off regardless.
+          }
+        </p>
+      </div>
+
+      @if (devices.warnings().length > 0) {
+        <div class="flex flex-col gap-1" data-testid="warnings">
+          <h2 class="text-caption font-semibold uppercase tracking-wide text-text-muted">
+            Warnings ({{ devices.warnings().length }})
+          </h2>
+          @for (warning of devices.warnings(); track $index) {
+            <div class="text-caption text-text-secondary">
+              <span class="text-text-muted">{{ warning.kind.replace('_', ' ') }}:</span>
+              {{ warning.detail }}
+            </div>
+          }
+        </div>
+      }
+
+      @if (devices.logLines().length > 0) {
+        <div class="flex flex-col gap-1">
+          <button
+            type="button"
+            class="self-start text-caption font-semibold uppercase tracking-wide text-text-muted hover:text-text-primary"
+            (click)="toggleLog()"
+          >
+            {{ logOpen() ? 'Hide' : 'Show' }} log ({{ devices.logLines().length }})
+          </button>
+          @if (logOpen()) {
+            <pre
+              class="max-h-64 overflow-auto rounded-md bg-bg-surface p-2 text-caption text-text-secondary"
+              data-testid="log"
+              >{{ devices.logLines().join('\n') }}</pre>
+          }
+        </div>
+      }
+    </div>
+  } @else {
+    <div class="flex h-full items-center justify-center text-text-muted" data-testid="no-device">
+      Select a device in the sidebar.
+    </div>
+  }
+</section>

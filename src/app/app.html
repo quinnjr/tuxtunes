@@ -3,7 +3,11 @@
   <app-transport-bar />
   <div class="flex flex-1 overflow-hidden">
     <app-sidebar />
-    <app-main-content class="flex min-w-0 flex-1" />
+    @if (ui.libraryView() === 'device') {
+      <app-device-detail class="flex min-w-0 flex-1" />
+    } @else {
+      <app-main-content class="flex min-w-0 flex-1" />
+    }
   </div>
   <app-status-bar />
 </div>

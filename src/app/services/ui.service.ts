@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { toErrorMessage } from '../utils/errors';
 
-export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings';
+export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
 
 export interface NamePromptRequest {
   title: string;
@@ -28,6 +28,13 @@ export class UiService {
 
   /** Whether the column browser strip is shown above the active view. */
   readonly columnBrowserOpen = signal(false);
+
+  /**
+   * Which device the `'device'` view is showing. Kept separate from
+   * `libraryView` so returning to a library view and back does not
+   * lose the user's place.
+   */
+  readonly activeDeviceId = signal<number | null>(null);
 
   /** Whether the Now Playing slide-out is visible. */
   readonly nowPlayingOpen = signal(false);

@@ -89,6 +89,76 @@
     }
   </div>
 
+  <div class="shrink-0">
+    <div
+      class="mt-4 flex items-center justify-between px-4 pb-2 text-caption font-semibold uppercase tracking-wide text-text-muted"
+    >
+      <span>Devices</span>
+      <button
+        type="button"
+        class="rounded px-1 text-text-muted hover:text-text-primary"
+        title="Rescan for devices"
+        aria-label="Rescan for devices"
+        (click)="rescanDevices()"
+      >
+        <svg
+          class="h-3.5 w-3.5"
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+        >
+          <path
+            d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3h-3"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </button>
+    </div>
+    @if (devices().length === 0) {
+      <div class="px-4 py-1 italic text-text-muted">No devices connected</div>
+    } @else {
+      <div class="flex max-h-48 flex-col gap-0.5 overflow-y-auto px-2">
+        @for (device of devices(); track device.id) {
+          <button
+            type="button"
+            [class]="
+              'mac-sidebar-item w-full ' +
+              (isDeviceActive(device) ? 'selected ' : '') +
+              (isAttached(device) ? '' : 'opacity-50')
+            "
+            [title]="deviceTitle(device)"
+            (click)="openDevice(device)"
+            (contextmenu)="onDeviceContextMenu(device, $event)"
+          >
+            <svg
+              class="h-4 w-4 shrink-0"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+            >
+              @if (device.kind === 'filesystem') {
+                <rect x="2.5" y="5" width="15" height="10" rx="2" />
+                <circle cx="14.5" cy="10" r="1" />
+              } @else {
+                <rect x="5.5" y="2.5" width="9" height="15" rx="2" />
+                <path d="M8.5 15.5h3" stroke-linecap="round" />
+              }
+            </svg>
+            <span class="truncate">{{ device.name }}</span>
+            @if (isSyncing(device)) {
+              <span class="ml-auto shrink-0 text-caption tabular-nums text-text-muted">
+                {{ syncPercent() }}%
+              </span>
+            }
+          </button>
+        }
+      </div>
+    }
+  </div>
+
   <ng-template #nodes let-items let-depth="depth">
     @for (node of items; track node.playlist.id) {
       <button

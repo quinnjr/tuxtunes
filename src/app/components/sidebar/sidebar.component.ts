@@ -9,9 +9,11 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
+import { DeviceService } from '../../services/device.service';
 import { LibraryService, Playlist } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { LibraryView, UiService } from '../../services/ui.service';
+import { Device } from '../../models/device';
 
 /** A playlist plus its (already-sorted) children, for the sidebar tree. */
 export interface PlaylistNode {
@@ -99,6 +101,9 @@ export class SidebarComponent implements OnInit {
   protected readonly library = inject(LibraryService);
   private readonly sync = inject(SyncService);
   private readonly ctx = inject(ContextMenuService);
+  protected readonly deviceSvc = inject(DeviceService);
+
+  protected readonly devices = this.deviceSvc.devices;
 
   protected readonly tree = computed(this.#computeTree.bind(this));
 
@@ -118,6 +123,107 @@ export class SidebarComponent implements OnInit {
 
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshPlaylists());
+    void this.ui.guard(this.deviceSvc.refresh());
+  }
+
+  // ---------------------------------------------------------------- //
+  // Devices
+  // ---------------------------------------------------------------- //
+
+  /**
+   * A device is shown attached when it has been seen since the app
+   * last looked. For a filesystem device that means its mount is still
+   * a directory, which `refresh_devices` re-checks.
+   */
+  protected isAttached(device: Device): boolean {
+    return device.lastSeenAt !== null;
+  }
+
+  protected isDeviceActive(device: Device): boolean {
+    return this.ui.libraryView() === 'device' && this.ui.activeDeviceId() === device.id;
+  }
+
+  protected isSyncing(device: Device): boolean {
+    return (
+      this.deviceSvc.runState() === 'running' && this.deviceSvc.progress()?.deviceId === device.id
+    );
+  }
+
+  /** Whole-run percentage, floored, for the row's inline indicator. */
+  protected syncPercent(): number {
+    const p = this.deviceSvc.progress();
+    if (!p || p.total === 0) return 0;
+    return Math.min(100, Math.floor((p.current / p.total) * 100));
+  }
+
+  protected deviceTitle(device: Device): string {
+    const where = device.mountPath ?? device.deviceKey;
+    return this.isAttached(device) ? `${device.name} — ${where}` : `${device.name} (not connected)`;
+  }
+
+  protected openDevice(device: Device): void {
+    this.library.activePlaylistId.set(null);
+    this.ui.activeDeviceId.set(device.id);
+    this.ui.columnBrowserOpen.set(false);
+    this.ui.libraryView.set('device');
+  }
+
+  protected rescanDevices(): void {
+    void this.ui.guard(this.deviceSvc.rescan());
+  }
+
+  protected onDeviceContextMenu(device: Device, event: MouseEvent): void {
+    const running = this.isSyncing(device);
+    this.ctx.show(event, [
+      {
+        label: 'Sync Now',
+        disabled: running,
+        action: () => void this.ui.guard(this.deviceSvc.runNow(device.id)),
+      },
+      {
+        label: 'Cancel Sync',
+        disabled: !running,
+        action: () => void this.ui.guard(this.deviceSvc.cancel(device.id)),
+      },
+      {
+        label: 'Preview Sync…',
+        action: () => {
+          this.openDevice(device);
+          void this.ui.guard(this.deviceSvc.preview(device.id));
+        },
+      },
+      { label: '---' },
+      { label: 'Device Settings…', action: () => this.openDevice(device) },
+      { label: '---' },
+      {
+        label: 'Forget Device',
+        destructive: true,
+        action: () => this.confirmForget(device),
+      },
+    ]);
+  }
+
+  /**
+   * Forgetting clears the manifest, so the next sync to this device
+   * re-uploads everything and can no longer prune what we wrote
+   * before. Worth a confirmation.
+   */
+  private confirmForget(device: Device): void {
+    this.ui.confirm.set({
+      title: 'Forget Device',
+      message:
+        `Forget “${device.name}”? Its settings and the record of what TuxTunes ` +
+        `put on it are removed. Files already on the device are left alone.`,
+      confirmLabel: 'Forget Device',
+      destructive: true,
+      onConfirm: async () => {
+        if (this.ui.activeDeviceId() === device.id) {
+          this.ui.activeDeviceId.set(null);
+          this.ui.libraryView.set('tracks');
+        }
+        await this.ui.guard(this.deviceSvc.forget(device.id));
+      },
+    });
   }
 
   /**

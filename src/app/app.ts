@@ -1,6 +1,7 @@
 import { Component, HostListener, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
 import { ConfirmDialogComponent } from './components/confirm-dialog/confirm-dialog.component';
 import { ContextMenuComponent } from './components/context-menu/context-menu.component';
+import { DeviceDetailComponent } from './components/device-detail/device-detail.component';
 import { ImportWizardComponent } from './components/import-wizard/import-wizard.component';
 import { MainContentComponent } from './components/main-content/main-content.component';
 import { MenuBarComponent } from './components/menu-bar/menu-bar.component';
@@ -20,6 +21,7 @@ import { UiService } from './services/ui.service';
   imports: [
     ConfirmDialogComponent,
     ContextMenuComponent,
+    DeviceDetailComponent,
     ImportWizardComponent,
     MainContentComponent,
     MenuBarComponent,
@@ -38,7 +40,7 @@ import { UiService } from './services/ui.service';
 })
 export class App implements OnInit {
   private readonly library = inject(LibraryService);
-  private readonly ui = inject(UiService);
+  protected readonly ui = inject(UiService);
 
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshStats());
