@@ -97,6 +97,51 @@ pub fn run() {
             // — the app continues without a tray rather than crashing.
             integration::tray::install(app.handle());
 
+            // Watch for library changes committed by other processes
+            // (tuxtunes-cli, direct sqlite edits) and tell the UI to
+            // refresh. A poll failure ends the watcher with a warning
+            // rather than crashing — the app just loses live refresh.
+            {
+                use tauri::Emitter;
+                let engine = Arc::clone(&state_ref.db).engine.clone();
+                let app_for_watch = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let conn = match crate::db::watch::checkout(&engine).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::warn!("db watch: checkout failed: {e}");
+                            return;
+                        }
+                    };
+                    let mut last = match crate::db::watch::data_version(&conn).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("db watch: baseline failed: {e}");
+                            return;
+                        }
+                    };
+                    loop {
+                        tokio::time::sleep(crate::db::watch::POLL_INTERVAL).await;
+                        match crate::db::watch::changed_since(&conn, last).await {
+                            Ok((v, changed)) => {
+                                last = v;
+                                if changed {
+                                    if let Err(e) =
+                                        app_for_watch.emit("library:external-change", ())
+                                    {
+                                        log::warn!("db watch: emit failed: {e}");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("db watch: poll failed, stopping: {e}");
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+
             // Mount the MPRIS server. Returns a handle the event
             // listeners below mutate on engine state changes; failures
             // are logged but don't take the app down (e.g. running

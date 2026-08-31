@@ -1,4 +1,4 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { TauriService } from './tauri.service';
 import { SmartRule } from '../models/smart';
 import { mapTrack, TrackRow, TrackRowRaw } from './playback.service';
@@ -128,8 +128,34 @@ export const DEFAULT_SORT: TrackSort = {
 };
 
 @Injectable({ providedIn: 'root' })
-export class LibraryService {
+export class LibraryService implements OnDestroy {
   private readonly tauri = inject(TauriService);
+
+  #unlistenExternal: (() => void) | null = null;
+
+  constructor() {
+    // The backend polls the database for commits made by other
+    // processes (tuxtunes-cli, direct edits) and emits this event.
+    // Refresh everything the sidebar and track list show; failures are
+    // swallowed — the next change or manual action retries anyway.
+    void this.tauri
+      .listen('library:external-change', () => {
+        // allSettled: a failed refresh never rejects or blocks the rest.
+        void Promise.allSettled([
+          this.refreshPlaylists(),
+          this.refreshTracks(),
+          this.refreshStats(),
+        ]);
+      })
+      .then((off) => {
+        this.#unlistenExternal = off;
+      });
+  }
+
+  ngOnDestroy(): void {
+    this.#unlistenExternal?.();
+    this.#unlistenExternal = null;
+  }
 
   readonly stats = signal<LibraryStats | null>(null);
   readonly tracks = signal<TrackRow[]>([]);

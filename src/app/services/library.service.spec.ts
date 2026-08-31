@@ -9,9 +9,18 @@ type InvokeMock = (cmd: string, args?: Record<string, unknown>) => Promise<unkno
 function build(invoke: InvokeMock): {
   svc: LibraryService;
   invoke: ReturnType<typeof vi.fn>;
+  emit: (event: string, payload?: unknown) => void;
 } {
   const invokeSpy = vi.fn(invoke as never);
-  const stubTauri = { invoke: invokeSpy } as unknown as TauriService;
+  const listeners = new Map<string, ((p: unknown) => void)[]>();
+  const listen = vi.fn(async (event: string, h: (p: unknown) => void) => {
+    listeners.set(event, [...(listeners.get(event) ?? []), h]);
+    return () => undefined;
+  });
+  const emit = (event: string, payload: unknown = undefined) => {
+    for (const h of listeners.get(event) ?? []) h(payload);
+  };
+  const stubTauri = { invoke: invokeSpy, listen } as unknown as TauriService;
   const injector = Injector.create({
     providers: [
       { provide: TauriService, useValue: stubTauri },
@@ -19,7 +28,7 @@ function build(invoke: InvokeMock): {
     ],
   });
   const svc = runInInjectionContext(injector, () => injector.get(LibraryService));
-  return { svc, invoke: invokeSpy };
+  return { svc, invoke: invokeSpy, emit };
 }
 
 const RAW_TRACK = {
@@ -329,6 +338,38 @@ describe('LibraryService playlists', () => {
     const { svc, invoke } = build(async () => []);
     await svc.removeTracksFromPlaylist(9, [1]);
     expect(invoke).not.toHaveBeenCalledWith('open_playlist', expect.anything());
+  });
+
+  it('an external-change event refreshes playlists, tracks, and stats', async () => {
+    const { svc, invoke, emit } = build(async () => []);
+    await Promise.resolve(); // listener registration settles
+    invoke.mockClear();
+    emit('library:external-change');
+    await new Promise((r) => setTimeout(r));
+    expect(invoke).toHaveBeenCalledWith('list_playlists');
+    expect(invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
+    expect(invoke).toHaveBeenCalledWith('get_library_stats');
+    void svc;
+  });
+
+  it('an external-change event reloads the open playlist instead of the library query', async () => {
+    const { svc, invoke, emit } = build(async (cmd) => (cmd === 'open_playlist' ? raws : []));
+    await svc.openPlaylist(9);
+    await Promise.resolve();
+    invoke.mockClear();
+    emit('library:external-change');
+    await new Promise((r) => setTimeout(r));
+    expect(invoke).toHaveBeenCalledWith('open_playlist', { playlistId: 9 });
+    expect(invoke).not.toHaveBeenCalledWith('list_tracks', expect.anything());
+  });
+
+  it('an external-change refresh failure is swallowed', async () => {
+    const { emit } = build(async () => {
+      throw new Error('db locked');
+    });
+    await Promise.resolve();
+    expect(() => emit('library:external-change')).not.toThrow();
+    await new Promise((r) => setTimeout(r));
   });
 
   it('ignores a stale open_playlist response after switching playlists', async () => {
