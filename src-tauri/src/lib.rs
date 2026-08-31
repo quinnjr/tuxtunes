@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod device;
 pub mod fs;
 pub mod integration;
 pub mod library;
