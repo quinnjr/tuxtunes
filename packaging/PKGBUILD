@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc="Music library manager and player (Tauri + Angular)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/quinnjr/tuxtunes"
-license=('custom')
+license=('MIT' 'Apache-2.0')
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
@@ -59,4 +59,6 @@ package() {
   install -Dm644 src-tauri/icons/128x128.png    "$pkgdir/usr/share/icons/hicolor/128x128/apps/tuxtunes.png"
   install -Dm644 src-tauri/icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/tuxtunes.png"
   install -Dm644 src-tauri/icons/icon.png       "$pkgdir/usr/share/icons/hicolor/512x512/apps/tuxtunes.png"
+  install -Dm644 LICENSE-MIT    "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 }
