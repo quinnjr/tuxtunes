@@ -11,22 +11,62 @@
       [style.left.px]="state.x"
       [style.top.px]="state.y"
     >
-      @for (item of state.items; track $index) {
+      @for (item of state.items; track $index; let i = $index) {
         @if (isDivider(item)) {
           <li class="my-1 h-px bg-border" role="separator"></li>
         } @else {
-          <li class="px-1">
+          <li class="relative px-1">
             <button
               type="button"
               [disabled]="item.disabled"
-              (click)="onItemClick(item); $event.stopPropagation()"
+              (click)="onItemClick(i, item); $event.stopPropagation()"
+              (mouseenter)="onItemEnter(i, item)"
               [class]="
                 'flex w-full items-center rounded-md px-2 py-1 text-left hover:bg-accent hover:text-white disabled:opacity-50 ' +
                 (item.destructive ? 'text-accent' : 'text-text-primary')
               "
             >
-              {{ item.label }}
+              @if (hasChecks(state.items)) {
+                <span class="w-4 shrink-0">{{ item.checked ? '✓' : '' }}</span>
+              }
+              <span class="flex-1">{{ item.label }}</span>
+              @if (hasChildren(item)) {
+                <span class="ml-2 shrink-0">▸</span>
+              }
             </button>
+            @if (hasChildren(item) && submenuIndex() === i) {
+              <ul
+                data-submenu
+                (mouseenter)="onSubmenuEnter()"
+                [class]="
+                  'mac-sheet absolute top-0 z-10 min-w-[180px] rounded-lg py-1 text-body ' +
+                  (flyoutFlipped(state.x) ? 'right-full -mr-1' : 'left-full -ml-1')
+                "
+              >
+                @for (child of item.children; track $index) {
+                  @if (isDivider(child)) {
+                    <li class="my-1 h-px bg-border" role="separator"></li>
+                  } @else {
+                    <li class="px-1">
+                      <button
+                        type="button"
+                        [disabled]="child.disabled"
+                        (click)="onChildClick(child); $event.stopPropagation()"
+                        [class]="
+                          'flex w-full items-center rounded-md px-2 py-1 text-left hover:bg-accent hover:text-white disabled:opacity-50 ' +
+                          (child.destructive ? 'text-accent' : 'text-text-primary')
+                        "
+                      >
+                        @if (hasChecks(item.children!)) {
+                          <span class="w-4 shrink-0">{{ child.checked ? '✓' : '' }}</span>
+                        }
+                        <span class="flex-1 truncate">{{ child.label }}</span>
+                      </button>
+                    </li>
+                  }
+                }
+              </ul>
+            }
           </li>
         }
       }

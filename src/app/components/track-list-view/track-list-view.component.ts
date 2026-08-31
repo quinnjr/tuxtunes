@@ -209,6 +209,11 @@ export class TrackListViewComponent implements OnInit {
           for (const target of [...targets].reverse()) this.playback.playNext(target);
         },
       },
+      {
+        label: 'Add to Playlist',
+        children: this.addToPlaylistChildren(targets),
+      },
+      ...this.removeFromPlaylistItems(targets),
       { label: '---' },
       {
         label: 'Show in Files',
@@ -232,6 +237,65 @@ export class TrackListViewComponent implements OnInit {
   }
 
   /**
+   * Submenu targets: the user's own manual playlists (synced ones get
+   * rewritten on the next sync, so adding there would silently vanish),
+   * plus a "New Playlist…" shortcut that creates one and adds the
+   * selection in a single flow.
+   */
+  private addToPlaylistChildren(targets: TrackRow[]): ContextMenuItem[] {
+    const ids = targets.map((t) => t.id);
+    const own = this.library
+      .playlists()
+      .filter((p) => p.kind === 'regular' && !p.synced)
+      .map((p): ContextMenuItem => ({
+        label: p.name,
+        action: async () => {
+          await this.ui.guard(this.library.addTracksToPlaylist(p.id, ids));
+        },
+      }));
+    return [
+      ...own,
+      ...(own.length > 0 ? [{ label: '---' }] : []),
+      {
+        label: 'New Playlist…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'New Playlist',
+            initial: '',
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.createPlaylistWithTracks(name, ids));
+            },
+          }),
+      },
+    ];
+  }
+
+  /**
+   * "Remove from Playlist" — only while one of the user's own manual
+   * playlists is on screen. A synced playlist's rows come back on the
+   * next sync (and the backend refuses to write them anyway).
+   */
+  private removeFromPlaylistItems(targets: TrackRow[]): ContextMenuItem[] {
+    const active = this.library.activePlaylist();
+    if (active?.kind !== 'regular' || active.synced) return [];
+    const single = targets.length === 1;
+    return [
+      {
+        label: single ? 'Remove from Playlist' : `Remove ${targets.length} from Playlist`,
+        action: async () => {
+          await this.ui.guard(
+            this.library.removeTracksFromPlaylist(
+              active.id,
+              targets.map((t) => t.id),
+            ),
+          );
+          this.selection.set(new Set());
+        },
+      },
+    ];
+  }
+
+  /**
    * Remove (or trash) each target. A failure is reported and the rest
    * still proceed; the list and stats refresh afterwards either way so
    * the view matches whatever actually happened.
@@ -248,15 +312,43 @@ export class TrackListViewComponent implements OnInit {
     await this.ui.guard(this.library.refreshStats());
   }
 
+  /**
+   * Right-click on the header row: every column with a checkmark for
+   * the visible ones — same state the [⚙] picker edits.
+   */
+  protected onHeaderContextMenu(event: MouseEvent): void {
+    const items: ContextMenuItem[] = ALL_COLUMNS.map((col) => ({
+      label: col.label,
+      checked: this.isColumnVisible(col.id),
+      action: () => this.toggleColumn(col.id),
+    }));
+    this.ctx.show(event, items);
+  }
+
   protected togglePicker(event: MouseEvent): void {
     event.stopPropagation();
     this.pickerOpen.update((v) => !v);
   }
 
   protected toggleColumn(id: SortColumn): void {
-    this.visibleColumnIds.update((ids) =>
-      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
-    );
+    this.visibleColumnIds.update((ids) => {
+      if (!ids.includes(id)) return [...ids, id];
+      // Never hide the last column — an empty table has no way back in.
+      if (ids.length === 1) return ids;
+      return ids.filter((x) => x !== id);
+    });
+  }
+
+  /**
+   * The picker's full-screen backdrop lives inside the header, so a
+   * right-click on it would bubble into onHeaderContextMenu and open
+   * the column menu over the picker. Swallow it and close the picker
+   * instead — same as a plain click.
+   */
+  protected onPickerBackdropContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.closePicker();
   }
 
   protected isColumnVisible(id: SortColumn): boolean {

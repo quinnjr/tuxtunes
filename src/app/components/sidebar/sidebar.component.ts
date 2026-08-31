@@ -176,13 +176,47 @@ export class SidebarComponent implements OnInit {
   }
 
   /**
-   * Right-click: smart playlists can be edited or deleted; synced
-   * playlists only deleted (they come back on the next sync, so that's
-   * offered as "Remove until next sync").
+   * The two creation items, shared by the node and area menus. A
+   * folder's menu passes its own id so the new playlist lands inside
+   * it; other rows pass their parent so the sibling goes next to them.
+   */
+  private newPlaylistItems(parentId: number | null): ContextMenuItem[] {
+    return [
+      {
+        label: 'New Playlist…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'New Playlist',
+            initial: '',
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.createPlaylist(name, parentId));
+            },
+          }),
+      },
+      {
+        label: 'New Smart Playlist…',
+        action: () => this.ui.smartEditor.set({ playlistId: null }),
+      },
+    ];
+  }
+
+  /**
+   * The playlists() signal may refresh (a sync finishing) while the
+   * menu is open; actions read the row again by id so they never work
+   * from a stale snapshot.
+   */
+  private currentPlaylist(id: number, fallback: Playlist): Playlist {
+    return this.library.playlists().find((x) => x.id === id) ?? fallback;
+  }
+
+  /**
+   * Right-click on a playlist/folder row: rename and delete for
+   * everything, edit for smart playlists, plus the creation items.
+   * A synced row's rename and delete only last until the next sync
+   * rewrites it from the source — the labels say so.
    */
   protected onPlaylistContextMenu(node: PlaylistNode, event: MouseEvent): void {
     const p = node.playlist;
-    if (this.isFolder(node)) return;
     const items: ContextMenuItem[] = [];
     if (p.kind === 'smart') {
       items.push({
@@ -190,14 +224,57 @@ export class SidebarComponent implements OnInit {
         action: () => this.ui.smartEditor.set({ playlistId: p.id }),
       });
     }
-    items.push({
-      label: p.kind === 'smart' ? 'Delete' : 'Remove until next sync',
-      destructive: true,
-      action: async () => {
-        await this.ui.guard(this.library.deletePlaylist(p.id));
+    items.push(
+      {
+        label: p.synced ? 'Rename until next sync…' : 'Rename…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'Rename Playlist',
+            initial: this.currentPlaylist(p.id, p).name,
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.renamePlaylist(p.id, name));
+            },
+          }),
       },
-    });
+      { label: '---' },
+      {
+        label: p.synced ? 'Remove until next sync' : 'Delete',
+        destructive: true,
+        action: () => this.deleteWithFolderGuard(node),
+      },
+      { label: '---' },
+      ...this.newPlaylistItems(this.isFolder(node) ? p.id : p.parentId),
+    );
     this.ctx.show(event, items);
+  }
+
+  /**
+   * Deleting a folder orphans its children to the sidebar root — more
+   * than the clicked row — so that case confirms first.
+   */
+  private async deleteWithFolderGuard(node: PlaylistNode): Promise<void> {
+    const p = node.playlist;
+    if (this.isFolder(node) && node.children.length > 0) {
+      const n = node.children.length;
+      this.ui.confirm.set({
+        title: 'Delete Folder',
+        message:
+          `Delete the folder “${p.name}”? Its ${n} playlist${n === 1 ? '' : 's'} ` +
+          `will move to the top level.`,
+        confirmLabel: 'Delete Folder',
+        destructive: true,
+        onConfirm: async () => {
+          await this.ui.guard(this.library.deletePlaylist(p.id));
+        },
+      });
+      return;
+    }
+    await this.ui.guard(this.library.deletePlaylist(p.id));
+  }
+
+  /** Right-click on the playlist section's empty space. */
+  protected onPlaylistAreaContextMenu(event: MouseEvent): void {
+    this.ctx.show(event, this.newPlaylistItems(null));
   }
 
   /** Folders expand/collapse; playlists open in the track list. */

@@ -54,6 +54,9 @@ export interface Playlist {
   parentId: number | null;
   sortOrder: number;
   trackCount: number | null;
+  /** True for playlists that came from a sync source — deleting one
+   * only lasts until the next sync. */
+  synced: boolean;
 }
 
 interface PlaylistRaw {
@@ -63,6 +66,7 @@ interface PlaylistRaw {
   parent_id: number | null;
   sort_order: number;
   cached_track_count: number | null;
+  sync_source_id: number | null;
 }
 
 export interface AddFolderSummary {
@@ -273,6 +277,75 @@ export class LibraryService {
     if (this.activePlaylistId() === playlistId) await this.refreshTracks();
   }
 
+  /**
+   * Create an empty user-owned regular playlist (inside `parentId`
+   * when given); returns its id. The playlist exists once the invoke
+   * resolves — a failed sidebar refresh must not make the caller treat
+   * the creation as failed, so that error is swallowed here and the
+   * next refresh corrects the sidebar.
+   */
+  async createPlaylist(name: string, parentId: number | null = null): Promise<number> {
+    const id = await this.tauri.invoke<number>('create_playlist', {
+      name: name.trim(),
+      parentId,
+    });
+    try {
+      await this.refreshPlaylists();
+    } catch {
+      // Sidebar is stale, not wrong — the id below is still valid.
+    }
+    return id;
+  }
+
+  /**
+   * The "New Playlist… from a track selection" flow: create, add, then
+   * refresh once. Composed here so the gesture costs a single sidebar
+   * refetch and the add still runs even if a refresh would have failed.
+   */
+  async createPlaylistWithTracks(
+    name: string,
+    trackIds: number[],
+    parentId: number | null = null,
+  ): Promise<number> {
+    const id = await this.tauri.invoke<number>('create_playlist', {
+      name: name.trim(),
+      parentId,
+    });
+    await this.tauri.invoke<void>('add_tracks_to_playlist', { playlistId: id, trackIds });
+    await this.refreshPlaylists();
+    return id;
+  }
+
+  async renamePlaylist(playlistId: number, name: string): Promise<void> {
+    await this.tauri.invoke<void>('rename_playlist', { playlistId, name });
+    await this.refreshPlaylists();
+  }
+
+  /**
+   * Append tracks to a regular playlist. Refreshes the sidebar counts,
+   * and — when the target is the playlist on screen — the visible rows
+   * too, in parallel.
+   */
+  async addTracksToPlaylist(playlistId: number, trackIds: number[]): Promise<void> {
+    await this.tauri.invoke<void>('add_tracks_to_playlist', { playlistId, trackIds });
+    await this.#refreshAfterPlaylistEdit(playlistId);
+  }
+
+  /**
+   * Remove tracks from a regular playlist. When that playlist is the
+   * one on screen, reload its rows so they disappear immediately.
+   */
+  async removeTracksFromPlaylist(playlistId: number, trackIds: number[]): Promise<void> {
+    await this.tauri.invoke<void>('remove_tracks_from_playlist', { playlistId, trackIds });
+    await this.#refreshAfterPlaylistEdit(playlistId);
+  }
+
+  async #refreshAfterPlaylistEdit(playlistId: number): Promise<void> {
+    const refreshes = [this.refreshPlaylists()];
+    if (this.activePlaylistId() === playlistId) refreshes.push(this.refreshTracks());
+    await Promise.all(refreshes);
+  }
+
   async deletePlaylist(playlistId: number): Promise<void> {
     await this.tauri.invoke<void>('delete_playlist', { playlistId });
     if (this.activePlaylistId() === playlistId) this.activePlaylistId.set(null);
@@ -289,6 +362,7 @@ export class LibraryService {
         parentId: r.parent_id,
         sortOrder: r.sort_order,
         trackCount: r.cached_track_count,
+        synced: r.sync_source_id !== null,
       })),
     );
   }

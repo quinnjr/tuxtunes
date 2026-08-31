@@ -61,6 +61,47 @@ pub async fn get_smart_playlist_rule(
     }
 }
 
+/// Create an empty user-owned regular (manual) playlist, optionally
+/// inside a folder.
+#[tauri::command]
+pub async fn create_playlist(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    parent_id: Option<i64>,
+) -> Result<i64, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("playlist name cannot be empty".to_string());
+    }
+    playlists::create_regular(&state.db.engine, trimmed, parent_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Append tracks to a regular playlist (order preserved).
+#[tauri::command]
+pub async fn add_tracks_to_playlist(
+    state: tauri::State<'_, AppState>,
+    playlist_id: i64,
+    track_ids: Vec<i64>,
+) -> Result<(), String> {
+    playlists::add_tracks(&state.db.engine, playlist_id, &track_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Remove every occurrence of the given tracks from a regular playlist.
+#[tauri::command]
+pub async fn remove_tracks_from_playlist(
+    state: tauri::State<'_, AppState>,
+    playlist_id: i64,
+    track_ids: Vec<i64>,
+) -> Result<(), String> {
+    playlists::remove_tracks(&state.db.engine, playlist_id, &track_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn rename_playlist(
     state: tauri::State<'_, AppState>,

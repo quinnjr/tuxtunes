@@ -6,6 +6,7 @@ function fakeMouseEvent(x: number, y: number): MouseEvent {
     clientX: x,
     clientY: y,
     preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
   } as unknown as MouseEvent;
 }
 
@@ -25,6 +26,25 @@ describe('ContextMenuService', () => {
     expect(state?.x).toBe(120);
     expect(state?.y).toBe(80);
     expect(state?.items).toEqual([{ label: 'Play' }]);
+  });
+
+  it('show() stops propagation so the opening event cannot reach the document-level dismiss handler', () => {
+    const svc = new ContextMenuService();
+    const evt = fakeMouseEvent(0, 0);
+    svc.show(evt, [{ label: 'Play' }]);
+    expect(evt.stopPropagation).toHaveBeenCalled();
+  });
+
+  it('show() clamps the position so the menu stays inside the viewport', () => {
+    // jsdom default viewport: 1024x768.
+    const svc = new ContextMenuService();
+    const many = Array.from({ length: 20 }, (_, i) => ({ label: `Item ${i}` }));
+    svc.show(fakeMouseEvent(1010, 760), many);
+    const state = svc.open()!;
+    expect(state.x).toBeLessThanOrEqual(1024 - 200);
+    expect(state.y).toBeLessThanOrEqual(768 - 20 * 30);
+    expect(state.x).toBeGreaterThanOrEqual(0);
+    expect(state.y).toBeGreaterThanOrEqual(0);
   });
 
   it('hide() returns to null', () => {

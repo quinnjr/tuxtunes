@@ -8,6 +8,13 @@ export interface ContextMenuItem {
   destructive?: boolean;
   /** Disabled items are visible but not clickable. */
   disabled?: boolean;
+  /** Show a leading checkmark (column toggles and the like). */
+  checked?: boolean;
+  /**
+   * Submenu items (one level). An item with children ignores `action`;
+   * hovering or clicking it opens the flyout instead.
+   */
+  children?: ContextMenuItem[];
 }
 
 export interface ContextMenuState {
@@ -24,10 +31,25 @@ export class ContextMenuService {
   /**
    * Show the menu at the event's screen position. The caller passes the
    * action items; the service handles geometry, dismissal, and ESC.
+   *
+   * Propagation must stop here: the same contextmenu event would
+   * otherwise bubble on to ContextMenuComponent's document-level
+   * dismiss handler and close the menu in the very dispatch that
+   * opened it. It also keeps an ancestor's area menu from replacing a
+   * row's menu.
    */
   show(event: MouseEvent, items: ContextMenuItem[]): void {
     event.preventDefault();
-    this.open.set({ x: event.clientX, y: event.clientY, items });
+    event.stopPropagation();
+    // Keep the menu on screen. The app shell is overflow-hidden, so an
+    // off-viewport menu is simply unreachable. Estimated dimensions
+    // (min-width 200px, ~30px per row) err slightly large, which only
+    // pulls the menu a few px further from the edge.
+    const width = 220;
+    const height = items.length * 30 + 10;
+    const x = Math.max(0, Math.min(event.clientX, window.innerWidth - width));
+    const y = Math.max(0, Math.min(event.clientY, window.innerHeight - height));
+    this.open.set({ x, y, items });
   }
 
   hide(): void {

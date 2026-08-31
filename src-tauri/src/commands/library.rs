@@ -281,7 +281,11 @@ pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> R
         .engine
         .raw_sql_execute(sql, &[FilterValue::Int(track_id)])
         .await
-        .map(|_| ())
+        .map_err(|e| e.to_string())?;
+    // Leave no dangling playlist entry behind — SQLite reuses rowids,
+    // so a stale id could later resolve to an unrelated track.
+    crate::db::playlists::prune_track(&state.db.engine, track_id)
+        .await
         .map_err(|e| e.to_string())
 }
 

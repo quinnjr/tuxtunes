@@ -1,0 +1,18 @@
+@if (ui.confirm(); as req) {
+  <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
+    <div class="mac-sheet flex w-[380px] flex-col gap-4 p-5">
+      <h2 class="text-headline font-semibold text-text-primary">{{ req.title }}</h2>
+      <p class="text-body text-text-secondary">{{ req.message }}</p>
+      <div class="flex justify-end gap-2">
+        <button type="button" class="mac-btn h-7 px-3 text-body" (click)="cancel()">Cancel</button>
+        <button
+          type="button"
+          [class]="'mac-btn h-7 px-3 text-body ' + (req.destructive ? 'text-accent' : '')"
+          (click)="confirm()"
+        >
+          {{ req.confirmLabel }}
+        </button>
+      </div>
+    </div>
+  </div>
+}

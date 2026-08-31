@@ -3,6 +3,21 @@ import { toErrorMessage } from '../utils/errors';
 
 export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings';
 
+export interface NamePromptRequest {
+  title: string;
+  initial: string;
+  onSubmit: (name: string) => void | Promise<void>;
+}
+
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  /** Label for the confirming button, e.g. "Delete Folder". */
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void | Promise<void>;
+}
+
 @Injectable({ providedIn: 'root' })
 export class UiService {
   readonly importWizardOpen = signal(false);
@@ -22,6 +37,19 @@ export class UiService {
    * playlist; a number = editing that smart playlist's rule.
    */
   readonly smartEditor = signal<{ playlistId: number | null } | null>(null);
+
+  /**
+   * In-app replacement for `window.prompt`: null = closed; otherwise
+   * the modal shows `title` with `initial` in the input and calls
+   * `onSubmit` with the trimmed non-empty name.
+   */
+  readonly namePrompt = signal<NamePromptRequest | null>(null);
+
+  /**
+   * In-app confirmation dialog for actions that destroy more than the
+   * thing that was clicked (deleting a folder full of playlists).
+   */
+  readonly confirm = signal<ConfirmRequest | null>(null);
 
   /**
    * Most recent user-facing failure (a backend command rejected, a
