@@ -6,6 +6,9 @@
 //! the [`transport::DeviceTransport`] trait, so the platform-specific
 //! backends stay a thin, swappable leaf.
 
+pub mod engine;
+#[cfg(test)]
+mod engine_tests;
 pub mod events;
 pub mod layout;
 pub mod manifest;

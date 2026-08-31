@@ -21,7 +21,7 @@ CREATE TABLE "devices" (
     "selection"              TEXT NOT NULL DEFAULT '[]',
     "profile_override"       TEXT NOT NULL DEFAULT '{}',
     "transcode_policy"       TEXT NOT NULL DEFAULT '{}',
-    "layout_template"        TEXT NOT NULL DEFAULT '{album_artist}/{album}/{disc}-{track} {title}.{ext}',
+    "layout_template"        TEXT NOT NULL DEFAULT '{album_artist}/{album}/{disc:02}-{track:02} {title}.{ext}',
     "stats_cursors"          TEXT NOT NULL DEFAULT '{}',
     "conflict_rules"         TEXT NOT NULL DEFAULT '{}',
     "auto_sync"              INTEGER NOT NULL DEFAULT 0,

@@ -4,24 +4,19 @@ use prax_query::filter::FilterValue;
 use prax_sqlite::raw::SqliteRawEngine;
 use serde::{Deserialize, Serialize};
 
-/// What a user picked to push to a device.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SelectionKind {
-    Playlist,
-    Album,
-    Smart,
+/// One thing the user picked to push to a device.
+///
+/// Albums are addressed by `(album_artist, album)` rather than an id,
+/// because that is how the library models them — there is no albums
+/// table, only a grouping over `tracks`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SelectionEntry {
+    Playlist { id: i64 },
+    Smart { id: i64 },
+    Album { album_artist: String, album: String },
     /// The entire library.
     All,
-}
-
-/// One entry in a device's `selection` column.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SelectionEntry {
-    pub kind: SelectionKind,
-    /// The playlist or album id. Ignored for [`SelectionKind::All`].
-    #[serde(default)]
-    pub id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -280,17 +275,25 @@ mod tests {
             .await
             .unwrap();
         let sel = vec![
-            SelectionEntry {
-                kind: SelectionKind::Playlist,
-                id: 7,
+            SelectionEntry::Playlist { id: 7 },
+            SelectionEntry::Album {
+                album_artist: "Bonobo".into(),
+                album: "Migration".into(),
             },
-            SelectionEntry {
-                kind: SelectionKind::Album,
-                id: 9,
-            },
+            SelectionEntry::All,
         ];
         update_selection(&db.engine, id, &sel).await.unwrap();
         assert_eq!(get(&db.engine, id).await.unwrap().selection, sel);
+    }
+
+    #[test]
+    fn selection_entries_serialise_with_a_kind_tag() {
+        let json = serde_json::to_string(&SelectionEntry::Playlist { id: 7 }).unwrap();
+        assert_eq!(json, r#"{"kind":"playlist","id":7}"#);
+        assert_eq!(
+            serde_json::to_string(&SelectionEntry::All).unwrap(),
+            r#"{"kind":"all"}"#
+        );
     }
 
     #[tokio::test]

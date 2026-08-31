@@ -262,7 +262,7 @@ model Device {
     stats_cursors    Json
     conflict_rules   Json
 
-    layout_template  String      @default("{album_artist}/{album}/{disc}-{track} {title}.{ext}")
+    layout_template  String      @default("{album_artist}/{album}/{disc:02}-{track:02} {title}.{ext}")
     auto_sync        Boolean     @default(false)
     /// Whether deselected tracks are deleted from the device. Only ever
     /// deletes objects recorded in `device_objects`.
