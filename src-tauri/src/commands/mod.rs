@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod device;
 pub mod library;
 pub mod playback;
 pub mod playlists;
