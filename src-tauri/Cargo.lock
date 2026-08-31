@@ -3481,7 +3481,7 @@ checksum = "31554011e90f1736cbccb94e6cb32b1dd1c443613f7cf116c9ca2bb091ebdcf3"
 dependencies = [
  "pastey",
  "prax-codegen",
- "prax-query",
+ "prax-query 0.8.2",
  "prax-schema",
 ]
 
@@ -3492,6 +3492,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "784a636ce340023820313295cc2b649e62b668b81cf2daf7671e638aad61ce6e"
 dependencies = [
  "async-trait",
+ "bumpalo",
+ "chrono",
+ "futures",
+ "indexmap 2.14.0",
+ "num_cpus",
+ "owo-colors",
+ "parking_lot",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "smol_str",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "prax-query"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "966388829c94c75905edcf7602a79633cfc1021c4812147afc4abee706bd5c93"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
  "bumpalo",
  "chrono",
  "futures",
@@ -3540,7 +3567,7 @@ dependencies = [
  "chrono",
  "futures",
  "parking_lot",
- "prax-query",
+ "prax-query 0.8.2",
  "rusqlite",
  "rust_decimal",
  "serde",
@@ -5473,7 +5500,7 @@ dependencies = [
  "prax-codegen",
  "prax-migrate",
  "prax-orm",
- "prax-query",
+ "prax-query 0.12.0",
  "prax-schema",
  "prax-sqlite",
  "serde",
