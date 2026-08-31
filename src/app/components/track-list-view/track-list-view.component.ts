@@ -216,6 +216,11 @@ export class TrackListViewComponent implements OnInit {
       ...this.removeFromPlaylistItems(targets),
       { label: '---' },
       {
+        label: 'Get Info…',
+        disabled: !single,
+        action: () => this.ui.trackInfo.set({ trackId: t.id }),
+      },
+      {
         label: 'Show in Files',
         disabled: !single,
         action: async () => {

@@ -172,6 +172,34 @@ describe('LibraryService', () => {
     expect(rows[0].title).toBe('Title');
   });
 
+  it('updateTrackMetadata forwards the patch and refreshes the track list', async () => {
+    const { svc, invoke } = build(async () => []);
+    await svc.updateTrackMetadata(7, {
+      title: 'New',
+      artist: 'blink-182',
+      album: null,
+      albumArtist: null,
+      genre: 'Punk',
+      year: 2001,
+      trackNumber: 1,
+      discNumber: null,
+    });
+    expect(invoke).toHaveBeenCalledWith('update_track_metadata', {
+      trackId: 7,
+      edit: {
+        title: 'New',
+        artist: 'blink-182',
+        album: null,
+        albumArtist: null,
+        genre: 'Punk',
+        year: 2001,
+        trackNumber: 1,
+        discNumber: null,
+      },
+    });
+    expect(invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
+  });
+
   it('tracksById() rebuilds on every tracks() mutation', () => {
     const { svc } = build(async () => {});
     expect(svc.tracksById().size).toBe(0);

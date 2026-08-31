@@ -51,6 +51,9 @@ export class UiService {
    */
   readonly confirm = signal<ConfirmRequest | null>(null);
 
+  /** Track-info (Get Info…) editor: null = closed. */
+  readonly trackInfo = signal<{ trackId: number } | null>(null);
+
   /**
    * Most recent user-facing failure (a backend command rejected, a
    * file could not be played, …). Shown by the status bar and cleared

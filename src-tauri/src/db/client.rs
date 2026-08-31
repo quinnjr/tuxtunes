@@ -26,6 +26,8 @@ const COMPOSITE_SYNC_INDEXES_MIGRATION: &str =
     include_str!("../../prax/migrations/0002_composite_sync_indexes/migration.sql");
 const PLAYLIST_LOCAL_EDITS_MIGRATION: &str =
     include_str!("../../prax/migrations/0003_playlist_local_edits/migration.sql");
+const TRACK_USER_EDITS_MIGRATION: &str =
+    include_str!("../../prax/migrations/0004_track_user_edits/migration.sql");
 
 /// A single migration entry: a stable name (the ledger key), the SQL batch
 /// to run, and a backfill probe used only when the ledger has no row for
@@ -65,6 +67,13 @@ static MIGRATIONS: &[Migration] = &[
         sql: PLAYLIST_LOCAL_EDITS_MIGRATION,
         marker_sql: "SELECT COUNT(*) FROM sqlite_master \
              WHERE type = 'table' AND name = 'playlist_tombstones'",
+        marker_count: 1,
+    },
+    Migration {
+        name: "0004_track_user_edits",
+        sql: TRACK_USER_EDITS_MIGRATION,
+        marker_sql: "SELECT COUNT(*) FROM pragma_table_info('tracks') \
+             WHERE name = 'user_edited'",
         marker_count: 1,
     },
 ];
@@ -278,7 +287,8 @@ mod tests {
             vec![
                 "0001_initial".to_string(),
                 "0002_composite_sync_indexes".to_string(),
-                "0003_playlist_local_edits".to_string()
+                "0003_playlist_local_edits".to_string(),
+                "0004_track_user_edits".to_string()
             ],
             "ledger should carry every migration after upgrade"
         );

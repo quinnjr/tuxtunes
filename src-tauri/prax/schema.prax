@@ -96,6 +96,9 @@ model Track {
     last_played     DateTime?
     last_skipped    DateTime?
     loved           Boolean      @default(false)
+    // Set when the user edits descriptive metadata locally; the sync
+    // reconciler then preserves those fields over the source's.
+    user_edited     Boolean      @default(false)
 
     // Dates
     date_added      DateTime     @default(now())
