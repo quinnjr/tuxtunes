@@ -148,9 +148,12 @@ pub enum TransportError {
 
 /// A connected device's object store.
 ///
-/// Implementations are confined to a single worker task — `libmtp` is
-/// not thread-safe per handle — so this is `Send` but not `Sync`.
-pub trait DeviceTransport: Send {
+/// `Send + Sync` so the engine's futures stay `Send` under
+/// `tokio::spawn`. An implementation wrapping a library that is not
+/// thread-safe per handle — `libmtp` is the case in point — owns an
+/// internal mutex rather than relaxing this bound; the engine drives
+/// one device from one task anyway, so the lock is never contended.
+pub trait DeviceTransport: Send + Sync {
     fn capabilities(&self) -> Capabilities;
 
     /// Immediate children of `dir`. A missing directory yields an empty

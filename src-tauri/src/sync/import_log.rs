@@ -36,19 +36,35 @@ impl ImportLog {
     /// Resolve the per-app log dir (`app_log_dir()/logs`) and open a per-run
     /// file. Used in production from the sync worker.
     pub fn create<R: Runtime>(app: &AppHandle<R>, source_id: i64) -> io::Result<Self> {
+        Self::create_named(app, "import", source_id)
+    }
+
+    /// As [`Self::create`], but with a caller-chosen file-name prefix so
+    /// each subsystem's runs stay distinguishable in the log directory:
+    /// `import-*` for the ITL sync, `device-*` for a device push.
+    pub fn create_named<R: Runtime>(
+        app: &AppHandle<R>,
+        prefix: &str,
+        id: i64,
+    ) -> io::Result<Self> {
         let base = app
             .path()
             .app_log_dir()
             .map_err(|e| io::Error::other(e.to_string()))?;
-        Self::create_in_dir(&base.join("logs"), source_id)
+        Self::create_named_in_dir(&base.join("logs"), prefix, id)
     }
 
     /// Testable core: ensure `dir` exists and open `import-<id>-<ts>.log`.
     pub fn create_in_dir(dir: &Path, source_id: i64) -> io::Result<Self> {
+        Self::create_named_in_dir(dir, "import", source_id)
+    }
+
+    /// Testable core: ensure `dir` exists and open `<prefix>-<id>-<ts>.log`.
+    pub fn create_named_in_dir(dir: &Path, prefix: &str, id: i64) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
         // Colons are illegal in filenames on some platforms — use dashes.
         let ts = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S-%3f");
-        let path = dir.join(format!("import-{source_id}-{ts}.log"));
+        let path = dir.join(format!("{prefix}-{id}-{ts}.log"));
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok(Self {
             writer: Mutex::new(BufWriter::new(file)),
