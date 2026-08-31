@@ -1,5 +1,7 @@
 pub mod albums;
 pub mod client;
+pub mod device_objects;
+pub mod devices;
 pub mod distinct;
 pub mod playlists;
 pub mod preferences;
