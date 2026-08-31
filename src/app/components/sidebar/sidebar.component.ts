@@ -212,8 +212,8 @@ export class SidebarComponent implements OnInit {
   /**
    * Right-click on a playlist/folder row: rename and delete for
    * everything, edit for smart playlists, plus the creation items.
-   * A synced row's rename and delete only last until the next sync
-   * rewrites it from the source — the labels say so.
+   * Renames and deletes persist across syncs — the backend records a
+   * name override / tombstone so the reconciler honors them.
    */
   protected onPlaylistContextMenu(node: PlaylistNode, event: MouseEvent): void {
     const p = node.playlist;
@@ -226,7 +226,7 @@ export class SidebarComponent implements OnInit {
     }
     items.push(
       {
-        label: p.synced ? 'Rename until next sync…' : 'Rename…',
+        label: 'Rename…',
         action: () =>
           this.ui.namePrompt.set({
             title: 'Rename Playlist',
@@ -238,7 +238,7 @@ export class SidebarComponent implements OnInit {
       },
       { label: '---' },
       {
-        label: p.synced ? 'Remove until next sync' : 'Delete',
+        label: 'Delete',
         destructive: true,
         action: () => this.deleteWithFolderGuard(node),
       },

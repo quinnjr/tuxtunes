@@ -152,6 +152,10 @@ model Playlist {
     children        Playlist[]     @relation("PlaylistFolder")
     sort_order      Int            @default(0)
 
+    // Set when the user renames the playlist locally; the sync
+    // reconciler then preserves the local name over the source's.
+    name_overridden Boolean        @default(false)
+
     // Membership (for regular) / rule tree (for smart). Exactly one is populated by
     // the application layer at insert time depending on `kind`.
     track_entries   Json
@@ -190,6 +194,17 @@ model SyncSource {
     playlists        Playlist[]
 
     @@map("sync_sources")
+}
+
+/// A synced playlist the user deleted locally. The reconciler skips
+/// these (sync_source_id, persistent_id) pairs so the deletion is
+/// permanent instead of lasting until the next sync.
+model PlaylistTombstone {
+    sync_source_id  Int
+    persistent_id   String
+
+    @@id([sync_source_id, persistent_id])
+    @@map("playlist_tombstones")
 }
 
 /// Singleton app settings (key/value JSON).
