@@ -94,30 +94,57 @@
       class="mt-4 flex items-center justify-between px-4 pb-2 text-caption font-semibold uppercase tracking-wide text-text-muted"
     >
       <span>Devices</span>
-      <button
-        type="button"
-        class="rounded px-1 text-text-muted hover:text-text-primary"
-        title="Rescan for devices"
-        aria-label="Rescan for devices"
-        (click)="rescanDevices()"
-      >
-        <svg
-          class="h-3.5 w-3.5"
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
+      <div class="flex items-center gap-0.5">
+        <button
+          type="button"
+          class="rounded px-1 text-text-muted hover:text-text-primary"
+          title="Rescan for devices"
+          aria-label="Rescan for devices"
+          (click)="rescanDevices()"
         >
-          <path
-            d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3h-3"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      </button>
+          <svg
+            class="h-3.5 w-3.5"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <path
+              d="M16 10a6 6 0 1 1-1.8-4.3M16 3v3h-3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="rounded px-1 text-text-muted hover:text-text-primary"
+          title="Add a device…"
+          aria-label="Add a device"
+          data-testid="add-device"
+          (click)="addDevice()"
+        >
+          <svg
+            class="h-3.5 w-3.5"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <path d="M10 4v12M4 10h12" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
     </div>
     @if (devices().length === 0) {
-      <div class="px-4 py-1 italic text-text-muted">No devices connected</div>
+      <button
+        type="button"
+        class="w-full px-4 py-1 text-left italic text-text-muted hover:text-accent"
+        data-testid="add-first-device"
+        (click)="addDevice()"
+      >
+        No devices connected — add one…
+      </button>
     } @else {
       <div class="flex max-h-48 flex-col gap-0.5 overflow-y-auto px-2">
         @for (device of devices(); track device.id) {

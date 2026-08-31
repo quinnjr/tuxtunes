@@ -32,12 +32,35 @@ pub fn render_m3u8(entries: &[PlaylistEntry], playlist_dir: &DevicePath) -> Stri
         let Some(rel) = e.device_path.relative_to(playlist_dir) else {
             continue;
         };
+        // A newline in a tag would end the #EXTINF line early and the
+        // parser would read the rest as the next entry's path, adding
+        // a phantom track and shifting every path after it.
         out.push_str(&format!(
             "#EXTINF:{},{} - {}\n{}\n",
-            e.duration_secs, e.artist, e.title, rel
+            e.duration_secs,
+            one_line(&e.artist),
+            one_line(&e.title),
+            rel
         ));
     }
     out
+}
+
+/// Collapse control characters to spaces so a tag cannot break the
+/// line-oriented M3U format.
+fn one_line(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_space = false;
+    for ch in s.chars() {
+        let mapped = if ch.is_control() { ' ' } else { ch };
+        let is_space = mapped == ' ';
+        if is_space && last_was_space {
+            continue;
+        }
+        out.push(mapped);
+        last_was_space = is_space;
+    }
+    out.trim().to_string()
 }
 
 /// Build the on-device file name for a playlist.
@@ -86,6 +109,31 @@ mod tests {
              #EXTINF:243,Bonobo - Kerala\n\
              ../Bonobo/Migration/01-02 Kerala.flac\n"
         );
+    }
+
+    #[test]
+    fn a_newline_in_a_tag_cannot_forge_an_extra_entry() {
+        let e = PlaylistEntry {
+            title: "Kerala\n/Music/evil.mp3\n#EXTINF:1,x - y".into(),
+            ..entry()
+        };
+        let out = render_m3u8(&[e], &DevicePath::new("/Music/Playlists"));
+        assert_eq!(
+            out.lines().count(),
+            3,
+            "header + one #EXTINF + one path, never more: {out:?}"
+        );
+        assert!(!out.contains("evil.mp3\n"), "{out:?}");
+    }
+
+    #[test]
+    fn control_characters_in_tags_are_collapsed() {
+        let e = PlaylistEntry {
+            artist: "Bo\tno\rbo".into(),
+            ..entry()
+        };
+        let out = render_m3u8(&[e], &DevicePath::new("/Music/Playlists"));
+        assert!(out.contains("#EXTINF:243,Bo no bo - Kerala\n"), "{out:?}");
     }
 
     #[test]

@@ -143,6 +143,16 @@ export class DeviceService implements OnDestroy {
     this.devices.set(raws.map((raw) => mapDevice(raw)));
   }
 
+  /**
+   * Open the native folder picker and register the chosen mount as a
+   * device. Resolves to `null` if the dialog was dismissed.
+   */
+  async pickAndAddDevice(): Promise<number | null> {
+    const id = await this.tauri.invoke<number | null>('pick_and_add_device');
+    await this.refresh();
+    return id;
+  }
+
   async addFilesystemDevice(args: {
     name: string;
     mountPath: string;

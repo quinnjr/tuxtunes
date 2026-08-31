@@ -65,6 +65,7 @@ pub fn run() {
             commands::device::list_devices,
             commands::device::get_device,
             commands::device::add_filesystem_device,
+            commands::device::pick_and_add_device,
             commands::device::refresh_devices,
             commands::device::update_device_selection,
             commands::device::update_device_settings,

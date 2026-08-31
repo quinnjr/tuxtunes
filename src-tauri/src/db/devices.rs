@@ -12,9 +12,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SelectionEntry {
-    Playlist { id: i64 },
-    Smart { id: i64 },
-    Album { album_artist: String, album: String },
+    Playlist {
+        id: i64,
+    },
+    Smart {
+        id: i64,
+    },
+    Album {
+        album_artist: String,
+        album: String,
+    },
     /// The entire library.
     All,
 }
@@ -73,22 +80,33 @@ pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<DeviceRow, Devices
     deserialize_row(row.into_json()).map_err(query_err)
 }
 
-/// Insert the device, or update the name and mount of the one already
-/// holding `device_key`. Returns its id either way, so re-plugging a
-/// device keeps its selection and manifest.
+/// Insert the device, or refresh the one already holding `device_key`.
+/// Returns its id either way, so re-plugging keeps the selection and
+/// the manifest.
+///
+/// `key_is_weak` marks a key that could match different hardware later
+/// — a mount path or a storage id, as opposed to a real serial number.
+/// It permanently disables destructive pruning for that device.
+///
+/// A re-detect deliberately does **not** overwrite `name`: the user may
+/// have renamed the device, and reverting that on every replug would be
+/// its own bug. `mount_path` is only overwritten when a new one is
+/// supplied, so a caller passing `None` cannot null a stored path.
 pub async fn upsert_by_key(
     engine: &SqliteRawEngine,
     device_key: &str,
     name: &str,
     kind: &str,
     mount_path: Option<&str>,
+    key_is_weak: bool,
 ) -> Result<i64, DevicesError> {
-    let sql = "INSERT INTO devices (device_key, name, kind, mount_path, last_seen_at) \
-               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) \
+    let sql =
+        "INSERT INTO devices (device_key, name, kind, mount_path, key_is_weak, last_seen_at) \
+               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) \
                ON CONFLICT(device_key) DO UPDATE SET \
-                 name = excluded.name, \
                  kind = excluded.kind, \
-                 mount_path = excluded.mount_path, \
+                 mount_path = COALESCE(excluded.mount_path, devices.mount_path), \
+                 key_is_weak = excluded.key_is_weak, \
                  last_seen_at = CURRENT_TIMESTAMP \
                RETURNING id";
     let params = vec![
@@ -96,6 +114,7 @@ pub async fn upsert_by_key(
         FilterValue::String(name.to_string()),
         FilterValue::String(kind.to_string()),
         crate::db::sync_util::opt_str(mount_path),
+        FilterValue::Int(i64::from(key_is_weak)),
     ];
     let row = engine
         .raw_sql_first(sql, &params)
@@ -155,12 +174,23 @@ pub async fn update_settings(
         .map_err(query_err)
 }
 
-pub async fn touch_seen(engine: &SqliteRawEngine, id: i64) -> Result<(), DevicesError> {
+/// Record whether the device is currently reachable.
+///
+/// Clearing `last_seen_at` is what lets the UI dim a device that has
+/// been unplugged; a set-only variant would leave every device looking
+/// permanently attached after its first detection.
+pub async fn set_seen(
+    engine: &SqliteRawEngine,
+    id: i64,
+    present: bool,
+) -> Result<(), DevicesError> {
+    let sql = if present {
+        "UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?"
+    } else {
+        "UPDATE devices SET last_seen_at = NULL WHERE id = ?"
+    };
     engine
-        .raw_sql_execute(
-            "UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?",
-            &[FilterValue::Int(id)],
-        )
+        .raw_sql_execute(sql, &[FilterValue::Int(id)])
         .await
         .map(|_| ())
         .map_err(query_err)
@@ -179,10 +209,10 @@ pub async fn mark_synced(engine: &SqliteRawEngine, id: i64) -> Result<(), Device
 
 /// Forget a device and its whole manifest.
 ///
-/// The manifest rows are deleted explicitly rather than relying on the
-/// `ON DELETE CASCADE`, because `PRAGMA foreign_keys` is not guaranteed
-/// on for every connection in the pool and orphaned manifest rows would
-/// make a later device reuse the same ids look already-synced.
+/// The manifest rows are deleted explicitly as well as by the table's
+/// `ON DELETE CASCADE`, so the cleanup does not depend on `PRAGMA
+/// foreign_keys` staying on: an orphaned manifest would make a later
+/// device that reuses the same row id look already-synced.
 pub async fn remove(engine: &SqliteRawEngine, id: i64) -> Result<(), DevicesError> {
     engine
         .raw_sql_execute(
@@ -234,29 +264,90 @@ mod tests {
     #[tokio::test]
     async fn upsert_by_key_inserts_then_updates_in_place() {
         let (_f, db) = tmp().await;
-        let a = upsert_by_key(&db.engine, "usb:1:abc", "Pixel", "filesystem", Some("/mnt/p"))
-            .await
-            .unwrap();
+        let a = upsert_by_key(
+            &db.engine,
+            "usb:1:abc",
+            "Pixel",
+            "filesystem",
+            Some("/mnt/p"),
+            false,
+        )
+        .await
+        .unwrap();
         let b = upsert_by_key(
             &db.engine,
             "usb:1:abc",
             "Pixel 8",
             "filesystem",
             Some("/mnt/q"),
+            false,
         )
         .await
         .unwrap();
         assert_eq!(a, b, "the same key must reuse the same device row");
         let row = get(&db.engine, a).await.unwrap();
-        assert_eq!(row.name, "Pixel 8");
+        assert_eq!(
+            row.name, "Pixel",
+            "a re-detect must not revert a name the user chose"
+        );
         assert_eq!(row.mount_path.as_deref(), Some("/mnt/q"));
         assert_eq!(list(&db.engine).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
+    async fn a_re_detect_without_a_mount_keeps_the_stored_one() {
+        let (_f, db) = tmp().await;
+        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", Some("/mnt/p"), false)
+            .await
+            .unwrap();
+        upsert_by_key(&db.engine, "k", "D", "filesystem", None, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            get(&db.engine, id).await.unwrap().mount_path.as_deref(),
+            Some("/mnt/p"),
+            "passing None must not null a stored mount path"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_seen_clears_as_well_as_sets() {
+        let (_f, db) = tmp().await;
+        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None, false)
+            .await
+            .unwrap();
+        assert!(
+            get(&db.engine, id).await.unwrap().last_seen_at.is_some(),
+            "a freshly detected device is present"
+        );
+
+        set_seen(&db.engine, id, false).await.unwrap();
+        assert_eq!(
+            get(&db.engine, id).await.unwrap().last_seen_at,
+            None,
+            "an unplugged device must stop reading as attached"
+        );
+
+        set_seen(&db.engine, id, true).await.unwrap();
+        assert!(get(&db.engine, id).await.unwrap().last_seen_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_weak_key_is_persisted() {
+        let (_f, db) = tmp().await;
+        let id = upsert_by_key(&db.engine, "fs:/mnt/sd", "SD", "filesystem", None, true)
+            .await
+            .unwrap();
+        assert!(
+            get(&db.engine, id).await.unwrap().key_is_weak,
+            "a reusable key must disable pruning"
+        );
+    }
+
+    #[tokio::test]
     async fn defaults_are_sane_on_insert() {
         let (_f, db) = tmp().await;
-        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None)
+        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None, false)
             .await
             .unwrap();
         let row = get(&db.engine, id).await.unwrap();
@@ -271,7 +362,7 @@ mod tests {
     #[tokio::test]
     async fn update_selection_roundtrips_json() {
         let (_f, db) = tmp().await;
-        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None)
+        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None, false)
             .await
             .unwrap();
         let sel = vec![
@@ -299,7 +390,7 @@ mod tests {
     #[tokio::test]
     async fn update_settings_persists_every_field() {
         let (_f, db) = tmp().await;
-        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None)
+        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None, false)
             .await
             .unwrap();
         update_settings(
@@ -328,7 +419,7 @@ mod tests {
     #[tokio::test]
     async fn remove_deletes_the_row() {
         let (_f, db) = tmp().await;
-        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None)
+        let id = upsert_by_key(&db.engine, "k", "D", "filesystem", None, false)
             .await
             .unwrap();
         remove(&db.engine, id).await.unwrap();

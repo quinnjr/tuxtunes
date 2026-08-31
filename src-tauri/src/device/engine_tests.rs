@@ -1,13 +1,17 @@
 //! Engine tests.
 //!
-//! Every case runs against [`FakeTransport`], so the whole pipeline —
-//! including cable-pull, out-of-space and cancellation paths — is
-//! covered with no hardware and no platform dependency.
+//! Most cases run against [`FakeTransport`], whose fault injection
+//! covers the cable-pull, out-of-space, collision and cancellation
+//! paths with no hardware and no platform dependency. One case runs
+//! against [`FsTransport`](crate::device::transport::fs::FsTransport)
+//! as well, because the fake buffers writes while a real transport
+//! materialises the destination on open — only the latter can prove
+//! the `.tuxpart` cleanup actually holds.
 
 use super::engine::{build_plan, resolve_selection, run, EngineError};
 use super::events::{DevicePhase, DeviceWarningKind};
 use super::observer::RecordingObserver;
-use super::transport::fake::{Fault, FakeTransport};
+use super::transport::fake::{FakeTransport, Fault};
 use super::transport::{DevicePath, DeviceTransport};
 use crate::db::device_objects;
 use crate::db::devices::{self, DeviceRow, SelectionEntry};
@@ -66,9 +70,10 @@ async fn fixture() -> Fixture {
         .await
         .unwrap();
 
-    let device_id = devices::upsert_by_key(&db.engine, "fs:/mnt/dap", "DAP", "filesystem", None)
-        .await
-        .unwrap();
+    let device_id =
+        devices::upsert_by_key(&db.engine, "fs:/mnt/dap", "DAP", "filesystem", None, false)
+            .await
+            .unwrap();
     devices::update_selection(
         &db.engine,
         device_id,
@@ -132,9 +137,7 @@ fn no_cancel() -> AtomicBool {
 async fn resolve_selection_deduplicates_across_entries() {
     let f = fixture().await;
     let sel = vec![
-        SelectionEntry::Playlist {
-            id: f.playlist_id,
-        },
+        SelectionEntry::Playlist { id: f.playlist_id },
         SelectionEntry::Album {
             album_artist: "Bonobo".into(),
             album: "Migration".into(),
@@ -151,7 +154,10 @@ async fn resolve_selection_deduplicates_across_entries() {
 #[tokio::test]
 async fn resolve_selection_of_nothing_is_empty() {
     let f = fixture().await;
-    assert!(resolve_selection(&f.db.engine, &[]).await.unwrap().is_empty());
+    assert!(resolve_selection(&f.db.engine, &[])
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 // ---------------------------------------------------------------- //
@@ -498,6 +504,107 @@ async fn a_failed_upload_leaves_no_partial_file_on_the_device() {
 }
 
 #[tokio::test]
+async fn a_real_filesystem_sync_leaves_no_partial_and_copies_exactly() {
+    // FakeTransport buffers writes; FsTransport materialises the
+    // destination on open. Only this proves the .tuxpart promise holds
+    // against a transport that really touches a filesystem.
+    let f = fixture().await;
+    let mount = tempfile::tempdir().unwrap();
+    let t = crate::device::transport::fs::FsTransport::new(mount.path().to_path_buf());
+
+    // Make one source unreadable so the upload of it fails mid-run.
+    std::fs::remove_file(&f.track_paths[1]).unwrap();
+
+    let done = run(
+        &f.db.engine,
+        &t,
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(done.added, 2);
+    let mut leftovers = Vec::new();
+    let mut stack = vec![mount.path().to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.to_string_lossy().ends_with(".tuxpart") {
+                leftovers.push(path);
+            }
+        }
+    }
+    assert!(
+        leftovers.is_empty(),
+        "partial files left behind: {leftovers:?}"
+    );
+
+    let landed = mount.path().join("Music/Bonobo/Migration/01 Kerala.flac");
+    assert_eq!(
+        std::fs::read(&landed).unwrap(),
+        std::fs::read(&f.track_paths[0]).unwrap(),
+        "a supported codec must reach a real device bit-exact"
+    );
+}
+
+#[tokio::test]
+async fn an_add_never_overwrites_a_file_we_did_not_write() {
+    let f = fixture().await;
+    let t = FakeTransport::new();
+
+    // The user put their own file at exactly the path we will render.
+    let theirs = DevicePath::new("/Music/Bonobo/Migration/01 Kerala.flac");
+    t.mkdir_all(&DevicePath::new("/Music/Bonobo/Migration"))
+        .unwrap();
+    {
+        let mut w = t.open_write(&theirs, 5).unwrap();
+        std::io::Write::write_all(&mut w, b"mine!").unwrap();
+        std::io::Write::flush(&mut w).unwrap();
+    }
+
+    let obs = RecordingObserver::default();
+    let done = run(&f.db.engine, &t, &obs, &f.device().await, &no_cancel())
+        .await
+        .unwrap();
+
+    let (_, bytes) = t
+        .files()
+        .into_iter()
+        .find(|(p, _)| p == theirs.as_str())
+        .expect("their file must still be there");
+    assert_eq!(
+        bytes, b"mine!",
+        "an unrecorded file must never be clobbered"
+    );
+    assert_eq!(done.added, 2, "the other two tracks still sync");
+    assert!(obs.has_warning(DeviceWarningKind::UploadFailed));
+}
+
+#[tokio::test]
+async fn running_out_of_space_mid_copy_fails_rather_than_reporting_success() {
+    let f = fixture().await;
+    let t = FakeTransport::new();
+    // Passes the pre-flight check, then the device fills up mid-write.
+    t.fail_next_write_with(Fault::NoSpace);
+
+    let err = run(
+        &f.db.engine,
+        &t,
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .expect_err("a device that fills up must not report a clean sync");
+
+    assert!(matches!(err, EngineError::NoSpace { .. }), "{err:?}");
+}
+
+#[tokio::test]
 async fn out_of_space_aborts_before_writing_anything() {
     let f = fixture().await;
     let t = FakeTransport::new();
@@ -539,7 +646,7 @@ async fn cancellation_stops_before_uploading() {
     let t = FakeTransport::new();
     let obs = RecordingObserver::default();
 
-    let done = run(
+    let err = run(
         &f.db.engine,
         &t,
         &obs,
@@ -547,15 +654,34 @@ async fn cancellation_stops_before_uploading() {
         &AtomicBool::new(true),
     )
     .await
-    .unwrap();
+    .expect_err("a cancelled run must not report success");
 
-    assert_eq!(done.added, 0);
-    assert_eq!(done.deleted, 0);
+    assert!(matches!(err, EngineError::Cancelled), "{err:?}");
     assert!(t.files().is_empty());
     assert_eq!(
         obs.phases().last(),
         Some(&DevicePhase::Finalizing),
-        "a cancelled run still finishes cleanly"
+        "it still reaches Finalizing, so the UI stops showing progress"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_run_does_not_stamp_last_sync_at() {
+    let f = fixture().await;
+    let t = FakeTransport::new();
+    let _ = run(
+        &f.db.engine,
+        &t,
+        &RecordingObserver::default(),
+        &f.device().await,
+        &AtomicBool::new(true),
+    )
+    .await;
+
+    assert_eq!(
+        f.device().await.last_sync_at,
+        None,
+        "a partial run must stay distinguishable from a finished one"
     );
 }
 
@@ -713,7 +839,9 @@ async fn a_smart_playlist_resolves_at_sync_time() {
     .unwrap();
 
     assert_eq!(done.added, 3);
-    assert!(t.read_to_string("/Music/Playlists/Migration.m3u8").is_some());
+    assert!(t
+        .read_to_string("/Music/Playlists/Migration.m3u8")
+        .is_some());
 }
 
 // ---------------------------------------------------------------- //
@@ -724,7 +852,9 @@ async fn a_smart_playlist_resolves_at_sync_time() {
 async fn build_plan_reports_bytes_without_writing() {
     let f = fixture().await;
     let t = FakeTransport::new();
-    let (plan, skips) = build_plan(&f.db.engine, &f.device().await, &t).await.unwrap();
+    let (plan, skips) = build_plan(&f.db.engine, &f.device().await, &t)
+        .await
+        .unwrap();
 
     assert_eq!(plan.adds.len(), 3);
     assert!(skips.is_empty());
@@ -746,7 +876,9 @@ async fn two_tracks_rendering_to_one_path_are_both_kept() {
         .unwrap();
 
     let t = FakeTransport::new();
-    let (plan, _) = build_plan(&f.db.engine, &f.device().await, &t).await.unwrap();
+    let (plan, _) = build_plan(&f.db.engine, &f.device().await, &t)
+        .await
+        .unwrap();
     let paths: Vec<&str> = plan.adds.iter().map(|d| d.device_path.as_str()).collect();
 
     assert_eq!(paths.len(), 3);

@@ -279,8 +279,8 @@ pub async fn add_tracks(
         .copied()
         .filter(|id| seen.insert(*id))
         .collect();
-    let req = serde_json::to_string(&ids)
-        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    let req =
+        serde_json::to_string(&ids).map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
     let sql = format!(
         "UPDATE playlists SET \
          track_entries = (SELECT json_group_array(v ORDER BY ord) FROM ( \
@@ -1041,7 +1041,9 @@ mod tests {
     #[tokio::test]
     async fn create_regular_sets_parent_when_given() {
         let db = tmp().await;
-        let folder = create_regular(&db.engine, "Folder-ish", None).await.unwrap();
+        let folder = create_regular(&db.engine, "Folder-ish", None)
+            .await
+            .unwrap();
         let child = create_regular(&db.engine, "Child", Some(folder))
             .await
             .unwrap();
@@ -1066,7 +1068,11 @@ mod tests {
         assert_eq!(got, [b, a, c]);
         let listed = list_all(&db.engine).await.unwrap();
         assert_eq!(
-            listed.iter().find(|r| r.id == id).unwrap().cached_track_count,
+            listed
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .cached_track_count,
             Some(3)
         );
     }
@@ -1094,7 +1100,11 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), [a]);
         let listed = list_all(&db.engine).await.unwrap();
         assert_eq!(
-            listed.iter().find(|r| r.id == id).unwrap().cached_track_count,
+            listed
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .cached_track_count,
             Some(1),
             "cached count must not include dangling ids"
         );
@@ -1158,7 +1168,11 @@ mod tests {
         assert_eq!(got, [b]);
         let listed = list_all(&db.engine).await.unwrap();
         assert_eq!(
-            listed.iter().find(|r| r.id == id).unwrap().cached_track_count,
+            listed
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap()
+                .cached_track_count,
             Some(1)
         );
     }
@@ -1203,11 +1217,19 @@ mod tests {
         assert!(tracks_for_regular(&db.engine, p2).await.unwrap().is_empty());
         let listed = list_all(&db.engine).await.unwrap();
         assert_eq!(
-            listed.iter().find(|r| r.id == p1).unwrap().cached_track_count,
+            listed
+                .iter()
+                .find(|r| r.id == p1)
+                .unwrap()
+                .cached_track_count,
             Some(1)
         );
         assert_eq!(
-            listed.iter().find(|r| r.id == p2).unwrap().cached_track_count,
+            listed
+                .iter()
+                .find(|r| r.id == p2)
+                .unwrap()
+                .cached_track_count,
             Some(0)
         );
     }
@@ -1248,7 +1270,10 @@ mod tests {
             smart_rule_json: None,
         };
         let id = upsert(&db.engine, &u).await.unwrap();
-        let renamed = PlaylistUpsert { name: "Gym 2024", ..u };
+        let renamed = PlaylistUpsert {
+            name: "Gym 2024",
+            ..u
+        };
         upsert(&db.engine, &renamed).await.unwrap();
         let rows = list_all(&db.engine).await.unwrap();
         assert_eq!(rows.iter().find(|r| r.id == id).unwrap().name, "Gym 2024");

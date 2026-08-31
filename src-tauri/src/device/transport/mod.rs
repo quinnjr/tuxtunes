@@ -142,6 +142,13 @@ pub enum TransportError {
     PermissionDenied(String),
     #[error("unsupported operation: {0}")]
     Unsupported(&'static str),
+    /// The destination exists but TuxTunes has no manifest row for it,
+    /// so it belongs to someone else and must not be overwritten.
+    #[error("{0} already exists and was not written by TuxTunes")]
+    Occupied(String),
+    /// The user cancelled mid-transfer. Not a failure.
+    #[error("cancelled")]
+    Cancelled,
     #[error("transport error: {0}")]
     Other(#[source] anyhow::Error),
 }

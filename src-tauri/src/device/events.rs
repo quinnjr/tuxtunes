@@ -133,7 +133,10 @@ mod tests {
             detail: "x".into(),
         };
         let json = serde_json::to_string(&w).unwrap();
-        assert!(json.contains(r#""kind":"playlist_object_failed""#), "{json}");
+        assert!(
+            json.contains(r#""kind":"playlist_object_failed""#),
+            "{json}"
+        );
     }
 
     #[test]

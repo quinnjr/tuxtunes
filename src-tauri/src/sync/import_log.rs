@@ -42,11 +42,7 @@ impl ImportLog {
     /// As [`Self::create`], but with a caller-chosen file-name prefix so
     /// each subsystem's runs stay distinguishable in the log directory:
     /// `import-*` for the ITL sync, `device-*` for a device push.
-    pub fn create_named<R: Runtime>(
-        app: &AppHandle<R>,
-        prefix: &str,
-        id: i64,
-    ) -> io::Result<Self> {
+    pub fn create_named<R: Runtime>(app: &AppHandle<R>, prefix: &str, id: i64) -> io::Result<Self> {
         let base = app
             .path()
             .app_log_dir()

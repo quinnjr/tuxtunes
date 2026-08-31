@@ -30,11 +30,25 @@ impl FsTransport {
         let mut out = self.root.clone();
         for segment in path.as_str().split('/').filter(|s| !s.is_empty()) {
             if segment == ".." || segment == "." {
-                return Err(TransportError::PermissionDenied(
-                    path.as_str().to_string(),
-                ));
+                return Err(TransportError::PermissionDenied(path.as_str().to_string()));
+            }
+            // `DevicePath` normalises on '/' only. A segment carrying a
+            // backslash, a drive prefix, or a UNC root is absolute to
+            // `PathBuf::push`, which silently discards `self.root` —
+            // and the prune phase would then delete outside the mount.
+            if segment.contains('\\')
+                || segment.contains(':')
+                || Path::new(segment).is_absolute()
+                || Path::new(segment).components().count() != 1
+            {
+                return Err(TransportError::PermissionDenied(path.as_str().to_string()));
             }
             out.push(segment);
+        }
+        // Belt and braces: whatever the segments claimed, the result
+        // must still live under the root.
+        if !out.starts_with(&self.root) {
+            return Err(TransportError::PermissionDenied(path.as_str().to_string()));
         }
         Ok(out)
     }
@@ -220,6 +234,26 @@ mod tests {
             matches!(err, TransportError::PermissionDenied(_)),
             "expected PermissionDenied, got {err:?}"
         );
+    }
+
+    #[test]
+    fn rejects_windows_separators_and_drive_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = FsTransport::new(dir.path().to_path_buf());
+        // A root_path is unvalidated free text, and PathBuf::push
+        // discards the root for an absolute component.
+        for hostile in [
+            r"/C:\Users\me\Music",
+            r"/..\..\etc",
+            "/C:/Users/me/Music",
+            r"/\\server\share",
+        ] {
+            let err = t.stat(&DevicePath::new(hostile)).unwrap_err();
+            assert!(
+                matches!(err, TransportError::PermissionDenied(_)),
+                "{hostile:?} should be refused, got {err:?}"
+            );
+        }
     }
 
     #[test]

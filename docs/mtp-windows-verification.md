@@ -1,16 +1,23 @@
 # Windows MTP verification checklist
 
-The Windows Portable Devices backend (`WpdTransport`, Phase 6) is
-compiled, linted and unit-tested in CI on `windows-latest`, and the
-whole sync engine runs there against `FsTransport`. What CI **cannot**
-prove is that the COM calls in `src-tauri/src/device/transport/wpd.rs`
-drive real hardware correctly, because no Windows machine with a phone
-attached is available to this project.
+> **Status: not yet implemented.** This checklist is written ahead of
+> the work so the verification gap is recorded rather than discovered
+> late. As of Phase 1 there is no `WpdTransport`, no
+> `src-tauri/src/device/transport/wpd.rs`, and no `windows-latest` CI
+> job. Windows users reach a device today through `FsTransport` by
+> pointing TuxTunes at a mounted path, which works but is not native
+> MTP.
+
+When the Windows Portable Devices backend lands (Phase 6) it will be
+compiled, linted and unit-tested in CI on `windows-latest`, with the
+whole sync engine running there against `FsTransport`. What CI **will
+not** be able to prove is that its COM calls drive real hardware
+correctly, because no Windows machine with a phone attached is
+available to this project.
 
 Until someone works through this checklist on real hardware, Windows
-MTP ships labelled **beta** in the device UI, and `FsTransport` stays
-selectable on Windows so a user can point TuxTunes at a mounted device
-instead.
+MTP should ship labelled **beta** in the device UI, with `FsTransport`
+still selectable so a user can fall back to a mounted device.
 
 ## Before you start
 

@@ -172,6 +172,24 @@ export class SidebarComponent implements OnInit {
     void this.ui.guard(this.deviceSvc.rescan());
   }
 
+  /**
+   * Pick a mount point and register it. A device reaches TuxTunes as a
+   * gvfs/mtpfs mount, an SD card, or a DAP in mass-storage mode — all
+   * of which are a directory — so the native folder picker is the
+   * whole flow. Opens the new device on success.
+   */
+  protected addDevice(): void {
+    void this.ui.guard(
+      this.deviceSvc.pickAndAddDevice().then((id) => {
+        if (id === null) return;
+        this.library.activePlaylistId.set(null);
+        this.ui.activeDeviceId.set(id);
+        this.ui.columnBrowserOpen.set(false);
+        this.ui.libraryView.set('device');
+      }),
+    );
+  }
+
   protected onDeviceContextMenu(device: Device, event: MouseEvent): void {
     const running = this.isSyncing(device);
     this.ctx.show(event, [

@@ -1,6 +1,6 @@
 //! Thin handle around the spawned [`DeviceWorker`] — held in AppState.
 
-use super::worker::{DeviceCommand, DeviceWorker};
+use super::worker::DeviceWorker;
 use crate::db::Db;
 use std::sync::Arc;
 use tauri::{AppHandle, Runtime};
@@ -16,11 +16,10 @@ impl DeviceCoordinator {
         }
     }
 
+    /// Queue a sync. A device already queued or running is ignored, so
+    /// a double-click cannot start a second run behind the first.
     pub fn run_now(&self, device_id: i64) -> Result<(), String> {
-        self.worker
-            .tx
-            .send(DeviceCommand::RunNow { device_id })
-            .map_err(|_| "device worker has exited".to_string())
+        self.worker.run_now(device_id)
     }
 
     /// Request that the in-flight sync for `device_id` stop at the next

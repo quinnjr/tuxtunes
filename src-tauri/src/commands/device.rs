@@ -50,6 +50,10 @@ pub async fn add_filesystem_device(
         &args.name,
         "filesystem",
         Some(&args.mount_path),
+        // A mount path is reusable: the next card in the same reader
+        // gets the same key. Marking the key weak keeps pruning off, so
+        // swapping cards can never delete the new card's contents.
+        true,
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -76,27 +80,75 @@ pub async fn add_filesystem_device(
     Ok(id)
 }
 
-/// Re-stat every known filesystem device, refreshing `last_seen_at`.
+/// Prompt for a device's mount point and register it.
+///
+/// The native folder picker is how a user actually reaches this
+/// feature: a device shows up as a gvfs/mtpfs mount, an SD card, or a
+/// DAP in mass-storage mode, and all three are just a directory.
+/// Returns `None` when the dialog is dismissed.
+#[tauri::command]
+pub async fn pick_and_add_device(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<i64>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let Some(folder) = app.dialog().file().blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let mount = folder.into_path().map_err(|e| e.to_string())?;
+    let mount_path = mount.to_string_lossy().to_string();
+
+    // Name it after the mount's last component — "SANDISK", "FiiO
+    // M11" — which is what the user sees in their file manager. The
+    // device settings panel can rename it, and a re-detect will not
+    // revert that.
+    let name = mount
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Device".to_string());
+
+    let id = add_filesystem_device(
+        state,
+        AddFilesystemDeviceArgs {
+            name,
+            mount_path,
+            root_path: None,
+        },
+    )
+    .await?;
+    Ok(Some(id))
+}
+
+/// Re-stat every known filesystem device and report which are present.
+///
+/// Sets `last_seen_at` for devices whose mount is still a directory and
+/// **clears** it for those that are not, so the sidebar can dim a
+/// device that has been unplugged. Without the clear, `last_seen_at`
+/// would be set once at insert and every device would read as attached
+/// forever.
 ///
 /// Phase 1 has no hotplug enumeration; that arrives with the MTP
 /// backend. Returns the refreshed list so the UI has one round trip.
 #[tauri::command]
-pub async fn refresh_devices(
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<DeviceRow>, String> {
+pub async fn refresh_devices(state: tauri::State<'_, AppState>) -> Result<Vec<DeviceRow>, String> {
     let rows = devices::list(&state.db.engine)
         .await
         .map_err(|e| e.to_string())?;
     for row in &rows {
+        // Only filesystem devices can be probed this way. Leave other
+        // kinds alone rather than declaring them absent.
+        if row.kind != "filesystem" {
+            continue;
+        }
         let present = row
             .mount_path
             .as_deref()
             .is_some_and(|p| PathBuf::from(p).is_dir());
-        if present {
-            devices::touch_seen(&state.db.engine, row.id)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
+        devices::set_seen(&state.db.engine, row.id, present)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     devices::list(&state.db.engine)
         .await
@@ -209,7 +261,10 @@ pub async fn cancel_device_sync(
 /// backends replace this with the worker's shared resolver.
 fn filesystem_transport(device: &DeviceRow) -> Result<Box<dyn DeviceTransport>, String> {
     if device.kind != "filesystem" {
-        return Err(format!("no transport for device kind '{}' yet", device.kind));
+        return Err(format!(
+            "no transport for device kind '{}' yet",
+            device.kind
+        ));
     }
     let mount = device
         .mount_path
@@ -235,6 +290,7 @@ mod tests {
             "DAP",
             "filesystem",
             mount.path().to_str(),
+            false,
         )
         .await
         .unwrap();

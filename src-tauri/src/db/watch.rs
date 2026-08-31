@@ -46,10 +46,7 @@ pub async fn checkout(engine: &SqliteRawEngine) -> Result<SqliteConnection, Watc
 
 /// One poll step: true (and a new baseline) when another connection has
 /// committed since `last`.
-pub async fn changed_since(
-    conn: &SqliteConnection,
-    last: i64,
-) -> Result<(i64, bool), WatchError> {
+pub async fn changed_since(conn: &SqliteConnection, last: i64) -> Result<(i64, bool), WatchError> {
     let now = data_version(conn).await?;
     Ok((now, now != last))
 }

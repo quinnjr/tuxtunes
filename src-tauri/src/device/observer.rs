@@ -1,8 +1,6 @@
 //! Sink for device-sync events, decoupling the engine from Tauri.
 
-use super::events::{
-    self, DeviceComplete, DeviceFailed, DeviceProgress, DeviceWarning,
-};
+use super::events::{self, DeviceComplete, DeviceFailed, DeviceProgress, DeviceWarning};
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// Receives progress, warning and terminal events from a running sync.

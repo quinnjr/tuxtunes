@@ -38,6 +38,21 @@ impl From<Fault> for TransportError {
     }
 }
 
+impl Fault {
+    /// The `io::Error` a real transport's writer would surface.
+    ///
+    /// The kind matters: the engine maps it back into a
+    /// [`TransportError`], and a fake that always said `Other` would
+    /// let the out-of-space path go untested.
+    fn as_io_error(self) -> std::io::Error {
+        match self {
+            Fault::NoSpace => std::io::Error::new(std::io::ErrorKind::StorageFull, "injected"),
+            Fault::Disconnected => std::io::Error::new(std::io::ErrorKind::BrokenPipe, "injected"),
+            Fault::Other => std::io::Error::other("injected fault"),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Inner {
     nodes: BTreeMap<String, Node>,
@@ -122,7 +137,13 @@ impl FakeTransport {
 
     /// The contents of one file, if present.
     pub fn read_to_string(&self, path: &str) -> Option<String> {
-        match self.inner.lock().unwrap().nodes.get(DevicePath::new(path).as_str()) {
+        match self
+            .inner
+            .lock()
+            .unwrap()
+            .nodes
+            .get(DevicePath::new(path).as_str())
+        {
             Some(Node::File(b)) => Some(String::from_utf8_lossy(b).into_owned()),
             _ => None,
         }
@@ -160,7 +181,7 @@ impl Write for FakeWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if let Some(fault) = self.fault.take() {
             self.failed = true;
-            return Err(std::io::Error::other(format!("{fault:?}")));
+            return Err(fault.as_io_error());
         }
         self.buf.extend_from_slice(buf);
         Ok(buf.len())
@@ -176,9 +197,13 @@ impl Write for FakeWriter {
 }
 
 impl Drop for FakeWriter {
-    fn drop(&mut self) {
-        self.commit();
-    }
+    /// Deliberately does **not** commit.
+    ///
+    /// A clean close means `flush()`. Committing here would publish a
+    /// truncated buffer as a complete file whenever a writer is dropped
+    /// on an early return — exactly the cable-pull case the engine must
+    /// survive, and the one this transport exists to model.
+    fn drop(&mut self) {}
 }
 
 impl DeviceTransport for FakeTransport {
@@ -291,9 +316,7 @@ impl DeviceTransport for FakeTransport {
         for key in moves {
             let node = inner.nodes.remove(&key).expect("key just listed");
             let suffix = &key[prefix.len()..];
-            inner
-                .nodes
-                .insert(format!("{}{suffix}", to.as_str()), node);
+            inner.nodes.insert(format!("{}{suffix}", to.as_str()), node);
         }
         Ok(())
     }
@@ -308,7 +331,9 @@ impl DeviceTransport for FakeTransport {
                     .keys()
                     .any(|k| k.starts_with(&format!("{}/", path.as_str())));
                 if has_children {
-                    return Err(TransportError::Other(anyhow::anyhow!("directory not empty")));
+                    return Err(TransportError::Other(anyhow::anyhow!(
+                        "directory not empty"
+                    )));
                 }
             }
             Some(Node::File(_)) => {}

@@ -101,6 +101,36 @@ pub async fn upsert(
         .map_err(query_err)
 }
 
+/// Clear the `track_id` of every manifest row pointing at a deleted
+/// track, on every device.
+///
+/// The table's `ON DELETE SET NULL` covers this on any connection with
+/// `PRAGMA foreign_keys` on, which this pool does have. Doing it
+/// explicitly makes the invariant independent of that pragma, and puts
+/// it beside the equivalent `playlists::prune_track` call so both are
+/// obvious at the deletion site.
+///
+/// The invariant matters because `tracks.id` is `INTEGER PRIMARY KEY`
+/// without `AUTOINCREMENT`: SQLite reuses rowids, so a dangling id
+/// would later be handed to an unrelated track and the sync would treat
+/// it as already present at the deleted track's path.
+///
+/// The row itself is kept: the file is still on the device, and the
+/// manifest is the only record that it is ours to prune.
+pub async fn detach_track(
+    engine: &SqliteRawEngine,
+    track_id: i64,
+) -> Result<(), DeviceObjectsError> {
+    engine
+        .raw_sql_execute(
+            "UPDATE device_objects SET track_id = NULL WHERE track_id = ?",
+            &[FilterValue::Int(track_id)],
+        )
+        .await
+        .map(|_| ())
+        .map_err(query_err)
+}
+
 pub async fn remove_by_id(engine: &SqliteRawEngine, id: i64) -> Result<(), DeviceObjectsError> {
     engine
         .raw_sql_execute(
@@ -120,7 +150,7 @@ mod tests {
     async fn tmp() -> (tempfile::NamedTempFile, Db, i64) {
         let file = tempfile::NamedTempFile::new().unwrap();
         let db = Db::open(file.path()).await.unwrap();
-        let device_id = devices::upsert_by_key(&db.engine, "k", "D", "filesystem", None)
+        let device_id = devices::upsert_by_key(&db.engine, "k", "D", "filesystem", None, false)
             .await
             .unwrap();
         (file, db, device_id)
@@ -180,6 +210,73 @@ mod tests {
         let left = list_for_device(&db.engine, d).await.unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].device_path, "/Music/b.flac");
+    }
+
+    /// Insert a minimal track row and return its id.
+    async fn add_track(db: &Db, title: &str) -> i64 {
+        let sql = "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+                   VALUES (?, 1000, 10, ?, '[]') RETURNING id";
+        db.engine
+            .raw_sql_first(
+                sql,
+                &[
+                    FilterValue::String(title.to_string()),
+                    FilterValue::String(format!("/lib/{title}.flac")),
+                ],
+            )
+            .await
+            .unwrap()
+            .into_json()
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn detach_track_clears_the_id_but_keeps_the_row() {
+        let (_f, db, d) = tmp().await;
+        let track_id = add_track(&db, "One").await;
+        let mut row = new_row(d, "/Music/a.flac", "h");
+        row.track_id = Some(track_id);
+        upsert(&db.engine, &row).await.unwrap();
+
+        detach_track(&db.engine, track_id).await.unwrap();
+
+        let rows = list_for_device(&db.engine, d).await.unwrap();
+        assert_eq!(rows.len(), 1, "the file is still on the device");
+        assert_eq!(
+            rows[0].track_id, None,
+            "a reused rowid must not rebind this row to an unrelated track"
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_track_leaves_other_tracks_alone() {
+        let (_f, db, d) = tmp().await;
+        let a_id = add_track(&db, "One").await;
+        let b_id = add_track(&db, "Two").await;
+        let mut a = new_row(d, "/Music/a.flac", "h");
+        a.track_id = Some(a_id);
+        let mut b = new_row(d, "/Music/b.flac", "h");
+        b.track_id = Some(b_id);
+        upsert(&db.engine, &a).await.unwrap();
+        upsert(&db.engine, &b).await.unwrap();
+
+        detach_track(&db.engine, a_id).await.unwrap();
+
+        let rows = list_for_device(&db.engine, d).await.unwrap();
+        assert_eq!(rows.iter().filter(|r| r.track_id == Some(b_id)).count(), 1);
+        assert_eq!(rows.iter().filter(|r| r.track_id.is_none()).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_manifest_row_cannot_name_a_track_that_does_not_exist() {
+        // Foreign keys are enforced on this pool, which is what makes
+        // detach_track a guarantee rather than a hope.
+        let (_f, db, d) = tmp().await;
+        let mut row = new_row(d, "/Music/a.flac", "h");
+        row.track_id = Some(424_242);
+        assert!(upsert(&db.engine, &row).await.is_err());
     }
 
     #[tokio::test]

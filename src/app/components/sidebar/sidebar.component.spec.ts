@@ -34,6 +34,7 @@ interface SidebarInternals {
   onPlaylistAreaContextMenu(event: MouseEvent): void;
   isExpanded(p: Playlist): boolean;
   openDevice(d: Device): void;
+  addDevice(): void;
   onDeviceContextMenu(d: Device, event: MouseEvent): void;
   isAttached(d: Device): boolean;
   rescanDevices(): void;
@@ -501,6 +502,50 @@ describe('SidebarComponent devices section', () => {
 
     await ui.confirm()!.onConfirm();
     expect(stub.invoke).toHaveBeenCalledWith('forget_device', { deviceId: 11 });
+  });
+
+  it('the empty state offers a way to add a device', async () => {
+    const { fixture } = setup();
+    await settle(fixture);
+    const el = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="add-first-device"]',
+    );
+    expect(el).not.toBeNull();
+  });
+
+  it('adding a device invokes the picker and opens the new device', async () => {
+    const stubDevices = [{ ...RAW_DEVICE, id: 11 }];
+    const { fixture, cmp, ui, stub } = setup([], stubDevices);
+    await settle(fixture);
+    stub.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pick_and_add_device') return 11;
+      if (cmd === 'list_devices' || cmd === 'refresh_devices') return stubDevices;
+      return undefined;
+    });
+
+    cmp.addDevice();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    fixture.detectChanges();
+
+    expect(stub.invoke).toHaveBeenCalledWith('pick_and_add_device');
+    expect(ui.libraryView()).toBe('device');
+    expect(ui.activeDeviceId()).toBe(11);
+  });
+
+  it('a dismissed picker changes nothing', async () => {
+    const { fixture, cmp, ui, stub } = setup();
+    await settle(fixture);
+    stub.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'pick_and_add_device') return null;
+      return [];
+    });
+
+    cmp.addDevice();
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    fixture.detectChanges();
+
+    expect(ui.libraryView()).not.toBe('device');
+    expect(ui.activeDeviceId()).toBeNull();
   });
 
   it('the rescan button re-stats known devices', async () => {

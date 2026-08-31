@@ -227,10 +227,48 @@ describe('DeviceService', () => {
     expect(invoke).toHaveBeenCalledWith('cancel_device_sync', { deviceId: 4 });
   });
 
-  it('ngOnDestroy releases every event listener', async () => {
-    const { svc, ready } = build();
+  it('pickAndAddDevice returns the new id and refreshes the list', async () => {
+    const { svc, invoke, ready } = build(async (cmd) => {
+      if (cmd === 'pick_and_add_device') return 11;
+      if (cmd === 'list_devices') return [{ ...RAW_DEVICE, id: 11 }];
+      return undefined;
+    });
     await ready;
-    expect(() => svc.ngOnDestroy()).not.toThrow();
+    expect(await svc.pickAndAddDevice()).toBe(11);
+    expect(invoke).toHaveBeenCalledWith('pick_and_add_device');
+    expect(svc.devices().map((d) => d.id)).toEqual([11]);
+  });
+
+  it('pickAndAddDevice resolves null when the dialog is dismissed', async () => {
+    const { svc, ready } = build(async (cmd) => (cmd === 'pick_and_add_device' ? null : []));
+    await ready;
+    expect(await svc.pickAndAddDevice()).toBeNull();
+  });
+
+  it('ngOnDestroy actually calls every unlisten function', async () => {
+    const offs: ReturnType<typeof vi.fn>[] = [];
+    const listeners = new Map<string, Listener[]>();
+    const stubTauri = {
+      invoke: vi.fn(async () => undefined),
+      listen: vi.fn(async (event: string, h: Listener) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), h]);
+        const off = vi.fn();
+        offs.push(off);
+        return off;
+      }),
+    } as unknown as TauriService;
+    const injector = Injector.create({
+      providers: [
+        { provide: TauriService, useValue: stubTauri },
+        { provide: DeviceService, useClass: DeviceService },
+      ],
+    });
+    const svc = runInInjectionContext(injector, () => injector.get(DeviceService));
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+
+    expect(offs.length).toBeGreaterThan(0);
+    svc.ngOnDestroy();
+    for (const off of offs) expect(off).toHaveBeenCalled();
   });
 });
 

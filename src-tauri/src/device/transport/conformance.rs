@@ -44,7 +44,10 @@ fn write_then_read_roundtrips(t: Box<dyn DeviceTransport>) {
         w.flush().expect("flush");
     }
     let mut buf = Vec::new();
-    t.open_read(&p).expect("open_read").read_to_end(&mut buf).unwrap();
+    t.open_read(&p)
+        .expect("open_read")
+        .read_to_end(&mut buf)
+        .unwrap();
     assert_eq!(buf, b"abc");
     let stat = t.stat(&p).unwrap().expect("file exists");
     assert!(!stat.is_dir);
@@ -66,7 +69,10 @@ fn list_returns_children_only(t: Box<dyn DeviceTransport>) {
 }
 
 fn list_of_missing_dir_is_empty(t: Box<dyn DeviceTransport>) {
-    assert!(t.list(&DevicePath::new("/nope/nothing")).unwrap().is_empty());
+    assert!(t
+        .list(&DevicePath::new("/nope/nothing"))
+        .unwrap()
+        .is_empty());
 }
 
 fn delete_removes_file(t: Box<dyn DeviceTransport>) {
@@ -98,7 +104,8 @@ fn write_into_missing_parent_errors(t: Box<dyn DeviceTransport>) {
     let err = t
         .open_write(&DevicePath::new("/Music/nope/a.flac"), 1)
         .and_then(|mut w| {
-            w.write_all(b"x").map_err(|e| TransportError::Other(e.into()))?;
+            w.write_all(b"x")
+                .map_err(|e| TransportError::Other(e.into()))?;
             w.flush().map_err(|e| TransportError::Other(e.into()))
         })
         .expect_err("writing under a missing parent must fail");

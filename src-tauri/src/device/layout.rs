@@ -50,7 +50,7 @@ pub fn sanitize_segment(raw: &str, max_bytes: usize) -> String {
         last_was_space = is_space;
     }
 
-    let mut s = out
+    let s = out
         .trim_matches(|c: char| c == '.' || c.is_whitespace())
         .to_string();
 
@@ -58,14 +58,40 @@ pub fn sanitize_segment(raw: &str, max_bytes: usize) -> String {
         return "_".to_string();
     }
 
-    // A reserved name is reserved with or without an extension, so test
-    // the stem rather than the whole segment.
-    let stem = s.split('.').next().unwrap_or(&s);
-    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(stem)) {
-        s.push('_');
+    // Split off the extension before both the reserved-name check and
+    // the length cut: a device indexes by extension, so it is the one
+    // part of a name that must survive intact.
+    let (stem, ext) = split_extension(&s);
+    let budget = max_bytes.saturating_sub(ext.len());
+
+    // Truncate first, then escape. Escaping first lets the cut shave
+    // the marker back off and restore the very name we were avoiding.
+    let mut stem = truncate_bytes(stem, budget);
+    if RESERVED.iter().any(|r| r.eq_ignore_ascii_case(&stem)) {
+        // Make room for the marker so it cannot be truncated away.
+        stem = truncate_bytes(&stem, budget.saturating_sub(1));
+        stem.push('_');
     }
 
-    truncate_bytes(&s, max_bytes)
+    if stem.is_empty() {
+        // No room for a stem: keep the extension behind a placeholder
+        // rather than emitting a bare ".flac" (a dotfile on unix).
+        return truncate_bytes(&format!("_{ext}"), max_bytes.max(1));
+    }
+    format!("{stem}{ext}")
+}
+
+/// Split a trailing `.ext` (dot included) off a segment.
+///
+/// Returns an empty extension when there is no dot, when the dot leads
+/// the segment (a dotfile is all stem), or when the extension is
+/// implausibly long — a period inside a title is not an extension.
+fn split_extension(s: &str) -> (&str, &str) {
+    const MAX_EXT_BYTES: usize = 12;
+    match s.rfind('.') {
+        Some(idx) if idx > 0 && s.len() - idx <= MAX_EXT_BYTES => s.split_at(idx),
+        _ => (s, ""),
+    }
 }
 
 /// Truncate to at most `max_bytes`, never splitting a character.
@@ -94,6 +120,12 @@ pub fn render(
     t: &TrackFields<'_>,
     caps: &Capabilities,
 ) -> Result<DevicePath, LayoutError> {
+    // `fs::path::render` guards this before expanding; expand_tokens
+    // alone does not, and an extensionless file lands on the device
+    // unindexed and unplayable.
+    if t.ext.is_empty() {
+        return Err(LayoutError::Render(PathRenderError::MissingExt));
+    }
     let expanded = crate::fs::path::expand_tokens(template, t)?;
     let mut out = root.clone();
     let mut any = false;
@@ -161,14 +193,32 @@ mod tests {
     }
 
     #[test]
-    fn suffixes_reserved_dos_names() {
+    fn suffixes_reserved_dos_names_on_the_stem() {
         assert_eq!(sanitize_segment("CON", 255), "CON_");
         assert_eq!(sanitize_segment("com1", 255), "com1_");
-        assert_eq!(sanitize_segment("NUL.flac", 255), "NUL.flac_");
+        assert_eq!(
+            sanitize_segment("NUL.flac", 255),
+            "NUL_.flac",
+            "the marker belongs on the stem; NUL.flac_ would be unplayable"
+        );
         assert_eq!(
             sanitize_segment("CONCERT", 255),
             "CONCERT",
             "a longer name that merely starts with a reserved word is fine"
+        );
+    }
+
+    #[test]
+    fn a_reserved_name_stays_escaped_at_the_length_cap() {
+        // Budget for the stem is 8 - 5 = 3, exactly "CON". Escaping
+        // must win over the cap, never the other way round.
+        let got = sanitize_segment("CON.flac", 8);
+        assert_eq!(got, "CO_.flac");
+        assert!(
+            !RESERVED
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(got.split('.').next().unwrap())),
+            "truncation must not restore a reserved stem: {got}"
         );
     }
 
@@ -181,9 +231,41 @@ mod tests {
     }
 
     #[test]
+    fn truncation_keeps_the_extension() {
+        // The whole point: a device indexes by extension, so the cut
+        // takes the stem and never the suffix.
+        assert_eq!(sanitize_segment("abcdefghij.flac", 10), "abcde.flac");
+        let long = format!("{}.flac", "é".repeat(200));
+        let got = sanitize_segment(&long, 40);
+        assert!(got.ends_with(".flac"), "got {got:?}");
+        assert!(got.len() <= 40);
+    }
+
+    #[test]
+    fn a_period_inside_a_title_is_not_treated_as_an_extension() {
+        assert_eq!(
+            sanitize_segment("Symphony No. 9 in D minor, Op. 125 conducted live", 20),
+            "Symphony No. 9 in D"
+        );
+    }
+
+    #[test]
     fn truncation_does_not_leave_a_trailing_dot() {
-        // Cutting at 5 bytes would land right after the dot.
-        assert_eq!(sanitize_segment("abcd.efg", 5), "abcd");
+        assert_eq!(sanitize_segment("abcd.", 5), "abcd");
+    }
+
+    #[test]
+    fn a_track_with_no_extension_is_rejected_rather_than_pushed() {
+        let mut f = fields();
+        f.ext = "";
+        let err = render(
+            "{album_artist}/{title}.{ext}",
+            &DevicePath::new("/Music"),
+            &f,
+            &caps(),
+        )
+        .unwrap_err();
+        assert_eq!(err, LayoutError::Render(PathRenderError::MissingExt));
     }
 
     #[test]
@@ -195,10 +277,7 @@ mod tests {
             &caps(),
         )
         .unwrap();
-        assert_eq!(
-            got.as_str(),
-            "/Music/Bonobo/Migration/01-02 Kerala.flac"
-        );
+        assert_eq!(got.as_str(), "/Music/Bonobo/Migration/01-02 Kerala.flac");
     }
 
     #[test]
@@ -231,9 +310,7 @@ mod tests {
         // The separators in the field value collapse into the segment
         // itself, so it can never act as a parent reference.
         assert!(
-            got.as_str()
-                .split('/')
-                .all(|s| s != ".." && s != "."),
+            got.as_str().split('/').all(|s| s != ".." && s != "."),
             "no segment may be a parent reference: {}",
             got.as_str()
         );
@@ -262,8 +339,13 @@ mod tests {
     fn render_honours_the_device_name_length_cap() {
         let mut caps = caps();
         caps.max_path_bytes = 8;
-        let got = render("{album}/{title}.{ext}", &DevicePath::new("/M"), &fields(), &caps)
-            .unwrap();
+        let got = render(
+            "{album}/{title}.{ext}",
+            &DevicePath::new("/M"),
+            &fields(),
+            &caps,
+        )
+        .unwrap();
         for segment in got.as_str().split('/').filter(|s| !s.is_empty()) {
             assert!(segment.len() <= 8, "segment {segment:?} exceeds the cap");
         }

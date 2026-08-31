@@ -6,9 +6,7 @@
 //! and MTP transports tolerate exactly one active session per device.
 
 use super::engine::{self, EngineError};
-use super::events::{
-    DeviceComplete, DeviceFailed, DeviceLogLine, DevicePhase, DeviceProgress,
-};
+use super::events::{DeviceComplete, DeviceFailed, DeviceLogLine, DevicePhase, DeviceProgress};
 use super::observer::{DeviceObserver, TauriObserver};
 use super::transport::fs::FsTransport;
 use super::transport::DeviceTransport;
@@ -16,7 +14,7 @@ use crate::db::devices::{self, DeviceRow};
 use crate::db::Db;
 use crate::sync::import_log::{ImportLog, LogLevel, LogSink};
 use crate::sync::log_tailer::LogTailer;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -31,9 +29,13 @@ pub enum DeviceCommand {
 /// Cancellation flags, keyed by device id, shared with the UI thread.
 type CancelFlags = Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>;
 
+/// Devices with a run queued or in flight.
+type QueuedSet = Arc<Mutex<HashSet<i64>>>;
+
 pub struct DeviceWorker {
-    pub tx: mpsc::UnboundedSender<DeviceCommand>,
+    tx: mpsc::UnboundedSender<DeviceCommand>,
     cancels: CancelFlags,
+    queued: QueuedSet,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -41,17 +43,26 @@ impl DeviceWorker {
     pub fn spawn<R: Runtime>(db: Arc<Db>, app: AppHandle<R>) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<DeviceCommand>();
         let cancels: CancelFlags = Arc::new(Mutex::new(HashMap::new()));
+        let queued: QueuedSet = Arc::new(Mutex::new(HashSet::new()));
         let db_clone = Arc::clone(&db);
         let cancels_clone = Arc::clone(&cancels);
+        let queued_clone = Arc::clone(&queued);
         let task = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
                     DeviceCommand::RunNow { device_id } => {
                         let flag = flag_for(&cancels_clone, device_id);
-                        // A cancel requested before the run started
-                        // applies to the previous run, not this one.
-                        flag.store(false, Ordering::Relaxed);
+                        // Deliberately NOT cleared here. A cancel
+                        // issued between enqueue and dequeue is the
+                        // user asking for *this* run to stop; clearing
+                        // it would silently resume writing to the
+                        // device after they pressed Stop. `run_now`
+                        // clears it at enqueue time instead.
                         run_one(&db_clone, &app, device_id, &flag).await;
+                        queued_clone
+                            .lock()
+                            .expect("queued set mutex poisoned")
+                            .remove(&device_id);
                     }
                 }
             }
@@ -59,8 +70,36 @@ impl DeviceWorker {
         Self {
             tx,
             cancels,
+            queued,
             _task: task,
         }
+    }
+
+    /// Queue a run for `device_id`.
+    ///
+    /// A device already queued or in flight is ignored: the Sync button
+    /// only disables once a `device:progress` event has round-tripped,
+    /// so a double-click would otherwise enqueue a second run that
+    /// resumes writing right after the first one was cancelled.
+    pub fn run_now(&self, device_id: i64) -> Result<(), String> {
+        {
+            let mut queued = self.queued.lock().expect("queued set mutex poisoned");
+            if !queued.insert(device_id) {
+                return Ok(());
+            }
+        }
+        // Clear the cancel flag at enqueue time, so a cancel arriving
+        // after this point always belongs to the run being queued.
+        flag_for(&self.cancels, device_id).store(false, Ordering::Relaxed);
+
+        if let Err(e) = self.tx.send(DeviceCommand::RunNow { device_id }) {
+            self.queued
+                .lock()
+                .expect("queued set mutex poisoned")
+                .remove(&device_id);
+            return Err(format!("device worker has exited: {e}"));
+        }
+        Ok(())
     }
 
     /// Ask the in-flight sync for `device_id` to stop at the next
@@ -267,6 +306,7 @@ mod tests {
             "DAP",
             "filesystem",
             mount.path().to_str(),
+            false,
         )
         .await
         .unwrap();

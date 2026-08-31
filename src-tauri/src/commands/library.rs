@@ -330,6 +330,11 @@ pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> R
     // so a stale id could later resolve to an unrelated track.
     crate::db::playlists::prune_track(&state.db.engine, track_id)
         .await
+        .map_err(|e| e.to_string())?;
+    // Same hazard on the device manifest: a reused rowid would make an
+    // unrelated track look already-synced at the old track's path.
+    crate::db::device_objects::detach_track(&state.db.engine, track_id)
+        .await
         .map_err(|e| e.to_string())
 }
 

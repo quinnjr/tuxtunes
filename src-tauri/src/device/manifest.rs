@@ -28,6 +28,11 @@ pub struct Desired {
     pub size_bytes: i64,
     /// Host path to read from.
     pub source_path: String,
+    /// Whether a manifest row already claims this device path.
+    ///
+    /// Gates the overwrite in the upload phase: without a row, the file
+    /// on the device belongs to someone else and must not be clobbered.
+    pub replaces_existing: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -46,10 +51,7 @@ pub struct SyncPlan {
 /// Playlist rows are left alone: they are diffed separately, after the
 /// upload phase settles which tracks actually made it onto the device.
 pub fn diff(desired: &[Desired], existing: &[DeviceObjectRow]) -> SyncPlan {
-    let tracks: Vec<&DeviceObjectRow> = existing
-        .iter()
-        .filter(|r| r.kind == KIND_TRACK)
-        .collect();
+    let tracks: Vec<&DeviceObjectRow> = existing.iter().filter(|r| r.kind == KIND_TRACK).collect();
     let by_path: HashMap<&str, &DeviceObjectRow> = tracks
         .iter()
         .map(|r| (r.device_path.as_str(), *r))
@@ -77,7 +79,11 @@ pub fn diff(desired: &[Desired], existing: &[DeviceObjectRow]) -> SyncPlan {
                     plan.unchanged += 1;
                 } else {
                     plan.bytes_out += want.size_bytes.max(0) as u64;
-                    plan.replaces.push((have.id, want.clone()));
+                    // A manifest row claims this path, so overwriting
+                    // it is ours to do.
+                    let mut want = want.clone();
+                    want.replaces_existing = true;
+                    plan.replaces.push((have.id, want));
                 }
             }
         }
@@ -109,6 +115,7 @@ mod tests {
             encoded_codec: codec.into(),
             size_bytes: 100,
             source_path: "/lib/a.flac".into(),
+            replaces_existing: false,
         }
     }
 
@@ -152,7 +159,10 @@ mod tests {
             &[existing_at(7, "/Music/a.flac", "h1", "copy:flac")],
         );
         assert_eq!(plan.replaces.len(), 1);
-        assert_eq!(plan.replaces[0].0, 7, "the row id lets the engine update in place");
+        assert_eq!(
+            plan.replaces[0].0, 7,
+            "the row id lets the engine update in place"
+        );
     }
 
     #[test]
@@ -172,13 +182,19 @@ mod tests {
     fn an_unknown_hash_forces_a_replace() {
         let mut want = desired_at("/Music/a.flac", "h1");
         want.source_hash = None;
-        let plan = diff(&[want], &[existing_at(7, "/Music/a.flac", "h1", "copy:flac")]);
+        let plan = diff(
+            &[want],
+            &[existing_at(7, "/Music/a.flac", "h1", "copy:flac")],
+        );
         assert_eq!(plan.replaces.len(), 1);
     }
 
     #[test]
     fn a_dropped_track_is_an_orphan() {
-        let plan = diff(&[], &[existing_at(3, "/Music/gone.flac", "h1", "copy:flac")]);
+        let plan = diff(
+            &[],
+            &[existing_at(3, "/Music/gone.flac", "h1", "copy:flac")],
+        );
         assert_eq!(plan.orphans.len(), 1);
         assert_eq!(plan.orphans[0].id, 3);
     }
