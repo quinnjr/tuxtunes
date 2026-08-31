@@ -554,13 +554,21 @@ describe('PlaybackService', () => {
         { provide: PlaybackService, useClass: PlaybackService },
       ],
     });
+    // LibraryService registers its own app-lifetime listener in its
+    // constructor; materialize it first and snapshot so the assertions
+    // below cover only PlaybackService's listeners.
+    runInInjectionContext(injector, () => injector.get(LibraryService));
+    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    const before = unlistenSpies.length;
+
     const svc = runInInjectionContext(injector, () => injector.get(PlaybackService));
     for (let i = 0; i < 20; i += 1) await Promise.resolve();
-    expect(unlistenSpies.length).toBeGreaterThan(0);
+    const own = unlistenSpies.slice(before);
+    expect(own.length).toBeGreaterThan(0);
     svc.ngOnDestroy();
-    for (const u of unlistenSpies) expect(u).toHaveBeenCalledTimes(1);
+    for (const u of own) expect(u).toHaveBeenCalledTimes(1);
     svc.ngOnDestroy();
-    for (const u of unlistenSpies) expect(u).toHaveBeenCalledTimes(1);
+    for (const u of own) expect(u).toHaveBeenCalledTimes(1);
   });
 
   it('pause / resume / stop / seek / setVolume resolve without throwing and surface lastError on rejection', async () => {
