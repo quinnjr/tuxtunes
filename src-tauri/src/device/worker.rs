@@ -5,11 +5,10 @@
 //! deliberate: two syncs sharing a device would race on the manifest,
 //! and MTP transports tolerate exactly one active session per device.
 
-use super::engine::{self, EngineError};
+use super::engine::{self, EngineError, SharedTransport};
 use super::events::{DeviceComplete, DeviceFailed, DeviceLogLine, DevicePhase, DeviceProgress};
 use super::observer::{DeviceObserver, TauriObserver};
 use super::transport::fs::FsTransport;
-use super::transport::DeviceTransport;
 use crate::db::devices::{self, DeviceRow};
 use crate::db::Db;
 use crate::sync::import_log::{ImportLog, LogLevel, LogSink};
@@ -123,7 +122,7 @@ fn flag_for(cancels: &CancelFlags, device_id: i64) -> Arc<AtomicBool> {
 ///
 /// The MTP and WPD backends land in later phases; until then, asking
 /// for one is a clean, explicit failure rather than a silent no-op.
-fn transport_for(device: &DeviceRow) -> Result<Box<dyn DeviceTransport>, EngineError> {
+fn transport_for(device: &DeviceRow) -> Result<SharedTransport, EngineError> {
     match device.kind.as_str() {
         "filesystem" => {
             let mount = device.mount_path.as_deref().unwrap_or_default();
@@ -132,7 +131,7 @@ fn transport_for(device: &DeviceRow) -> Result<Box<dyn DeviceTransport>, EngineE
                     "filesystem device has no mount path".into(),
                 ));
             }
-            Ok(Box::new(FsTransport::new(PathBuf::from(mount))))
+            Ok(Arc::new(FsTransport::new(PathBuf::from(mount))))
         }
         other => Err(EngineError::TransportUnavailable(other.to_string())),
     }
@@ -144,7 +143,7 @@ async fn run_one<R: Runtime>(
     db: &Arc<Db>,
     app: &AppHandle<R>,
     device_id: i64,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) {
     let obs = TauriObserver::new(app.clone());
 
@@ -202,7 +201,7 @@ async fn sync_device(
     db: &Arc<Db>,
     obs: &dyn DeviceObserver,
     device_id: i64,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     write: LogSink<'_>,
 ) -> Result<DeviceComplete, EngineError> {
     let device = devices::get(&db.engine, device_id)
@@ -219,7 +218,7 @@ async fn sync_device(
         message: format!("opening {}", device.name),
     });
 
-    engine::run(&db.engine, transport.as_ref(), obs, &device, cancel).await
+    engine::run(&db.engine, &transport, obs, &device, cancel).await
 }
 
 #[cfg(test)]
@@ -290,9 +289,15 @@ mod tests {
     async fn syncing_an_unknown_device_fails_cleanly() {
         let (_f, db) = tmp_db().await;
         let obs = crate::device::observer::NoopObserver;
-        let err = sync_device(&db, &obs, 4242, &AtomicBool::new(false), &|_, _| {})
-            .await
-            .unwrap_err();
+        let err = sync_device(
+            &db,
+            &obs,
+            4242,
+            &Arc::new(AtomicBool::new(false)),
+            &|_, _| {},
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, EngineError::Db(_)), "{err:?}");
     }
 
@@ -311,7 +316,7 @@ mod tests {
         .await
         .unwrap();
         let obs = crate::device::observer::NoopObserver;
-        let done = sync_device(&db, &obs, 1, &AtomicBool::new(false), &|_, _| {})
+        let done = sync_device(&db, &obs, 1, &Arc::new(AtomicBool::new(false)), &|_, _| {})
             .await
             .expect("an empty selection is a valid, no-op sync");
         assert_eq!(done.added, 0);

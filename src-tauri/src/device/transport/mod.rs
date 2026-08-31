@@ -149,6 +149,11 @@ pub enum TransportError {
     /// The user cancelled mid-transfer. Not a failure.
     #[error("cancelled")]
     Cancelled,
+    /// The device stopped responding. A wedged gvfs/mtpfs mount can
+    /// block a syscall indefinitely, so the engine stops waiting rather
+    /// than hanging the worker forever.
+    #[error("device stopped responding during {0}")]
+    Timeout(String),
     #[error("transport error: {0}")]
     Other(#[source] anyhow::Error),
 }

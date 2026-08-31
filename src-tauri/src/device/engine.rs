@@ -29,15 +29,79 @@ use prax_sqlite::raw::SqliteRawEngine;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Chunk size for streaming a track onto the device. Also the interval
 /// at which cancellation is observed, so a cancel during a large FLAC
 /// is felt promptly rather than at the end of the file.
 const COPY_CHUNK: usize = 1024 * 1024;
 
+/// Deadline for a single metadata operation (list, stat, mkdir, delete,
+/// rename, free space). These are fast on a healthy device and hang
+/// forever on a wedged mount, so the gap between the two is wide.
+///
+/// Shortened under `cfg(test)`: the timeout tests drive the same code
+/// path, and a paused clock cannot help because tokio will not
+/// auto-advance while a `spawn_blocking` thread is still pending. The
+/// test value stays far above any in-memory transport operation.
+#[cfg(not(test))]
+const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const METADATA_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a transfer may make *no* progress before the device is
+/// declared unresponsive. Deliberately not a total deadline: a large
+/// FLAC over MTP legitimately takes minutes, and only a stall is a
+/// fault.
+#[cfg(not(test))]
+const COPY_STALL_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const COPY_STALL_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Directory, relative to the device root, holding the `.m3u8` files.
 const PLAYLIST_DIR: &str = "Playlists";
+
+/// A shared handle to the device, so blocking work can be moved onto
+/// the blocking pool without borrowing.
+pub type SharedTransport = Arc<dyn DeviceTransport>;
+
+/// Run one blocking transport operation on the blocking pool, with a
+/// deadline.
+///
+/// Transport calls are synchronous by nature — `libmtp` and the
+/// filesystem both block — so running them inline would stall the async
+/// worker and, on a wedged mount, hang it indefinitely.
+///
+/// On timeout the blocking task is *orphaned*: a blocked syscall cannot
+/// be cancelled from outside. It finishes or dies with the process. We
+/// stop waiting, which is what keeps the worker responsive.
+async fn op<T, F>(transport: &SharedTransport, what: &str, f: F) -> Result<T, TransportError>
+where
+    F: FnOnce(&dyn DeviceTransport) -> Result<T, TransportError> + Send + 'static,
+    T: Send + 'static,
+{
+    let transport = Arc::clone(transport);
+    let task = tokio::task::spawn_blocking(move || f(transport.as_ref()));
+    match tokio::time::timeout(METADATA_TIMEOUT, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(join)) => Err(TransportError::Other(anyhow::Error::from(join))),
+        Err(_) => Err(TransportError::Timeout(what.to_string())),
+    }
+}
+
+/// As [`op`], but for work whose failure is not worth propagating.
+async fn op_best_effort<F>(transport: &SharedTransport, what: &str, f: F)
+where
+    F: FnOnce(&dyn DeviceTransport) + Send + 'static,
+{
+    let transport = Arc::clone(transport);
+    let task = tokio::task::spawn_blocking(move || f(transport.as_ref()));
+    if tokio::time::timeout(METADATA_TIMEOUT, task).await.is_err() {
+        log::warn!("device: {what} timed out");
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -132,7 +196,7 @@ pub async fn resolve_selection(
 pub async fn build_plan(
     engine: &SqliteRawEngine,
     device: &DeviceRow,
-    transport: &dyn DeviceTransport,
+    transport: &SharedTransport,
 ) -> Result<(SyncPlan, Vec<Skip>), EngineError> {
     let caps = transport.capabilities();
     let root = DevicePath::new(&device.root_path);
@@ -141,13 +205,33 @@ pub async fn build_plan(
         .await
         .map_err(db_err)?;
 
+    // One `metadata` call per track adds up on a large selection, so
+    // the whole loop goes to the blocking pool rather than stalling the
+    // async worker.
+    let template = device.layout_template.clone();
+    let (desired, skips) =
+        tokio::task::spawn_blocking(move || render_desired(&selected, &template, &root, &caps))
+            .await
+            .map_err(db_err)?;
+
+    Ok((manifest::diff(&desired, &existing), skips))
+}
+
+/// Pure, blocking half of [`build_plan`]: stat each source file and
+/// render its device path.
+fn render_desired(
+    selected: &[TrackRow],
+    template: &str,
+    root: &DevicePath,
+    caps: &super::transport::Capabilities,
+) -> (Vec<Desired>, Vec<Skip>) {
     let mut desired = Vec::with_capacity(selected.len());
     let mut skips = Vec::new();
     // Two tracks can legitimately render to the same path (same album,
     // same title). Suffix the later ones so neither is silently lost.
     let mut taken: HashSet<String> = HashSet::new();
 
-    for row in &selected {
+    for row in selected {
         let source = Path::new(&row.file_path);
         let size = match std::fs::metadata(source) {
             Ok(md) => md.len() as i64,
@@ -162,7 +246,7 @@ pub async fn build_plan(
         };
 
         let fields = TrackFields::from_track_row(row, source);
-        let rendered = match layout::render(&device.layout_template, &root, &fields, &caps) {
+        let rendered = match layout::render(template, root, &fields, caps) {
             Ok(p) => p,
             Err(e) => {
                 skips.push(Skip {
@@ -192,7 +276,7 @@ pub async fn build_plan(
         });
     }
 
-    Ok((manifest::diff(&desired, &existing), skips))
+    (desired, skips)
 }
 
 /// Suffix ` (2)`, ` (3)` … until the path is unclaimed this run.
@@ -218,10 +302,10 @@ fn dedupe_path(path: DevicePath, taken: &mut HashSet<String>) -> DevicePath {
 /// Run one full sync.
 pub async fn run(
     engine: &SqliteRawEngine,
-    transport: &dyn DeviceTransport,
+    transport: &SharedTransport,
     obs: &dyn DeviceObserver,
     device: &DeviceRow,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<DeviceComplete, EngineError> {
     let mut done = DeviceComplete {
         device_id: device.id,
@@ -237,14 +321,18 @@ pub async fn run(
         "reading device",
     );
     let storage = if transport.capabilities().free_space {
-        transport.free_space().ok()
+        // A device that will not answer here is one we should not start
+        // writing to, so this deadline is load-bearing.
+        op(transport, "reading free space", |t| t.free_space())
+            .await
+            .ok()
     } else {
         None
     };
 
     report(obs, device.id, DevicePhase::Planning, 0, 1, "planning");
     let (plan, skips) = build_plan(engine, device, transport).await?;
-    clean_partials(transport, &plan);
+    clean_partials(transport, &plan).await;
     done.skipped = skips.len() as u64;
     for skip in &skips {
         warn(
@@ -298,11 +386,11 @@ pub async fn run(
 /// now on the device, which the playlist phase needs.
 async fn upload_phase(
     engine: &SqliteRawEngine,
-    transport: &dyn DeviceTransport,
+    transport: &SharedTransport,
     obs: &dyn DeviceObserver,
     device: &DeviceRow,
     plan: &SyncPlan,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     done: &mut DeviceComplete,
 ) -> Result<HashMap<i64, String>, EngineError> {
     done.unchanged = plan.unchanged as u64;
@@ -345,7 +433,7 @@ async fn upload_phase(
             want.device_path.clone(),
         );
 
-        match upload_one(transport, want, cancel) {
+        match upload_one_watched(transport, want, cancel).await {
             Ok(bytes) => {
                 device_objects::upsert(
                     engine,
@@ -403,6 +491,53 @@ async fn upload_phase(
     Ok(present)
 }
 
+/// Run one upload on the blocking pool, watched for stalls.
+///
+/// The copy is inherently blocking, and a wedged mount can park it in a
+/// syscall forever. Rather than a total deadline — a large FLAC over
+/// MTP legitimately takes minutes — this watches the byte counter and
+/// gives up only when a whole [`COPY_STALL_TIMEOUT`] window passes with
+/// no progress at all.
+///
+/// On a stall the `abort` flag is raised so the orphaned task stops at
+/// its next chunk, and the caller stops waiting either way.
+async fn upload_one_watched(
+    transport: &SharedTransport,
+    want: &Desired,
+    cancel: &Arc<AtomicBool>,
+) -> Result<u64, TransportError> {
+    let progress = Arc::new(AtomicU64::new(0));
+    let abort = Arc::new(AtomicBool::new(false));
+
+    let mut task = {
+        let transport = Arc::clone(transport);
+        let want = want.clone();
+        let cancel = Arc::clone(cancel);
+        let abort = Arc::clone(&abort);
+        let progress = Arc::clone(&progress);
+        tokio::task::spawn_blocking(move || {
+            upload_one(transport.as_ref(), &want, &cancel, &abort, &progress)
+        })
+    };
+
+    let mut last_seen = 0u64;
+    loop {
+        match tokio::time::timeout(COPY_STALL_TIMEOUT, &mut task).await {
+            Ok(joined) => {
+                return joined.map_err(|e| TransportError::Other(anyhow::Error::from(e)))?
+            }
+            Err(_) => {
+                let now = progress.load(Ordering::Relaxed);
+                if now == last_seen {
+                    abort.store(true, Ordering::Relaxed);
+                    return Err(TransportError::Timeout(want.device_path.clone()));
+                }
+                last_seen = now;
+            }
+        }
+    }
+}
+
 /// Stream one track onto the device, writing to a `.tuxpart` name and
 /// renaming into place where the transport supports it, so a partial
 /// transfer never occupies the real path.
@@ -410,6 +545,8 @@ fn upload_one(
     transport: &dyn DeviceTransport,
     want: &Desired,
     cancel: &AtomicBool,
+    abort: &AtomicBool,
+    progress: &AtomicU64,
 ) -> Result<u64, TransportError> {
     let use_temp = transport.capabilities().rename;
     let write_path = if use_temp {
@@ -418,7 +555,15 @@ fn upload_one(
         DevicePath::new(&want.device_path)
     };
 
-    let result = copy_one(transport, want, cancel, &write_path, use_temp);
+    let result = copy_one(
+        transport,
+        want,
+        cancel,
+        abort,
+        progress,
+        &write_path,
+        use_temp,
+    );
     if result.is_err() && use_temp {
         // A real transport materialises the destination on open, so a
         // failure anywhere above leaves a partial `.tuxpart` behind
@@ -428,10 +573,13 @@ fn upload_one(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn copy_one(
     transport: &dyn DeviceTransport,
     want: &Desired,
     cancel: &AtomicBool,
+    abort: &AtomicBool,
+    progress: &AtomicU64,
     write_path: &DevicePath,
     use_temp: bool,
 ) -> Result<u64, TransportError> {
@@ -454,12 +602,19 @@ fn copy_one(
             if cancel.load(Ordering::Relaxed) {
                 return Err(TransportError::Cancelled);
             }
+            // The watchdog gave up on this transfer. Unwind as soon as
+            // the wedged call lets us, so the orphan does not keep
+            // writing to a device the engine has moved on from.
+            if abort.load(Ordering::Relaxed) {
+                return Err(TransportError::Timeout(want.device_path.clone()));
+            }
             let n = std::io::Read::read(&mut source, &mut buf).map_err(map_write_error)?;
             if n == 0 {
                 break;
             }
             sink.write_all(&buf[..n]).map_err(map_write_error)?;
             written += n as u64;
+            progress.store(written, Ordering::Relaxed);
         }
         sink.flush().map_err(map_write_error)?;
     }
@@ -508,11 +663,11 @@ fn map_write_error(e: std::io::Error) -> TransportError {
 /// where the transport offers one.
 async fn playlist_phase(
     engine: &SqliteRawEngine,
-    transport: &dyn DeviceTransport,
+    transport: &SharedTransport,
     obs: &dyn DeviceObserver,
     device: &DeviceRow,
     present: &HashMap<i64, String>,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<u64, EngineError> {
     let caps = transport.capabilities();
     let root = DevicePath::new(&device.root_path);
@@ -521,7 +676,11 @@ async fn playlist_phase(
     let wanted = selected_playlists(engine, device).await?;
     let total = wanted.len() as u64;
     if total > 0 {
-        transport.mkdir_all(&dir)?;
+        let d = dir.clone();
+        op(transport, "creating the playlist directory", move |t| {
+            t.mkdir_all(&d).map(|_| ())
+        })
+        .await?;
     }
 
     let mut written_paths = BTreeSet::new();
@@ -556,9 +715,14 @@ async fn playlist_phase(
         let file = dir.join(&m3u::playlist_file_name(name, ancestors, &caps));
         let body = m3u::render_m3u8(&entries, &dir);
 
-        match write_text(transport, &file, &body) {
-            Ok(()) => {}
-            Err(e) => {
+        {
+            let f = file.clone();
+            let b = body.clone();
+            if let Err(e) = op(transport, "writing a playlist", move |t| {
+                write_text(t, &f, &b)
+            })
+            .await
+            {
                 warn(
                     obs,
                     device.id,
@@ -574,7 +738,12 @@ async fn playlist_phase(
                 .iter()
                 .map(|e| super::transport::ObjectId(e.device_path.as_str().to_string()))
                 .collect();
-            if let Err(e) = transport.create_playlist_object(&file, &ids) {
+            let f = file.clone();
+            if let Err(e) = op(transport, "registering a playlist object", move |t| {
+                t.create_playlist_object(&f, &ids).map(|_| ())
+            })
+            .await
+            {
                 // The `.m3u8` is already written; the native object is
                 // a bonus for the device's own scanner.
                 warn(
@@ -617,7 +786,7 @@ async fn playlist_phase(
                 continue;
             }
             let path = DevicePath::new(&row.device_path);
-            match transport.delete(&path) {
+            match op(transport, "deleting a playlist", move |t| t.delete(&path)).await {
                 // Already gone is the desired end state.
                 Ok(()) | Err(TransportError::NotFound(_)) => {}
                 Err(e) => {
@@ -645,11 +814,11 @@ async fn playlist_phase(
 /// Delete orphaned track objects, then any directories we emptied.
 async fn prune_phase(
     engine: &SqliteRawEngine,
-    transport: &dyn DeviceTransport,
+    transport: &SharedTransport,
     obs: &dyn DeviceObserver,
     device: &DeviceRow,
     plan: &SyncPlan,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<u64, EngineError> {
     // A weak device key could match the wrong hardware; never delete
     // on a guess.
@@ -671,7 +840,8 @@ async fn prune_phase(
             row.device_path.clone(),
         );
         let path = DevicePath::new(&row.device_path);
-        match transport.delete(&path) {
+        let target = path.clone();
+        match op(transport, "deleting a track", move |t| t.delete(&target)).await {
             Ok(()) | Err(TransportError::NotFound(_)) => {}
             Err(e) => {
                 warn(
@@ -692,7 +862,11 @@ async fn prune_phase(
         deleted += 1;
     }
 
-    remove_empty_dirs(transport, &parents, &DevicePath::new(&device.root_path));
+    let root = DevicePath::new(&device.root_path);
+    op_best_effort(transport, "removing emptied directories", move |t| {
+        remove_empty_dirs(t, &parents, &root)
+    })
+    .await;
     Ok(deleted)
 }
 
@@ -728,7 +902,28 @@ fn remove_empty_dirs(
 /// Only directories this run will write into are visited: walking the
 /// whole device on every sync is slow over MTP, and a `.tuxpart`
 /// outside the tree we are about to touch is not ours to delete.
-fn clean_partials(transport: &dyn DeviceTransport, plan: &SyncPlan) {
+async fn clean_partials(transport: &SharedTransport, plan: &SyncPlan) {
+    let dirs = partial_scan_dirs(plan);
+    if dirs.is_empty() {
+        return;
+    }
+    op_best_effort(transport, "clearing partial transfers", move |t| {
+        for dir in dirs {
+            let Ok(children) = t.list(&DevicePath::new(&dir)) else {
+                continue;
+            };
+            for child in children {
+                if !child.is_dir && child.path.as_str().ends_with(".tuxpart") {
+                    let _ = t.delete(&child.path);
+                }
+            }
+        }
+    })
+    .await;
+}
+
+/// The directories this run will write into or prune from.
+fn partial_scan_dirs(plan: &SyncPlan) -> BTreeSet<String> {
     let mut dirs: BTreeSet<String> = BTreeSet::new();
     let touched = plan
         .adds
@@ -741,16 +936,7 @@ fn clean_partials(transport: &dyn DeviceTransport, plan: &SyncPlan) {
             dirs.insert(parent.as_str().to_string());
         }
     }
-    for dir in dirs {
-        let Ok(children) = transport.list(&DevicePath::new(&dir)) else {
-            continue;
-        };
-        for child in children {
-            if !child.is_dir && child.path.as_str().ends_with(".tuxpart") {
-                let _ = transport.delete(&child.path);
-            }
-        }
-    }
+    dirs
 }
 
 /// The playlists this device's selection names, as

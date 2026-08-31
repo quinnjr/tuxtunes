@@ -1,11 +1,12 @@
 //! Tauri commands for outbound device sync.
 
 use crate::db::devices::{self, DeviceRow, DeviceSettings, SelectionEntry};
-use crate::device::engine;
+use crate::device::engine::{self, SharedTransport};
 use crate::device::transport::fs::FsTransport;
-use crate::device::transport::{DeviceTransport, StorageInfo};
+use crate::device::transport::StorageInfo;
 use crate::runtime::AppState;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[tauri::command]
 pub async fn list_devices(state: tauri::State<'_, AppState>) -> Result<Vec<DeviceRow>, String> {
@@ -209,7 +210,7 @@ pub async fn preview_device_sync(
         .await
         .map_err(|e| e.to_string())?;
     let transport = filesystem_transport(&device)?;
-    let (plan, skips) = engine::build_plan(&state.db.engine, &device, transport.as_ref())
+    let (plan, skips) = engine::build_plan(&state.db.engine, &device, &transport)
         .await
         .map_err(|e| e.to_string())?;
     let storage: Option<StorageInfo> = if transport.capabilities().free_space {
@@ -259,7 +260,7 @@ pub async fn cancel_device_sync(
 ///
 /// Only filesystem devices are reachable in Phase 1; the MTP and WPD
 /// backends replace this with the worker's shared resolver.
-fn filesystem_transport(device: &DeviceRow) -> Result<Box<dyn DeviceTransport>, String> {
+fn filesystem_transport(device: &DeviceRow) -> Result<SharedTransport, String> {
     if device.kind != "filesystem" {
         return Err(format!(
             "no transport for device kind '{}' yet",
@@ -271,7 +272,7 @@ fn filesystem_transport(device: &DeviceRow) -> Result<Box<dyn DeviceTransport>, 
         .as_deref()
         .filter(|m| !m.is_empty())
         .ok_or_else(|| "filesystem device has no mount path".to_string())?;
-    Ok(Box::new(FsTransport::new(PathBuf::from(mount))))
+    Ok(Arc::new(FsTransport::new(PathBuf::from(mount))))
 }
 
 #[cfg(test)]
@@ -323,9 +324,7 @@ mod tests {
         let (_f, _m, db, id) = setup().await;
         let device = devices::get(&db.engine, id).await.unwrap();
         let t = filesystem_transport(&device).unwrap();
-        let (plan, skips) = engine::build_plan(&db.engine, &device, t.as_ref())
-            .await
-            .unwrap();
+        let (plan, skips) = engine::build_plan(&db.engine, &device, &t).await.unwrap();
         assert!(plan.adds.is_empty());
         assert!(skips.is_empty());
     }
@@ -347,9 +346,7 @@ mod tests {
 
         let device = devices::get(&db.engine, id).await.unwrap();
         let t = filesystem_transport(&device).unwrap();
-        let (plan, _) = engine::build_plan(&db.engine, &device, t.as_ref())
-            .await
-            .unwrap();
+        let (plan, _) = engine::build_plan(&db.engine, &device, &t).await.unwrap();
 
         assert_eq!(plan.adds.len(), 1);
         assert_eq!(plan.bytes_out, 10);

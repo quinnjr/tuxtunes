@@ -8,6 +8,7 @@
 //! materialises the destination on open — only the latter can prove
 //! the `.tuxpart` cleanup actually holds.
 
+use super::engine::SharedTransport;
 use super::engine::{build_plan, resolve_selection, run, EngineError};
 use super::events::{DevicePhase, DeviceWarningKind};
 use super::observer::RecordingObserver;
@@ -18,6 +19,7 @@ use crate::db::devices::{self, DeviceRow, SelectionEntry};
 use crate::db::{playlists as db_playlists, Db};
 use prax_query::filter::FilterValue;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 /// A library with three tracks (real files on disk) in one album, plus
 /// a regular playlist holding all three, and a filesystem device whose
@@ -125,8 +127,173 @@ async fn set_flag(db: &Db, device_id: i64, column: &str, value: i64) {
         .unwrap();
 }
 
-fn no_cancel() -> AtomicBool {
-    AtomicBool::new(false)
+fn no_cancel() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(false))
+}
+
+fn cancelled() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(true))
+}
+
+/// The engine takes a shared transport so it can move blocking work
+/// onto the blocking pool. `FakeTransport` clones share one backing
+/// store, so the handle kept here still observes what the engine wrote.
+fn shared(t: &FakeTransport) -> SharedTransport {
+    Arc::new(t.clone())
+}
+
+/// A transport that never answers, standing in for a wedged
+/// gvfs/mtpfs mount. Every call parks the calling thread until the test
+/// releases it.
+///
+/// The stranded threads are the point: a blocked syscall cannot be
+/// cancelled, so the engine's contract is only that *it* stops waiting.
+/// They must still be releasable, because dropping a tokio runtime
+/// waits for its outstanding blocking tasks — a genuinely endless park
+/// would hang the test process rather than the code under test.
+#[derive(Debug)]
+struct HangingTransport {
+    release: Arc<AtomicBool>,
+}
+
+impl HangingTransport {
+    fn new() -> (Self, Arc<AtomicBool>) {
+        let release = Arc::new(AtomicBool::new(false));
+        (
+            Self {
+                release: Arc::clone(&release),
+            },
+            release,
+        )
+    }
+
+    fn park<T>(&self) -> Result<T, super::transport::TransportError> {
+        while !self.release.load(std::sync::atomic::Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err(super::transport::TransportError::Disconnected)
+    }
+}
+
+impl DeviceTransport for HangingTransport {
+    fn capabilities(&self) -> super::transport::Capabilities {
+        super::transport::Capabilities {
+            playlist_objects: false,
+            free_space: true,
+            rename: true,
+            max_path_bytes: 255,
+            filesystem: super::transport::FilesystemKind::Unknown,
+        }
+    }
+    fn list(
+        &self,
+        _dir: &DevicePath,
+    ) -> Result<Vec<super::transport::ObjectStat>, super::transport::TransportError> {
+        self.park()
+    }
+    fn stat(
+        &self,
+        _path: &DevicePath,
+    ) -> Result<Option<super::transport::ObjectStat>, super::transport::TransportError> {
+        self.park()
+    }
+    fn mkdir_all(
+        &self,
+        _dir: &DevicePath,
+    ) -> Result<super::transport::ObjectId, super::transport::TransportError> {
+        self.park()
+    }
+    fn open_write(
+        &self,
+        _path: &DevicePath,
+        _size_hint: u64,
+    ) -> Result<Box<dyn std::io::Write + Send>, super::transport::TransportError> {
+        self.park()
+    }
+    fn open_read(
+        &self,
+        _path: &DevicePath,
+    ) -> Result<Box<dyn std::io::Read + Send>, super::transport::TransportError> {
+        self.park()
+    }
+    fn rename(
+        &self,
+        _from: &DevicePath,
+        _to: &DevicePath,
+    ) -> Result<(), super::transport::TransportError> {
+        self.park()
+    }
+    fn delete(&self, _path: &DevicePath) -> Result<(), super::transport::TransportError> {
+        self.park()
+    }
+    fn free_space(
+        &self,
+    ) -> Result<super::transport::StorageInfo, super::transport::TransportError> {
+        self.park()
+    }
+    fn create_playlist_object(
+        &self,
+        _path: &DevicePath,
+        _entries: &[super::transport::ObjectId],
+    ) -> Result<Option<super::transport::ObjectId>, super::transport::TransportError> {
+        self.park()
+    }
+}
+
+// ---------------------------------------------------------------- //
+// Unresponsive devices
+// ---------------------------------------------------------------- //
+
+/// The deadline is shortened under cfg(test), so this asserts the
+/// wiring against a real clock in a couple of seconds rather than
+/// waiting out the production value.
+#[tokio::test]
+async fn a_wedged_device_does_not_hang_the_sync() {
+    let f = fixture().await;
+    let (hanging, release) = HangingTransport::new();
+    let t: SharedTransport = Arc::new(hanging);
+
+    let err = run(
+        &f.db.engine,
+        &t,
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .expect_err("a device that never answers must not hang the worker");
+    release.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // The free-space probe is best-effort, so the run reaches planning
+    // and then fails on the first mandatory operation.
+    assert!(
+        matches!(
+            err,
+            EngineError::Transport(super::transport::TransportError::Timeout(_))
+                | EngineError::Cancelled
+        ),
+        "expected a timeout, got {err:?}"
+    );
+    assert_eq!(
+        f.manifest_len().await,
+        0,
+        "nothing may be claimed for a device that never responded"
+    );
+}
+
+#[tokio::test]
+async fn a_wedged_device_is_reported_rather_than_retried_forever() {
+    let f = fixture().await;
+    let (hanging, release) = HangingTransport::new();
+    let t: SharedTransport = Arc::new(hanging);
+    let obs = RecordingObserver::default();
+
+    let _ = run(&f.db.engine, &t, &obs, &f.device().await, &no_cancel()).await;
+    release.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // Whatever it failed on, the run ended: the observer saw phases and
+    // the call returned instead of parking the worker.
+    assert!(!obs.progress_events().is_empty());
 }
 
 // ---------------------------------------------------------------- //
@@ -170,9 +337,15 @@ async fn run_uploads_selected_tracks_and_records_the_manifest() {
     let t = FakeTransport::new();
     let obs = RecordingObserver::default();
 
-    let done = run(&f.db.engine, &t, &obs, &f.device().await, &no_cancel())
-        .await
-        .unwrap();
+    let done = run(
+        &f.db.engine,
+        &shared(&t),
+        &obs,
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(done.added, 3);
     assert_eq!(done.skipped, 0);
@@ -196,7 +369,7 @@ async fn uploaded_bytes_match_the_source_exactly() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -219,7 +392,7 @@ async fn phases_are_reported_in_order() {
     let obs = RecordingObserver::default();
     run(
         &f.db.engine,
-        &FakeTransport::new(),
+        &shared(&FakeTransport::new()),
         &obs,
         &f.device().await,
         &no_cancel(),
@@ -239,7 +412,7 @@ async fn a_second_run_with_no_changes_uploads_nothing() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -249,7 +422,7 @@ async fn a_second_run_with_no_changes_uploads_nothing() {
 
     let done = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -270,7 +443,7 @@ async fn an_edited_file_is_replaced_not_duplicated() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -288,7 +461,7 @@ async fn an_edited_file_is_replaced_not_duplicated() {
 
     let done = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -311,7 +484,7 @@ async fn deselecting_everything_prunes_only_what_we_wrote() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -333,7 +506,7 @@ async fn deselecting_everything_prunes_only_what_we_wrote() {
         .unwrap();
     let done = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -356,7 +529,7 @@ async fn pruning_removes_the_directories_it_emptied() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -368,7 +541,7 @@ async fn pruning_removes_the_directories_it_emptied() {
         .unwrap();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -393,7 +566,7 @@ async fn mirror_deletes_off_leaves_orphans_in_place() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -407,7 +580,7 @@ async fn mirror_deletes_off_leaves_orphans_in_place() {
         .unwrap();
     let done = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -428,7 +601,7 @@ async fn a_weak_device_key_suppresses_pruning() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -442,7 +615,7 @@ async fn a_weak_device_key_suppresses_pruning() {
         .unwrap();
     let done = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -467,9 +640,15 @@ async fn an_upload_failure_warns_and_leaves_no_manifest_row() {
     t.fail_next_write_with(Fault::Other);
     let obs = RecordingObserver::default();
 
-    let done = run(&f.db.engine, &t, &obs, &f.device().await, &no_cancel())
-        .await
-        .unwrap();
+    let done = run(
+        &f.db.engine,
+        &shared(&t),
+        &obs,
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(done.added, 2, "the two that succeeded");
     assert_eq!(done.skipped, 1);
@@ -488,7 +667,7 @@ async fn a_failed_upload_leaves_no_partial_file_on_the_device() {
     t.fail_next_write_with(Fault::Other);
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -510,7 +689,9 @@ async fn a_real_filesystem_sync_leaves_no_partial_and_copies_exactly() {
     // against a transport that really touches a filesystem.
     let f = fixture().await;
     let mount = tempfile::tempdir().unwrap();
-    let t = crate::device::transport::fs::FsTransport::new(mount.path().to_path_buf());
+    let t: SharedTransport = Arc::new(crate::device::transport::fs::FsTransport::new(
+        mount.path().to_path_buf(),
+    ));
 
     // Make one source unreadable so the upload of it fails mid-run.
     std::fs::remove_file(&f.track_paths[1]).unwrap();
@@ -567,9 +748,15 @@ async fn an_add_never_overwrites_a_file_we_did_not_write() {
     }
 
     let obs = RecordingObserver::default();
-    let done = run(&f.db.engine, &t, &obs, &f.device().await, &no_cancel())
-        .await
-        .unwrap();
+    let done = run(
+        &f.db.engine,
+        &shared(&t),
+        &obs,
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
 
     let (_, bytes) = t
         .files()
@@ -593,7 +780,7 @@ async fn running_out_of_space_mid_copy_fails_rather_than_reporting_success() {
 
     let err = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -612,7 +799,7 @@ async fn out_of_space_aborts_before_writing_anything() {
 
     let err = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -631,9 +818,15 @@ async fn a_missing_source_file_is_skipped_with_a_warning() {
     let t = FakeTransport::new();
     let obs = RecordingObserver::default();
 
-    let done = run(&f.db.engine, &t, &obs, &f.device().await, &no_cancel())
-        .await
-        .unwrap();
+    let done = run(
+        &f.db.engine,
+        &shared(&t),
+        &obs,
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(done.added, 2);
     assert_eq!(done.skipped, 1);
@@ -648,10 +841,10 @@ async fn cancellation_stops_before_uploading() {
 
     let err = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &obs,
         &f.device().await,
-        &AtomicBool::new(true),
+        &cancelled(),
     )
     .await
     .expect_err("a cancelled run must not report success");
@@ -671,10 +864,10 @@ async fn a_cancelled_run_does_not_stamp_last_sync_at() {
     let t = FakeTransport::new();
     let _ = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
-        &AtomicBool::new(true),
+        &cancelled(),
     )
     .await;
 
@@ -700,7 +893,7 @@ async fn a_leftover_partial_from_an_earlier_run_is_cleaned_up() {
 
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -726,7 +919,7 @@ async fn the_m3u8_lists_only_tracks_that_reached_the_device() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -751,7 +944,7 @@ async fn a_native_playlist_object_is_registered_when_supported() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -771,9 +964,15 @@ async fn a_playlist_object_failure_is_a_warning_not_a_failure() {
     t.fail_playlist_objects();
     let obs = RecordingObserver::default();
 
-    let done = run(&f.db.engine, &t, &obs, &f.device().await, &no_cancel())
-        .await
-        .unwrap();
+    let done = run(
+        &f.db.engine,
+        &shared(&t),
+        &obs,
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(done.playlists_written, 1);
     assert!(obs.has_warning(DeviceWarningKind::PlaylistObjectFailed));
@@ -791,7 +990,7 @@ async fn playlist_objects_are_skipped_when_the_device_opts_out() {
     let t = FakeTransport::new();
     run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -830,7 +1029,7 @@ async fn a_smart_playlist_resolves_at_sync_time() {
     let t = FakeTransport::new();
     let done = run(
         &f.db.engine,
-        &t,
+        &shared(&t),
         &RecordingObserver::default(),
         &f.device().await,
         &no_cancel(),
@@ -852,7 +1051,7 @@ async fn a_smart_playlist_resolves_at_sync_time() {
 async fn build_plan_reports_bytes_without_writing() {
     let f = fixture().await;
     let t = FakeTransport::new();
-    let (plan, skips) = build_plan(&f.db.engine, &f.device().await, &t)
+    let (plan, skips) = build_plan(&f.db.engine, &f.device().await, &shared(&t))
         .await
         .unwrap();
 
@@ -876,7 +1075,7 @@ async fn two_tracks_rendering_to_one_path_are_both_kept() {
         .unwrap();
 
     let t = FakeTransport::new();
-    let (plan, _) = build_plan(&f.db.engine, &f.device().await, &t)
+    let (plan, _) = build_plan(&f.db.engine, &f.device().await, &shared(&t))
         .await
         .unwrap();
     let paths: Vec<&str> = plan.adds.iter().map(|d| d.device_path.as_str()).collect();
