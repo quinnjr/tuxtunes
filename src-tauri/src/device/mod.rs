@@ -6,7 +6,9 @@
 //! the [`transport::DeviceTransport`] trait, so the platform-specific
 //! backends stay a thin, swappable leaf.
 
+pub mod events;
 pub mod layout;
 pub mod manifest;
+pub mod observer;
 pub mod playlists;
 pub mod transport;
