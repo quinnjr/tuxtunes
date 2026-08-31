@@ -6,6 +6,7 @@ function fakeMouseEvent(x: number, y: number): MouseEvent {
     clientX: x,
     clientY: y,
     preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
   } as unknown as MouseEvent;
 }
 
@@ -25,6 +26,13 @@ describe('ContextMenuService', () => {
     expect(state?.x).toBe(120);
     expect(state?.y).toBe(80);
     expect(state?.items).toEqual([{ label: 'Play' }]);
+  });
+
+  it('show() stops propagation so the opening event cannot reach the document-level dismiss handler', () => {
+    const svc = new ContextMenuService();
+    const evt = fakeMouseEvent(0, 0);
+    svc.show(evt, [{ label: 'Play' }]);
+    expect(evt.stopPropagation).toHaveBeenCalled();
   });
 
   it('hide() returns to null', () => {

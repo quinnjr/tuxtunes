@@ -192,6 +192,9 @@ pub struct PlaylistRow {
     /// Track count cached on the row. For smart playlists this is the
     /// last-evaluated count (NULL until first evaluation).
     pub cached_track_count: Option<i64>,
+    /// Some for playlists that came from a sync source (they reappear
+    /// on the next sync when deleted); None for user-created ones.
+    pub sync_source_id: Option<i64>,
 }
 
 /// Create a user-owned smart playlist (no sync source). Returns the
@@ -216,6 +219,100 @@ pub async fn create_smart(
         .get("id")
         .and_then(|v| v.as_i64())
         .ok_or_else(|| PlaylistsError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
+}
+
+/// Create a user-owned regular (manual) playlist with no tracks yet.
+/// No sync source, so a re-sync never touches or deletes it.
+pub async fn create_regular(
+    engine: &SqliteRawEngine,
+    name: &str,
+) -> Result<i64, PlaylistsError> {
+    let sql = "INSERT INTO playlists (name, kind, sort_order, track_entries) \
+               VALUES (?, 'regular', 0, '[]') RETURNING id";
+    let params = vec![FilterValue::String(name.to_string())];
+    let row = engine
+        .raw_sql_first(sql, &params)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    row.into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| PlaylistsError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
+}
+
+/// Read a regular playlist's `track_entries` as ids. NotFound covers
+/// both unknown ids and non-regular kinds — callers can only append to
+/// manual playlists.
+async fn regular_entries(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+) -> Result<Vec<i64>, PlaylistsError> {
+    let sql = "SELECT track_entries FROM playlists WHERE id = ? AND kind = 'regular'";
+    let row = engine
+        .raw_sql_optional(sql, &[FilterValue::Int(playlist_id)])
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?
+        .ok_or(PlaylistsError::NotFound(playlist_id))?;
+    let val = row
+        .into_json()
+        .get("track_entries")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    match val {
+        serde_json::Value::String(s) => {
+            serde_json::from_str(&s).map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+        }
+        serde_json::Value::Array(_) => {
+            serde_json::from_value(val).map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+async fn write_entries(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+    entries: &[i64],
+) -> Result<(), PlaylistsError> {
+    let json = serde_json::to_string(entries)
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    let sql = "UPDATE playlists SET track_entries = ?, cached_track_count = ? WHERE id = ?";
+    let params = vec![
+        FilterValue::String(json),
+        FilterValue::Int(entries.len() as i64),
+        FilterValue::Int(playlist_id),
+    ];
+    engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map(|_| ())
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
+/// Append `track_ids` (in the given order) to a regular playlist.
+pub async fn add_tracks(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+    track_ids: &[i64],
+) -> Result<(), PlaylistsError> {
+    let mut entries = regular_entries(engine, playlist_id).await?;
+    entries.extend_from_slice(track_ids);
+    write_entries(engine, playlist_id, &entries).await
+}
+
+/// Remove every occurrence of each of `track_ids` from a regular playlist.
+pub async fn remove_tracks(
+    engine: &SqliteRawEngine,
+    playlist_id: i64,
+    track_ids: &[i64],
+) -> Result<(), PlaylistsError> {
+    let drop: std::collections::HashSet<i64> = track_ids.iter().copied().collect();
+    let entries: Vec<i64> = regular_entries(engine, playlist_id)
+        .await?
+        .into_iter()
+        .filter(|id| !drop.contains(id))
+        .collect();
+    write_entries(engine, playlist_id, &entries).await
 }
 
 /// Update an existing smart playlist's rule. The DB doesn't validate
@@ -293,7 +390,8 @@ pub async fn get_smart_rule(
 /// List every playlist for the sidebar. Ordered by sort_order then
 /// name so the user sees a stable presentation.
 pub async fn list_all(engine: &SqliteRawEngine) -> Result<Vec<PlaylistRow>, PlaylistsError> {
-    let sql = "SELECT id, name, kind, parent_id, sort_order, cached_track_count \
+    let sql = "SELECT id, name, kind, parent_id, sort_order, cached_track_count, \
+               sync_source_id \
                FROM playlists \
                ORDER BY sort_order ASC, name COLLATE NOCASE ASC";
     let rows = engine
@@ -755,6 +853,11 @@ mod tests {
         create_smart(&db.engine, "Mine", r#"{}"#).await.unwrap();
         let rows = list_all(&db.engine).await.unwrap();
         assert_eq!(rows.len(), 2);
+        // Synced rows carry their source id; user-created rows don't.
+        let synced = rows.iter().find(|r| r.name == "Synced").unwrap();
+        assert_eq!(synced.sync_source_id, Some(1));
+        let mine = rows.iter().find(|r| r.name == "Mine").unwrap();
+        assert_eq!(mine.sync_source_id, None);
     }
 
     #[tokio::test]
@@ -816,6 +919,62 @@ mod tests {
     fn playlists_error_display_works() {
         let e = PlaylistsError::Query(anyhow::anyhow!("kaput"));
         assert!(e.to_string().contains("kaput"));
+    }
+
+    #[tokio::test]
+    async fn create_regular_inserts_empty_user_playlist() {
+        let db = tmp().await;
+        let id = create_regular(&db.engine, "Mixtape").await.unwrap();
+        assert!(id > 0);
+        let rows = list_all(&db.engine).await.unwrap();
+        let row = rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(row.name, "Mixtape");
+        assert_eq!(row.kind, "regular");
+        assert!(tracks_for_regular(&db.engine, id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_tracks_appends_in_order() {
+        let db = tmp().await;
+        let a = insert_track(&db, "a").await;
+        let b = insert_track(&db, "b").await;
+        let c = insert_track(&db, "c").await;
+        let id = create_regular(&db.engine, "Mix").await.unwrap();
+        add_tracks(&db.engine, id, &[b, a]).await.unwrap();
+        add_tracks(&db.engine, id, &[c]).await.unwrap();
+        let rows = tracks_for_regular(&db.engine, id).await.unwrap();
+        let got: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(got, [b, a, c]);
+    }
+
+    #[tokio::test]
+    async fn add_tracks_errors_for_unknown_or_non_regular_playlist() {
+        let db = tmp().await;
+        let err = add_tracks(&db.engine, 424_242, &[1]).await.unwrap_err();
+        assert!(matches!(err, PlaylistsError::NotFound(424_242)), "{err}");
+        let smart = create_smart(&db.engine, "s", "{}").await.unwrap();
+        let err = add_tracks(&db.engine, smart, &[1]).await.unwrap_err();
+        assert!(matches!(err, PlaylistsError::NotFound(_)), "{err}");
+    }
+
+    #[tokio::test]
+    async fn remove_tracks_drops_every_occurrence() {
+        let db = tmp().await;
+        let a = insert_track(&db, "a").await;
+        let b = insert_track(&db, "b").await;
+        let id = create_regular(&db.engine, "Mix").await.unwrap();
+        add_tracks(&db.engine, id, &[a, b, a]).await.unwrap();
+        remove_tracks(&db.engine, id, &[a]).await.unwrap();
+        let rows = tracks_for_regular(&db.engine, id).await.unwrap();
+        let got: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(got, [b]);
+    }
+
+    #[tokio::test]
+    async fn remove_tracks_errors_for_unknown_playlist() {
+        let db = tmp().await;
+        let err = remove_tracks(&db.engine, 424_242, &[1]).await.unwrap_err();
+        assert!(matches!(err, PlaylistsError::NotFound(424_242)), "{err}");
     }
 
     #[tokio::test]

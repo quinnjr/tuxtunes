@@ -54,6 +54,9 @@ export interface Playlist {
   parentId: number | null;
   sortOrder: number;
   trackCount: number | null;
+  /** True for playlists that came from a sync source — deleting one
+   * only lasts until the next sync. */
+  synced: boolean;
 }
 
 interface PlaylistRaw {
@@ -63,6 +66,7 @@ interface PlaylistRaw {
   parent_id: number | null;
   sort_order: number;
   cached_track_count: number | null;
+  sync_source_id: number | null;
 }
 
 export interface AddFolderSummary {
@@ -273,6 +277,34 @@ export class LibraryService {
     if (this.activePlaylistId() === playlistId) await this.refreshTracks();
   }
 
+  /** Create an empty user-owned regular playlist; returns its id. */
+  async createPlaylist(name: string): Promise<number> {
+    const id = await this.tauri.invoke<number>('create_playlist', { name: name.trim() });
+    await this.refreshPlaylists();
+    return id;
+  }
+
+  async renamePlaylist(playlistId: number, name: string): Promise<void> {
+    await this.tauri.invoke<void>('rename_playlist', { playlistId, name });
+    await this.refreshPlaylists();
+  }
+
+  /** Append tracks to a regular playlist and refresh the sidebar counts. */
+  async addTracksToPlaylist(playlistId: number, trackIds: number[]): Promise<void> {
+    await this.tauri.invoke<void>('add_tracks_to_playlist', { playlistId, trackIds });
+    await this.refreshPlaylists();
+  }
+
+  /**
+   * Remove tracks from a regular playlist. When that playlist is the
+   * one on screen, reload its rows so they disappear immediately.
+   */
+  async removeTracksFromPlaylist(playlistId: number, trackIds: number[]): Promise<void> {
+    await this.tauri.invoke<void>('remove_tracks_from_playlist', { playlistId, trackIds });
+    await this.refreshPlaylists();
+    if (this.activePlaylistId() === playlistId) await this.refreshTracks();
+  }
+
   async deletePlaylist(playlistId: number): Promise<void> {
     await this.tauri.invoke<void>('delete_playlist', { playlistId });
     if (this.activePlaylistId() === playlistId) this.activePlaylistId.set(null);
@@ -289,6 +321,7 @@ export class LibraryService {
         parentId: r.parent_id,
         sortOrder: r.sort_order,
         trackCount: r.cached_track_count,
+        synced: r.sync_source_id !== null,
       })),
     );
   }

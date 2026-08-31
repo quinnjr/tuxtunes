@@ -201,7 +201,10 @@ describe('AlbumGridViewComponent', () => {
     const enqueueSpy = vi.spyOn(playback, 'enqueue');
     const playNextSpy = vi.spyOn(playback, 'playNext');
     const showSpy = vi.spyOn(ctx, 'show');
-    await cmp.onAlbumContextMenu(ALBUM(), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    await cmp.onAlbumContextMenu(ALBUM(), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
     expect(items[0].label).toContain('Play album');
 
@@ -229,7 +232,10 @@ describe('AlbumGridViewComponent', () => {
     const fetchSpy = vi.spyOn(library, 'tracksForAlbum');
     fetchSpy.mockClear();
     const showSpy = vi.spyOn(ctx, 'show');
-    await cmp.onAlbumContextMenu(a, { preventDefault: vi.fn() } as unknown as MouseEvent);
+    await cmp.onAlbumContextMenu(a, {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(showSpy).toHaveBeenCalled();
   });
@@ -239,7 +245,10 @@ describe('AlbumGridViewComponent', () => {
     vi.spyOn(library, 'tracksForAlbum').mockResolvedValue([]);
     const showSpy = vi.spyOn(ctx, 'show');
     const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
-    await cmp.onAlbumContextMenu(ALBUM(), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    await cmp.onAlbumContextMenu(ALBUM(), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
     await items[0].action?.();
     expect(playSpy).not.toHaveBeenCalled();
@@ -251,7 +260,10 @@ describe('AlbumGridViewComponent', () => {
     const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
     const enqueueSpy = vi.spyOn(playback, 'enqueue');
     const playNextSpy = vi.spyOn(playback, 'playNext');
-    cmp.onTrackContextMenu(TRACK(5), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    cmp.onTrackContextMenu(TRACK(5), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
     items[0].action?.();
     items[1].action?.();
@@ -281,7 +293,10 @@ describe('AlbumGridViewComponent', () => {
     const showSpy = vi.spyOn(ctx, 'show');
 
     await expect(
-      cmp.onAlbumContextMenu(ALBUM(), { preventDefault: vi.fn() } as unknown as MouseEvent),
+      cmp.onAlbumContextMenu(ALBUM(), {
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      } as unknown as MouseEvent),
     ).resolves.toBeUndefined();
 
     expect(showSpy).toHaveBeenCalled();

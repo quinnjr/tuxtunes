@@ -190,6 +190,7 @@ describe('LibraryService playlists', () => {
             parent_id: 4,
             sort_order: 2,
             cached_track_count: 0,
+            sync_source_id: 1,
           },
           {
             id: 4,
@@ -198,6 +199,7 @@ describe('LibraryService playlists', () => {
             parent_id: null,
             sort_order: 1,
             cached_track_count: null,
+            sync_source_id: null,
           },
         ];
       }
@@ -206,8 +208,24 @@ describe('LibraryService playlists', () => {
     });
     await svc.refreshPlaylists();
     expect(svc.playlists()).toEqual([
-      { id: 9, name: 'Nine', kind: 'regular', parentId: 4, sortOrder: 2, trackCount: 0 },
-      { id: 4, name: 'F', kind: 'regular', parentId: null, sortOrder: 1, trackCount: null },
+      {
+        id: 9,
+        name: 'Nine',
+        kind: 'regular',
+        parentId: 4,
+        sortOrder: 2,
+        trackCount: 0,
+        synced: true,
+      },
+      {
+        id: 4,
+        name: 'F',
+        kind: 'regular',
+        parentId: null,
+        sortOrder: 1,
+        trackCount: null,
+        synced: false,
+      },
     ]);
 
     await svc.openPlaylist(9);
@@ -233,6 +251,49 @@ describe('LibraryService playlists', () => {
     expect(svc.tracks().map((t) => t.title)).toEqual(['alpha', 'Beta', 'Zed']);
     await svc.cycleSort('title');
     expect(svc.tracks().map((t) => t.title)).toEqual(['Zed', 'Beta', 'alpha']);
+  });
+
+  it('createPlaylist invokes the command and refreshes the sidebar', async () => {
+    const { svc, invoke } = build(async (cmd) => (cmd === 'create_playlist' ? 7 : []));
+    const id = await svc.createPlaylist('  Mix  ');
+    expect(id).toBe(7);
+    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Mix' });
+    expect(invoke).toHaveBeenCalledWith('list_playlists');
+  });
+
+  it('renamePlaylist invokes the command and refreshes the sidebar', async () => {
+    const { svc, invoke } = build(async () => []);
+    await svc.renamePlaylist(9, 'Renamed');
+    expect(invoke).toHaveBeenCalledWith('rename_playlist', { playlistId: 9, name: 'Renamed' });
+    expect(invoke).toHaveBeenCalledWith('list_playlists');
+  });
+
+  it('addTracksToPlaylist invokes the command and refreshes the sidebar', async () => {
+    const { svc, invoke } = build(async () => []);
+    await svc.addTracksToPlaylist(9, [1, 2]);
+    expect(invoke).toHaveBeenCalledWith('add_tracks_to_playlist', {
+      playlistId: 9,
+      trackIds: [1, 2],
+    });
+    expect(invoke).toHaveBeenCalledWith('list_playlists');
+  });
+
+  it('removeTracksFromPlaylist reloads the open playlist when it is the active one', async () => {
+    const { svc, invoke } = build(async (cmd) => (cmd === 'open_playlist' ? raws : []));
+    await svc.openPlaylist(9);
+    invoke.mockClear();
+    await svc.removeTracksFromPlaylist(9, [1]);
+    expect(invoke).toHaveBeenCalledWith('remove_tracks_from_playlist', {
+      playlistId: 9,
+      trackIds: [1],
+    });
+    expect(invoke).toHaveBeenCalledWith('open_playlist', { playlistId: 9 });
+  });
+
+  it('removeTracksFromPlaylist leaves the track list alone for an inactive playlist', async () => {
+    const { svc, invoke } = build(async () => []);
+    await svc.removeTracksFromPlaylist(9, [1]);
+    expect(invoke).not.toHaveBeenCalledWith('open_playlist', expect.anything());
   });
 
   it('ignores a stale open_playlist response after switching playlists', async () => {

@@ -8,6 +8,13 @@ export interface ContextMenuItem {
   destructive?: boolean;
   /** Disabled items are visible but not clickable. */
   disabled?: boolean;
+  /** Show a leading checkmark (column toggles and the like). */
+  checked?: boolean;
+  /**
+   * Submenu items (one level). An item with children ignores `action`;
+   * hovering or clicking it opens the flyout instead.
+   */
+  children?: ContextMenuItem[];
 }
 
 export interface ContextMenuState {
@@ -24,9 +31,16 @@ export class ContextMenuService {
   /**
    * Show the menu at the event's screen position. The caller passes the
    * action items; the service handles geometry, dismissal, and ESC.
+   *
+   * Propagation must stop here: the same contextmenu event would
+   * otherwise bubble on to ContextMenuComponent's document-level
+   * dismiss handler and close the menu in the very dispatch that
+   * opened it. It also keeps an ancestor's area menu from replacing a
+   * row's menu.
    */
   show(event: MouseEvent, items: ContextMenuItem[]): void {
     event.preventDefault();
+    event.stopPropagation();
     this.open.set({ x: event.clientX, y: event.clientY, items });
   }
 

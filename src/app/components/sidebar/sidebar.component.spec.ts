@@ -12,14 +12,47 @@ interface SidebarInternals {
   onPlaylistClick(node: { playlist: Playlist; children: unknown[] }): void;
   isFolder(node: { playlist: Playlist; children: unknown[] }): boolean;
   onPlaylistContextMenu(node: { playlist: Playlist; children: unknown[] }, event: MouseEvent): void;
+  onPlaylistAreaContextMenu(event: MouseEvent): void;
   isExpanded(p: Playlist): boolean;
 }
 
 const RAW_PLAYLISTS = [
-  { id: 5, name: 'Rock', kind: 'folder', parent_id: null, sort_order: 1, cached_track_count: 0 },
-  { id: 6, name: 'Metal', kind: 'regular', parent_id: 5, sort_order: 0, cached_track_count: 12 },
-  { id: 7, name: 'Chill', kind: 'smart', parent_id: null, sort_order: 2, cached_track_count: null },
-  { id: 8, name: 'Orphan', kind: 'regular', parent_id: 999, sort_order: 3, cached_track_count: 1 },
+  {
+    id: 5,
+    name: 'Rock',
+    kind: 'folder',
+    parent_id: null,
+    sort_order: 1,
+    cached_track_count: 0,
+    sync_source_id: 1,
+  },
+  {
+    id: 6,
+    name: 'Metal',
+    kind: 'regular',
+    parent_id: 5,
+    sort_order: 0,
+    cached_track_count: 12,
+    sync_source_id: 1,
+  },
+  {
+    id: 7,
+    name: 'Chill',
+    kind: 'smart',
+    parent_id: null,
+    sort_order: 2,
+    cached_track_count: null,
+    sync_source_id: null,
+  },
+  {
+    id: 8,
+    name: 'Orphan',
+    kind: 'regular',
+    parent_id: 999,
+    sort_order: 3,
+    cached_track_count: 1,
+    sync_source_id: null,
+  },
 ];
 
 function pl(over: Partial<Playlist>): Playlist {
@@ -30,6 +63,7 @@ function pl(over: Partial<Playlist>): Playlist {
     parentId: null,
     sortOrder: 0,
     trackCount: 0,
+    synced: false,
     ...over,
   };
 }
@@ -203,7 +237,7 @@ describe('SidebarComponent', () => {
     expect(cmp.isActive('tracks')).toBe(true);
   });
 
-  it('right-click offers Edit + Delete for smart playlists, Remove for synced, nothing for folders', async () => {
+  it('right-click on a smart playlist offers edit, rename, delete and the New… items', async () => {
     const { fixture, cmp, ui, library, stub } = setup(RAW_PLAYLISTS);
     await settle(fixture);
     const ctx = TestBed.inject(ContextMenuService);
@@ -212,26 +246,110 @@ describe('SidebarComponent', () => {
     const smart = library.playlists().find((p) => p.id === 7)!;
     cmp.onPlaylistContextMenu({ playlist: smart, children: [] }, ev);
     const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    expect(items.map((i) => i.label)).toEqual(['Edit Smart Playlist…', 'Delete']);
+    expect(items.map((i) => i.label)).toEqual([
+      'Edit Smart Playlist…',
+      'Rename…',
+      '---',
+      'Delete',
+      '---',
+      'New Playlist…',
+      'New Smart Playlist…',
+    ]);
     await items[0].action?.();
     expect(ui.smartEditor()).toEqual({ playlistId: 7 });
     library.activePlaylistId.set(7);
-    await items[1].action?.();
+    await items[3].action?.();
     expect(stub.invoke).toHaveBeenCalledWith('delete_playlist', { playlistId: 7 });
     expect(library.activePlaylistId()).toBeNull();
+  });
 
-    show.mockClear();
-    const regular = library.playlists().find((p) => p.id === 6)!;
-    cmp.onPlaylistContextMenu({ playlist: regular, children: [] }, ev);
-    const items2 = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    expect(items2.map((i) => i.label)).toEqual(['Remove until next sync']);
+  it('right-click labels a synced playlist delete as temporary and a user one as Delete', async () => {
+    const { fixture, cmp, library } = setup(RAW_PLAYLISTS);
+    await settle(fixture);
+    const ctx = TestBed.inject(ContextMenuService);
+    const show = vi.spyOn(ctx, 'show');
+    const ev = new MouseEvent('contextmenu');
+    cmp.onPlaylistContextMenu(
+      { playlist: library.playlists().find((p) => p.id === 6)!, children: [] },
+      ev,
+    );
+    const synced = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(synced.map((i) => i.label)).toContain('Remove until next sync');
 
     show.mockClear();
     cmp.onPlaylistContextMenu(
-      { playlist: library.playlists().find((p) => p.id === 5)!, children: [{}] },
+      { playlist: library.playlists().find((p) => p.id === 8)!, children: [] },
       ev,
     );
-    expect(show).not.toHaveBeenCalled();
+    const user = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(user.map((i) => i.label)).toContain('Delete');
+    expect(user.map((i) => i.label)).not.toContain('Edit Smart Playlist…');
+  });
+
+  it('right-click on a folder offers rename and delete', async () => {
+    const { fixture, cmp, library } = setup(RAW_PLAYLISTS);
+    await settle(fixture);
+    const ctx = TestBed.inject(ContextMenuService);
+    const show = vi.spyOn(ctx, 'show');
+    cmp.onPlaylistContextMenu(
+      { playlist: library.playlists().find((p) => p.id === 5)!, children: [{}] },
+      new MouseEvent('contextmenu'),
+    );
+    const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items.map((i) => i.label)).toContain('Rename…');
+    expect(items.map((i) => i.label)).toContain('Remove until next sync');
+  });
+
+  it('Rename… opens the name prompt and submits through renamePlaylist', async () => {
+    const { fixture, cmp, ui, library, stub } = setup(RAW_PLAYLISTS);
+    await settle(fixture);
+    const ctx = TestBed.inject(ContextMenuService);
+    const show = vi.spyOn(ctx, 'show');
+    cmp.onPlaylistContextMenu(
+      { playlist: library.playlists().find((p) => p.id === 7)!, children: [] },
+      new MouseEvent('contextmenu'),
+    );
+    const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    await items.find((i) => i.label === 'Rename…')!.action?.();
+    expect(ui.namePrompt()?.initial).toBe('Chill');
+    await ui.namePrompt()!.onSubmit('Chillier');
+    expect(stub.invoke).toHaveBeenCalledWith('rename_playlist', {
+      playlistId: 7,
+      name: 'Chillier',
+    });
+  });
+
+  it('right-click on the empty playlist area offers only the New… items', async () => {
+    const { fixture, cmp, ui, stub } = setup(RAW_PLAYLISTS);
+    await settle(fixture);
+    const ctx = TestBed.inject(ContextMenuService);
+    const show = vi.spyOn(ctx, 'show');
+    cmp.onPlaylistAreaContextMenu(new MouseEvent('contextmenu'));
+    const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items.map((i) => i.label)).toEqual(['New Playlist…', 'New Smart Playlist…']);
+
+    await items[0].action?.();
+    expect(ui.namePrompt()?.title).toBe('New Playlist');
+    await ui.namePrompt()!.onSubmit('Fresh');
+    expect(stub.invoke).toHaveBeenCalledWith('create_playlist', { name: 'Fresh' });
+
+    await items[1].action?.();
+    expect(ui.smartEditor()).toEqual({ playlistId: null });
+  });
+
+  it('a right-click on a playlist row does not also trigger the area menu', async () => {
+    const { fixture, cmp, library } = setup(RAW_PLAYLISTS);
+    await settle(fixture);
+    const ctx = TestBed.inject(ContextMenuService);
+    const show = vi.spyOn(ctx, 'show');
+    const ev = new MouseEvent('contextmenu');
+    const stop = vi.spyOn(ev, 'stopPropagation');
+    cmp.onPlaylistContextMenu(
+      { playlist: library.playlists().find((p) => p.id === 7)!, children: [] },
+      ev,
+    );
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalled();
   });
 
   it('renders the All Songs / Artists / Albums / Genres buttons', () => {

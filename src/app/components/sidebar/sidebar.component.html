@@ -72,16 +72,22 @@
     </button>
   </div>
 
-  <div class="mt-4 px-4 pb-2 text-caption font-semibold uppercase tracking-wide text-text-muted">
-    Playlists
-  </div>
-  @if (tree().length === 0) {
-    <div class="px-4 py-1 italic text-text-muted">No playlists yet</div>
-  } @else {
-    <div class="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2" role="tree">
-      <ng-container *ngTemplateOutlet="nodes; context: { $implicit: tree(), depth: 0 }" />
+  <div
+    class="flex min-h-0 flex-1 flex-col"
+    (contextmenu)="onPlaylistAreaContextMenu($event)"
+    role="presentation"
+  >
+    <div class="mt-4 px-4 pb-2 text-caption font-semibold uppercase tracking-wide text-text-muted">
+      Playlists
     </div>
-  }
+    @if (tree().length === 0) {
+      <div class="px-4 py-1 italic text-text-muted">No playlists yet</div>
+    } @else {
+      <div class="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2" role="tree">
+        <ng-container *ngTemplateOutlet="nodes; context: { $implicit: tree(), depth: 0 }" />
+      </div>
+    }
+  </div>
 
   <ng-template #nodes let-items let-depth="depth">
     @for (node of items; track node.playlist.id) {

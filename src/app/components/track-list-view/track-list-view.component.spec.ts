@@ -31,6 +31,7 @@ interface ListInternals {
   toggleColumn(id: SortColumn): void;
   isColumnVisible(id: SortColumn): boolean;
   closePicker(): void;
+  onHeaderContextMenu(event: MouseEvent): void;
 }
 
 const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
@@ -144,6 +145,7 @@ describe('TrackListViewComponent', () => {
     const showSpy = vi.spyOn(ctx, 'show');
     cmp.onRowContextMenu(TRACK(1), {
       preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
       clientX: 0,
       clientY: 0,
     } as unknown as MouseEvent);
@@ -157,7 +159,10 @@ describe('TrackListViewComponent', () => {
     library.tracks.set([TRACK(1), TRACK(2)]);
     cmp.selection.set(new Set([1, 2]));
     const showSpy = vi.spyOn(ctx, 'show');
-    cmp.onRowContextMenu(TRACK(2), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    cmp.onRowContextMenu(TRACK(2), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
     expect(items[0].label).toBe('Play first (2 selected)');
   });
@@ -166,7 +171,10 @@ describe('TrackListViewComponent', () => {
     const { cmp, ctx, library, playback, invoke } = setup();
     library.tracks.set([TRACK(1)]);
     const showSpy = vi.spyOn(ctx, 'show');
-    cmp.onRowContextMenu(TRACK(1), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    cmp.onRowContextMenu(TRACK(1), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
     const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
     const enqueueSpy = vi.spyOn(playback, 'enqueue');
@@ -174,7 +182,7 @@ describe('TrackListViewComponent', () => {
     items[0].action?.();
     items[1].action?.();
     items[2].action?.();
-    await items[4].action?.();
+    await items.find((i) => i.label === 'Show in Files')!.action?.();
     expect(playSpy).toHaveBeenCalledWith(1);
     expect(enqueueSpy).toHaveBeenCalled();
     expect(playNextSpy).toHaveBeenCalled();
@@ -185,12 +193,157 @@ describe('TrackListViewComponent', () => {
     const { cmp, ctx, library, invoke } = setup();
     library.tracks.set([TRACK(1)]);
     const showSpy = vi.spyOn(ctx, 'show');
-    cmp.onRowContextMenu(TRACK(1), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    cmp.onRowContextMenu(TRACK(1), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    await items[6].action?.();
+    await items.find((i) => i.label === 'Remove from Library')!.action?.();
     expect(invoke).toHaveBeenCalledWith('remove_track', { trackId: 1 });
-    await items[7].action?.();
+    await items.find((i) => i.label === 'Move to Trash')!.action?.();
     expect(invoke).toHaveBeenCalledWith('trash_track', { trackId: 1 });
+  });
+
+  it('Add to Playlist lists user regular playlists and appends the selection', async () => {
+    const { cmp, ctx, library, invoke } = setup();
+    library.tracks.set([TRACK(1), TRACK(2)]);
+    library.playlists.set([
+      {
+        id: 3,
+        name: 'Mine',
+        kind: 'regular',
+        parentId: null,
+        sortOrder: 0,
+        trackCount: 0,
+        synced: false,
+      },
+      {
+        id: 4,
+        name: 'Synced',
+        kind: 'regular',
+        parentId: null,
+        sortOrder: 0,
+        trackCount: 0,
+        synced: true,
+      },
+      {
+        id: 5,
+        name: 'Smart',
+        kind: 'smart',
+        parentId: null,
+        sortOrder: 0,
+        trackCount: 0,
+        synced: false,
+      },
+    ]);
+    cmp.selection.set(new Set([1, 2]));
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onRowContextMenu(TRACK(2), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    const addTo = items.find((i) => i.label === 'Add to Playlist')!;
+    expect(addTo.children!.map((c) => c.label)).toEqual(['Mine', '---', 'New Playlist…']);
+    await addTo.children![0].action?.();
+    expect(invoke).toHaveBeenCalledWith('add_tracks_to_playlist', {
+      playlistId: 3,
+      trackIds: [1, 2],
+    });
+  });
+
+  it('Add to Playlist → New Playlist… creates the playlist then adds the selection', async () => {
+    const { cmp, ctx, library, invoke } = setup(async (cmd) =>
+      cmd === 'create_playlist' ? 9 : [],
+    );
+    const ui = TestBed.inject(UiService);
+    library.tracks.set([TRACK(1)]);
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onRowContextMenu(TRACK(1), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    const addTo = items.find((i) => i.label === 'Add to Playlist')!;
+    await addTo.children!.find((c) => c.label === 'New Playlist…')!.action?.();
+    expect(ui.namePrompt()).not.toBeNull();
+    await ui.namePrompt()!.onSubmit('Fresh');
+    expect(invoke).toHaveBeenCalledWith('create_playlist', { name: 'Fresh' });
+    expect(invoke).toHaveBeenCalledWith('add_tracks_to_playlist', {
+      playlistId: 9,
+      trackIds: [1],
+    });
+  });
+
+  it('Remove from Playlist appears only while a regular playlist is open', async () => {
+    const { cmp, ctx, library, invoke } = setup();
+    library.tracks.set([TRACK(1)]);
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onRowContextMenu(TRACK(1), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    let items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items.map((i) => i.label)).not.toContain('Remove from Playlist');
+
+    library.playlists.set([
+      {
+        id: 3,
+        name: 'Mine',
+        kind: 'regular',
+        parentId: null,
+        sortOrder: 0,
+        trackCount: 1,
+        synced: false,
+      },
+    ]);
+    library.activePlaylistId.set(3);
+    showSpy.mockClear();
+    cmp.onRowContextMenu(TRACK(1), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    await items.find((i) => i.label === 'Remove from Playlist')!.action?.();
+    expect(invoke).toHaveBeenCalledWith('remove_tracks_from_playlist', {
+      playlistId: 3,
+      trackIds: [1],
+    });
+  });
+
+  it('right-click on the header lists every column with its visibility checked', () => {
+    const { cmp, ctx } = setup();
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onHeaderContextMenu({
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items.map((i) => i.label)).toEqual([
+      'Title',
+      'Artist',
+      'Album',
+      'Time',
+      'Plays',
+      'Sample',
+      'Kind',
+    ]);
+    expect(items.find((i) => i.label === 'Artist')!.checked).toBe(true);
+    expect(items.find((i) => i.label === 'Kind')!.checked).toBe(false);
+  });
+
+  it('choosing a column from the header menu toggles its visibility', async () => {
+    const { cmp, ctx } = setup();
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onHeaderContextMenu({
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    await items.find((i) => i.label === 'Artist')!.action?.();
+    expect(cmp.isColumnVisible('artist')).toBe(false);
+    await items.find((i) => i.label === 'Kind')!.action?.();
+    expect(cmp.isColumnVisible('kind')).toBe(true);
   });
 
   it('column picker opens, toggles columns, then closes', () => {
@@ -287,12 +440,17 @@ describe('TrackListViewComponent', () => {
     library.tracks.set([TRACK(1), TRACK(2)]);
     cmp.selection.set(new Set([1, 2]));
     const showSpy = vi.spyOn(ctx, 'show');
-    cmp.onRowContextMenu(TRACK(2), { preventDefault: vi.fn() } as unknown as MouseEvent);
+    cmp.onRowContextMenu(TRACK(2), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
     invoke.mockClear();
 
     const ui = TestBed.inject(UiService);
-    await expect(items[6].action?.()).resolves.toBeUndefined();
+    await expect(
+      items.find((i) => i.label === 'Remove 2 from Library')!.action?.(),
+    ).resolves.toBeUndefined();
 
     expect(ui.lastError()).toContain('locked');
     expect(invoke).toHaveBeenCalledWith('remove_track', { trackId: 1 });

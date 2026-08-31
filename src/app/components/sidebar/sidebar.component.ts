@@ -175,14 +175,35 @@ export class SidebarComponent implements OnInit {
     });
   }
 
+  /** The two creation items, shared by the node and area menus. */
+  private newPlaylistItems(): ContextMenuItem[] {
+    return [
+      {
+        label: 'New Playlist…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'New Playlist',
+            initial: '',
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.createPlaylist(name));
+            },
+          }),
+      },
+      {
+        label: 'New Smart Playlist…',
+        action: () => this.ui.smartEditor.set({ playlistId: null }),
+      },
+    ];
+  }
+
   /**
-   * Right-click: smart playlists can be edited or deleted; synced
-   * playlists only deleted (they come back on the next sync, so that's
-   * offered as "Remove until next sync").
+   * Right-click on a playlist/folder row: rename and delete for
+   * everything, edit for smart playlists, plus the creation items.
+   * Deleting a synced playlist only lasts until the next sync, so
+   * that's what its label says.
    */
   protected onPlaylistContextMenu(node: PlaylistNode, event: MouseEvent): void {
     const p = node.playlist;
-    if (this.isFolder(node)) return;
     const items: ContextMenuItem[] = [];
     if (p.kind === 'smart') {
       items.push({
@@ -190,14 +211,35 @@ export class SidebarComponent implements OnInit {
         action: () => this.ui.smartEditor.set({ playlistId: p.id }),
       });
     }
-    items.push({
-      label: p.kind === 'smart' ? 'Delete' : 'Remove until next sync',
-      destructive: true,
-      action: async () => {
-        await this.ui.guard(this.library.deletePlaylist(p.id));
+    items.push(
+      {
+        label: 'Rename…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'Rename Playlist',
+            initial: p.name,
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.renamePlaylist(p.id, name));
+            },
+          }),
       },
-    });
+      { label: '---' },
+      {
+        label: p.synced ? 'Remove until next sync' : 'Delete',
+        destructive: true,
+        action: async () => {
+          await this.ui.guard(this.library.deletePlaylist(p.id));
+        },
+      },
+      { label: '---' },
+      ...this.newPlaylistItems(),
+    );
     this.ctx.show(event, items);
+  }
+
+  /** Right-click on the playlist section's empty space. */
+  protected onPlaylistAreaContextMenu(event: MouseEvent): void {
+    this.ctx.show(event, this.newPlaylistItems());
   }
 
   /** Folders expand/collapse; playlists open in the track list. */
