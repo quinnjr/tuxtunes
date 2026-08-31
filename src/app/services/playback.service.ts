@@ -16,6 +16,10 @@ export interface TrackRow {
    * when absent — see `src-tauri/src/db/tracks.rs`.
    */
   albumArtist: string | null;
+  genre: string | null;
+  year: number | null;
+  trackNumber: number | null;
+  discNumber: number | null;
   durationMs: number;
   filePath: string;
   sampleRate: number | null;
@@ -35,6 +39,10 @@ export interface TrackRowRaw {
   artist: string | null;
   album: string | null;
   album_artist?: string | null;
+  genre?: string | null;
+  year?: number | null;
+  track_number?: number | null;
+  disc_number?: number | null;
   duration_ms: number;
   file_path: string;
   sample_rate: number | null;
@@ -53,6 +61,10 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
     artist: raw.artist,
     album: raw.album,
     albumArtist: raw.album_artist ?? null,
+    genre: raw.genre ?? null,
+    year: raw.year ?? null,
+    trackNumber: raw.track_number ?? null,
+    discNumber: raw.disc_number ?? null,
     durationMs: raw.duration_ms,
     filePath: raw.file_path,
     sampleRate: raw.sample_rate,

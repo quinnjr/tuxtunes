@@ -273,6 +273,50 @@ pub async fn verify_library(
     Ok(())
 }
 
+/// Owned mirror of `db::tracks::MetadataEdit` for the IPC boundary.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMetadataPatch {
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub genre: Option<String>,
+    pub year: Option<i64>,
+    pub track_number: Option<i64>,
+    pub disc_number: Option<i64>,
+}
+
+/// Edit a track's descriptive metadata. The file's own tags are
+/// written first — an edit that cannot reach the file fails whole, so
+/// the DB never claims metadata the file doesn't carry. The DB row is
+/// then updated and flagged `user_edited` so a sync won't revert it.
+#[tauri::command]
+pub async fn update_track_metadata(
+    state: tauri::State<'_, AppState>,
+    track_id: i64,
+    edit: TrackMetadataPatch,
+) -> Result<(), String> {
+    let row = tracks::get(&state.db.engine, track_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let e = crate::db::tracks::MetadataEdit {
+        title: &edit.title,
+        artist: edit.artist.as_deref(),
+        album: edit.album.as_deref(),
+        album_artist: edit.album_artist.as_deref(),
+        genre: edit.genre.as_deref(),
+        year: edit.year,
+        track_number: edit.track_number,
+        disc_number: edit.disc_number,
+    };
+    crate::fs::tags::write_metadata(std::path::Path::new(&row.file_path), &e)
+        .map_err(|err| err.to_string())?;
+    crate::db::tracks::update_metadata(&state.db.engine, track_id, &e)
+        .await
+        .map_err(|err| err.to_string())
+}
+
 #[tauri::command]
 pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
     let sql = "DELETE FROM tracks WHERE id = ?";

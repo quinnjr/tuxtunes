@@ -10,6 +10,7 @@ import { PreferencesPanelComponent } from './components/preferences-panel/prefer
 import { SidebarComponent } from './components/sidebar/sidebar.component';
 import { SmartPlaylistEditorComponent } from './components/smart-playlist-editor/smart-playlist-editor.component';
 import { StatusBarComponent } from './components/status-bar/status-bar.component';
+import { TrackInfoComponent } from './components/track-info/track-info.component';
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
 import { LibraryService } from './services/library.service';
 import { UiService } from './services/ui.service';
@@ -28,6 +29,7 @@ import { UiService } from './services/ui.service';
     SidebarComponent,
     SmartPlaylistEditorComponent,
     StatusBarComponent,
+    TrackInfoComponent,
     TransportBarComponent,
   ],
   templateUrl: './app.html',

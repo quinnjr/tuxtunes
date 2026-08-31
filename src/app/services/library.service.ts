@@ -127,6 +127,18 @@ export const DEFAULT_SORT: TrackSort = {
   descending: true,
 };
 
+/** The descriptive fields editable from the Get Info… dialog. */
+export interface TrackMetadataEdit {
+  title: string;
+  artist: string | null;
+  album: string | null;
+  albumArtist: string | null;
+  genre: string | null;
+  year: number | null;
+  trackNumber: number | null;
+  discNumber: number | null;
+}
+
 @Injectable({ providedIn: 'root' })
 export class LibraryService implements OnDestroy {
   private readonly tauri = inject(TauriService);
@@ -376,6 +388,16 @@ export class LibraryService implements OnDestroy {
     await this.tauri.invoke<void>('delete_playlist', { playlistId });
     if (this.activePlaylistId() === playlistId) this.activePlaylistId.set(null);
     await this.refreshPlaylists();
+  }
+
+  /**
+   * Edit a track's descriptive metadata. The backend writes the file's
+   * own tags first and only then the DB (flagging the row user_edited
+   * so a sync keeps the edit); the visible list refreshes after.
+   */
+  async updateTrackMetadata(trackId: number, edit: TrackMetadataEdit): Promise<void> {
+    await this.tauri.invoke<void>('update_track_metadata', { trackId, edit });
+    await this.refreshTracks();
   }
 
   async refreshPlaylists(): Promise<void> {

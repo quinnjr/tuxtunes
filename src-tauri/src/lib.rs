@@ -43,6 +43,7 @@ pub fn run() {
             commands::library::pick_and_add_track,
             commands::library::pick_and_add_folder,
             commands::library::verify_library,
+            commands::library::update_track_metadata,
             commands::library::remove_track,
             commands::library::trash_track,
             commands::library::show_in_files,

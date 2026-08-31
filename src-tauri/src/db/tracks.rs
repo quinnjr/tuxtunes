@@ -213,6 +213,64 @@ pub struct ItlTrackUpsert<'a> {
     pub original_path: Option<&'a str>,
 }
 
+/// The descriptive fields a user can edit from the track-info dialog.
+/// Everything else on the row (technical facts, user state, sync
+/// bookkeeping) is owned elsewhere.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MetadataEdit<'a> {
+    pub title: &'a str,
+    pub artist: Option<&'a str>,
+    pub album: Option<&'a str>,
+    pub album_artist: Option<&'a str>,
+    pub genre: Option<&'a str>,
+    pub year: Option<i64>,
+    pub track_number: Option<i64>,
+    pub disc_number: Option<i64>,
+}
+
+/// Apply a user's metadata edit and mark the row `user_edited` so the
+/// sync reconciler stops overwriting these fields from the source.
+pub async fn update_metadata(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+    e: &MetadataEdit<'_>,
+) -> Result<(), TracksError> {
+    use crate::db::sync_util::{opt_int, opt_str};
+    use prax_query::filter::FilterValue as FV;
+    let title = e.title.trim();
+    if title.is_empty() {
+        return Err(TracksError::Query(anyhow::anyhow!(
+            "track title cannot be empty"
+        )));
+    }
+    let sql = "UPDATE tracks SET \
+        title = ?, artist = ?, album = ?, album_artist = ?, genre = ?, \
+        year = ?, track_number = ?, disc_number = ?, \
+        user_edited = 1, date_modified = CURRENT_TIMESTAMP \
+        WHERE id = ?";
+    let params = vec![
+        FV::String(title.to_string()),
+        opt_str(e.artist),
+        opt_str(e.album),
+        opt_str(e.album_artist),
+        opt_str(e.genre),
+        opt_int(e.year),
+        opt_int(e.track_number),
+        opt_int(e.disc_number),
+        FV::Int(local_id),
+    ];
+    let n = engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    if n == 0 {
+        return Err(TracksError::Query(anyhow::anyhow!(
+            "track {local_id} not found"
+        )));
+    }
+    Ok(())
+}
+
 /// Local-side view of a track used for conflict resolution: row id +
 /// every user-state field needed by `sync::conflict::resolve_*`.
 #[derive(Debug, Clone, Deserialize)]
@@ -373,10 +431,23 @@ pub async fn update_descriptive_fields(
 ) -> Result<(), TracksError> {
     use crate::db::sync_util::{opt_int, opt_str};
     use prax_query::filter::FilterValue as FV;
+    // Fields the user may have edited locally (see `update_metadata`)
+    // are preserved for `user_edited` rows; the source only ever writes
+    // them for rows the user never touched. Technical facts and
+    // sync-owned state update either way.
     let sql = "UPDATE tracks SET \
-        title = ?, artist = ?, album = ?, album_artist = ?, composer = ?, \
-        genre = ?, kind = ?, duration_ms = ?, size_bytes = ?, bit_rate = ?, \
-        sample_rate = ?, track_number = ?, disc_number = ?, year = ?, bpm = ?, \
+        title = CASE WHEN user_edited = 1 THEN title ELSE ? END, \
+        artist = CASE WHEN user_edited = 1 THEN artist ELSE ? END, \
+        album = CASE WHEN user_edited = 1 THEN album ELSE ? END, \
+        album_artist = CASE WHEN user_edited = 1 THEN album_artist ELSE ? END, \
+        composer = ?, \
+        genre = CASE WHEN user_edited = 1 THEN genre ELSE ? END, \
+        kind = ?, duration_ms = ?, size_bytes = ?, bit_rate = ?, \
+        sample_rate = ?, \
+        track_number = CASE WHEN user_edited = 1 THEN track_number ELSE ? END, \
+        disc_number = CASE WHEN user_edited = 1 THEN disc_number ELSE ? END, \
+        year = CASE WHEN user_edited = 1 THEN year ELSE ? END, \
+        bpm = ?, \
         rating = ?, play_count = ?, file_path = ?, \
         import_status = CASE WHEN file_path = ? THEN import_status ELSE 'ok' END, \
         file_hash = CASE WHEN file_path = ? THEN file_hash ELSE NULL END, \
@@ -609,6 +680,149 @@ mod tests {
     async fn tmp_db() -> Db {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         Db::open(tmp.path()).await.unwrap()
+    }
+
+    fn itl_fixture(pid: u64, title: &'static str, path: &'static str) -> ItlTrackUpsert<'static> {
+        ItlTrackUpsert {
+            persistent_id: pid,
+            sync_source_id: 1,
+            title,
+            artist: Some("Source Artist"),
+            album: Some("Source Album"),
+            album_artist: None,
+            composer: None,
+            genre: Some("Rock"),
+            kind: None,
+            duration_ms: 1000,
+            size_bytes: 100,
+            bit_rate: None,
+            sample_rate: None,
+            track_number: Some(1),
+            disc_number: None,
+            year: Some(2001),
+            bpm: None,
+            rating: 0,
+            play_count: 0,
+            date_added_unix: 0,
+            file_path: path,
+            original_path: None,
+        }
+    }
+
+    async fn seed_source(db: &Db) {
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (1, 'x', '/x', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_metadata_writes_fields_and_marks_user_edited() {
+        let db = tmp_db().await;
+        let id = insert_fixture(&db.engine, "Old Title", "/tmp/m.flac").await;
+        update_metadata(
+            &db.engine,
+            id,
+            &MetadataEdit {
+                title: "New Title",
+                artist: Some("blink-182"),
+                album: Some("TOYPAJ"),
+                album_artist: Some("blink-182"),
+                genre: Some("Punk"),
+                year: Some(2001),
+                track_number: Some(1),
+                disc_number: None,
+            },
+        )
+        .await
+        .unwrap();
+        let row = get(&db.engine, id).await.unwrap();
+        assert_eq!(row.title, "New Title");
+        assert_eq!(row.artist.as_deref(), Some("blink-182"));
+        assert_eq!(row.genre.as_deref(), Some("Punk"));
+        assert_eq!(row.year, Some(2001));
+        assert_eq!(row.disc_number, None);
+        let flagged: i64 = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT user_edited FROM tracks WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(flagged, 1);
+    }
+
+    #[tokio::test]
+    async fn update_metadata_rejects_empty_title_and_unknown_id() {
+        let db = tmp_db().await;
+        let id = insert_fixture(&db.engine, "T", "/tmp/t.flac").await;
+        let edit = MetadataEdit {
+            title: "  ",
+            artist: None,
+            album: None,
+            album_artist: None,
+            genre: None,
+            year: None,
+            track_number: None,
+            disc_number: None,
+        };
+        assert!(update_metadata(&db.engine, id, &edit).await.is_err());
+        let ok = MetadataEdit { title: "x", ..edit };
+        assert!(update_metadata(&db.engine, 424_242, &ok).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn user_edited_metadata_survives_a_sync_update() {
+        let db = tmp_db().await;
+        seed_source(&db).await;
+        let u = itl_fixture(7, "Source Title", "/tmp/s.flac");
+        let id = insert_from_itl(&db.engine, &u).await.unwrap();
+        update_metadata(
+            &db.engine,
+            id,
+            &MetadataEdit {
+                title: "My Title",
+                artist: Some("My Artist"),
+                album: Some("My Album"),
+                album_artist: None,
+                genre: Some("My Genre"),
+                year: Some(1999),
+                track_number: Some(9),
+                disc_number: Some(2),
+            },
+        )
+        .await
+        .unwrap();
+        // The next sync re-applies the source's descriptive fields…
+        update_descriptive_fields(&db.engine, id, &u, 0, 0).await.unwrap();
+        let row = get(&db.engine, id).await.unwrap();
+        // …but the user's edits win for the editable set.
+        assert_eq!(row.title, "My Title");
+        assert_eq!(row.artist.as_deref(), Some("My Artist"));
+        assert_eq!(row.album.as_deref(), Some("My Album"));
+        assert_eq!(row.genre.as_deref(), Some("My Genre"));
+        assert_eq!(row.year, Some(1999));
+        assert_eq!(row.track_number, Some(9));
+        assert_eq!(row.disc_number, Some(2));
+    }
+
+    #[tokio::test]
+    async fn sync_still_updates_metadata_for_untouched_rows() {
+        let db = tmp_db().await;
+        seed_source(&db).await;
+        let u = itl_fixture(8, "Source Title", "/tmp/u.flac");
+        let id = insert_from_itl(&db.engine, &u).await.unwrap();
+        let renamed = ItlTrackUpsert { title: "Retagged", ..u };
+        update_descriptive_fields(&db.engine, id, &renamed, 0, 0)
+            .await
+            .unwrap();
+        let row = get(&db.engine, id).await.unwrap();
+        assert_eq!(row.title, "Retagged");
     }
 
     async fn insert_fixture(engine: &SqliteRawEngine, title: &str, path: &str) -> i64 {

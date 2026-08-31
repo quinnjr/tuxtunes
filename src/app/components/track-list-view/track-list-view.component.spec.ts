@@ -41,6 +41,10 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   artist: 'A',
   album: 'Al',
   albumArtist: null,
+  genre: null,
+  year: null,
+  trackNumber: null,
+  discNumber: null,
   durationMs: 60_000,
   filePath: `/tmp/${id}.flac`,
   sampleRate: 44_100,
@@ -354,6 +358,32 @@ describe('TrackListViewComponent', () => {
       playlistId: 3,
       trackIds: [1],
     });
+  });
+
+  it('Get Info… opens the track-info editor for a single selection only', () => {
+    const { cmp, ctx, library } = setup();
+    const ui = TestBed.inject(UiService);
+    library.tracks.set([TRACK(1), TRACK(2)]);
+    const showSpy = vi.spyOn(ctx, 'show');
+    cmp.onRowContextMenu(TRACK(1), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    let items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    const info = items.find((i) => i.label === 'Get Info…')!;
+    expect(info.disabled).toBeFalsy();
+    info.action?.();
+    expect(ui.trackInfo()).toEqual({ trackId: 1 });
+
+    ui.trackInfo.set(null);
+    cmp.selection.set(new Set([1, 2]));
+    showSpy.mockClear();
+    cmp.onRowContextMenu(TRACK(2), {
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent);
+    items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    expect(items.find((i) => i.label === 'Get Info…')!.disabled).toBe(true);
   });
 
   it('right-click on the header lists every column with its visibility checked', () => {
