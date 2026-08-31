@@ -263,7 +263,9 @@ describe('SidebarComponent', () => {
     expect(library.activePlaylistId()).toBeNull();
   });
 
-  it('right-click labels a synced playlist delete as temporary and a user one as Delete', async () => {
+  it('right-click labels rename and delete identically for synced and user playlists', async () => {
+    // Renames and deletes persist across syncs (name override +
+    // tombstones), so no "until next sync" qualifier applies anymore.
     const { fixture, cmp, library } = setup(RAW_PLAYLISTS);
     await settle(fixture);
     const ctx = TestBed.inject(ContextMenuService);
@@ -274,7 +276,9 @@ describe('SidebarComponent', () => {
       ev,
     );
     const synced = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    expect(synced.map((i) => i.label)).toContain('Remove until next sync');
+    expect(synced.map((i) => i.label)).toContain('Delete');
+    expect(synced.map((i) => i.label)).toContain('Rename…');
+    expect(synced.map((i) => i.label).join(',')).not.toContain('until next sync');
 
     show.mockClear();
     cmp.onPlaylistContextMenu(
@@ -296,8 +300,8 @@ describe('SidebarComponent', () => {
       new MouseEvent('contextmenu'),
     );
     const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    expect(items.map((i) => i.label)).toContain('Rename until next sync…');
-    expect(items.map((i) => i.label)).toContain('Remove until next sync');
+    expect(items.map((i) => i.label)).toContain('Rename…');
+    expect(items.map((i) => i.label)).toContain('Delete');
 
     await items.find((i) => i.label === 'New Playlist…')!.action?.();
     await ui.namePrompt()!.onSubmit('In Folder');
@@ -317,7 +321,7 @@ describe('SidebarComponent', () => {
       new MouseEvent('contextmenu'),
     );
     const items = (show.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    await items.find((i) => i.label === 'Remove until next sync')!.action?.();
+    await items.find((i) => i.label === 'Delete')!.action?.();
     expect(stub.invoke).not.toHaveBeenCalledWith('delete_playlist', expect.anything());
     const confirm = ui.confirm();
     expect(confirm).not.toBeNull();

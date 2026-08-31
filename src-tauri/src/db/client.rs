@@ -24,6 +24,8 @@ use std::sync::Arc;
 const INITIAL_MIGRATION: &str = include_str!("../../prax/migrations/0001_initial/migration.sql");
 const COMPOSITE_SYNC_INDEXES_MIGRATION: &str =
     include_str!("../../prax/migrations/0002_composite_sync_indexes/migration.sql");
+const PLAYLIST_LOCAL_EDITS_MIGRATION: &str =
+    include_str!("../../prax/migrations/0003_playlist_local_edits/migration.sql");
 
 /// A single migration entry: a stable name (the ledger key), the SQL batch
 /// to run, and a backfill probe used only when the ledger has no row for
@@ -57,6 +59,13 @@ static MIGRATIONS: &[Migration] = &[
              'idx_tracks_sync_source_id_persistent_id', \
              'idx_playlists_sync_source_id_persistent_id')",
         marker_count: 2,
+    },
+    Migration {
+        name: "0003_playlist_local_edits",
+        sql: PLAYLIST_LOCAL_EDITS_MIGRATION,
+        marker_sql: "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'table' AND name = 'playlist_tombstones'",
+        marker_count: 1,
     },
 ];
 
@@ -268,9 +277,10 @@ mod tests {
             ledger_names,
             vec![
                 "0001_initial".to_string(),
-                "0002_composite_sync_indexes".to_string()
+                "0002_composite_sync_indexes".to_string(),
+                "0003_playlist_local_edits".to_string()
             ],
-            "ledger should be backfilled with both migration names"
+            "ledger should carry every migration after upgrade"
         );
 
         // Reopening again should remain a no-op / idempotent.

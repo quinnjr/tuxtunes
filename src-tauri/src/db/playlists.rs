@@ -88,7 +88,12 @@ pub async fn upsert_with_known_id(
 
     match existing {
         Some(id) => {
-            let sql = "UPDATE playlists SET name = ?, kind = ?, \
+            // A user rename outranks the source name from then on
+            // (name_overridden is set by `rename`); everything else is
+            // the source's to own.
+            let sql = "UPDATE playlists SET \
+                       name = CASE WHEN name_overridden = 1 THEN name ELSE ? END, \
+                       kind = ?, \
                        sort_order = ?, track_entries = ?, smart_rule = ? \
                        WHERE id = ?";
             let params = vec![
@@ -372,14 +377,15 @@ pub async fn update_smart_rule(
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
 }
 
-/// Rename any playlist. Synced playlists take the .itl name again on
-/// the next sync; user-created ones keep it.
+/// Rename any playlist. Marks the name as user-overridden so a synced
+/// playlist keeps the local name across future syncs (`upsert` skips
+/// the name column for overridden rows).
 pub async fn rename(
     engine: &SqliteRawEngine,
     playlist_id: i64,
     name: &str,
 ) -> Result<(), PlaylistsError> {
-    let sql = "UPDATE playlists SET name = ? WHERE id = ?";
+    let sql = "UPDATE playlists SET name = ?, name_overridden = 1 WHERE id = ?";
     let params = vec![
         FilterValue::String(name.to_string()),
         FilterValue::Int(playlist_id),
@@ -500,15 +506,51 @@ pub async fn tracks_for_regular(
     Ok(ids.iter().filter_map(|id| by_id.get(id).cloned()).collect())
 }
 
-/// Hard-delete a playlist by id. Sync-sourced playlists deleted this
-/// way will reappear on the next sync — that's the intended behavior.
+/// Hard-delete a playlist by id. A sync-sourced playlist leaves a
+/// tombstone behind so the reconciler never re-imports it — the delete
+/// is permanent, same as for user-created playlists.
 pub async fn delete(engine: &SqliteRawEngine, playlist_id: i64) -> Result<(), PlaylistsError> {
+    let tombstone_sql = "INSERT OR IGNORE INTO playlist_tombstones \
+                         (sync_source_id, persistent_id) \
+                         SELECT sync_source_id, persistent_id FROM playlists \
+                         WHERE id = ? AND sync_source_id IS NOT NULL \
+                         AND persistent_id IS NOT NULL";
+    engine
+        .raw_sql_execute(tombstone_sql, &[FilterValue::Int(playlist_id)])
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
     let sql = "DELETE FROM playlists WHERE id = ?";
     engine
         .raw_sql_execute(sql, &[FilterValue::Int(playlist_id)])
         .await
         .map(|_| ())
         .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
+/// Persistent ids (parsed from their hex form) of playlists the user
+/// deleted from `source_id`. The reconciler skips these entirely.
+pub async fn tombstoned_pids(
+    engine: &SqliteRawEngine,
+    source_id: i64,
+) -> Result<std::collections::HashSet<u64>, PlaylistsError> {
+    let sql = "SELECT persistent_id FROM playlist_tombstones WHERE sync_source_id = ?";
+    let rows = engine
+        .raw_sql_query(sql, &[FilterValue::Int(source_id)])
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    let mut pids = std::collections::HashSet::with_capacity(rows.len());
+    for r in rows {
+        let json = r.into_json();
+        let hex = json
+            .get("persistent_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| PlaylistsError::Query(anyhow::anyhow!("tombstone row missing pid")))?
+            .to_string();
+        let pid = u64::from_str_radix(&hex, 16)
+            .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+        pids.insert(pid);
+    }
+    Ok(pids)
 }
 
 /// Update the cached track-count for a smart playlist after a fresh
@@ -1167,6 +1209,108 @@ mod tests {
         assert_eq!(
             listed.iter().find(|r| r.id == p2).unwrap().cached_track_count,
             Some(0)
+        );
+    }
+
+    #[tokio::test]
+    async fn user_rename_survives_a_sync_upsert() {
+        let db = tmp().await;
+        let u = PlaylistUpsert {
+            persistent_id: 0xAAAA_BBBB_CCCC_DDDD,
+            sync_source_id: 1,
+            name: "Gym",
+            kind: PlaylistKind::Regular,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &[],
+            smart_rule_json: None,
+        };
+        let id = upsert(&db.engine, &u).await.unwrap();
+        rename(&db.engine, id, "Workout").await.unwrap();
+        // Next sync re-upserts the source row with its original name…
+        upsert(&db.engine, &u).await.unwrap();
+        let rows = list_all(&db.engine).await.unwrap();
+        // …but the user's rename wins.
+        assert_eq!(rows.iter().find(|r| r.id == id).unwrap().name, "Workout");
+    }
+
+    #[tokio::test]
+    async fn sync_still_renames_rows_the_user_never_touched() {
+        let db = tmp().await;
+        let u = PlaylistUpsert {
+            persistent_id: 0xAAAA_BBBB_CCCC_DDDD,
+            sync_source_id: 1,
+            name: "Gym",
+            kind: PlaylistKind::Regular,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &[],
+            smart_rule_json: None,
+        };
+        let id = upsert(&db.engine, &u).await.unwrap();
+        let renamed = PlaylistUpsert { name: "Gym 2024", ..u };
+        upsert(&db.engine, &renamed).await.unwrap();
+        let rows = list_all(&db.engine).await.unwrap();
+        assert_eq!(rows.iter().find(|r| r.id == id).unwrap().name, "Gym 2024");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_synced_playlist_records_a_tombstone() {
+        let db = tmp().await;
+        let pid = 0x1234_5678_9ABC_DEF0u64;
+        let u = PlaylistUpsert {
+            persistent_id: pid,
+            sync_source_id: 1,
+            name: "Synced",
+            kind: PlaylistKind::Regular,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &[],
+            smart_rule_json: None,
+        };
+        let id = upsert(&db.engine, &u).await.unwrap();
+        delete(&db.engine, id).await.unwrap();
+        assert!(list_all(&db.engine).await.unwrap().is_empty());
+        let dead = tombstoned_pids(&db.engine, 1).await.unwrap();
+        assert!(dead.contains(&pid));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_user_playlist_records_no_tombstone() {
+        let db = tmp().await;
+        let id = create_regular(&db.engine, "Mine", None).await.unwrap();
+        delete(&db.engine, id).await.unwrap();
+        assert!(tombstoned_pids(&db.engine, 1).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tombstoned_pids_scopes_by_source() {
+        let db = tmp().await;
+        db.engine
+            .raw_sql_execute(
+                "INSERT INTO sync_sources (id, name, source_path, path_mappings, \
+                 conflict_rules, kind) VALUES (2, 'y', '/y', '[]', '{}', 'itunes_itl')",
+                &[],
+            )
+            .await
+            .unwrap();
+        for (source, pid) in [(1i64, 0x1u64), (2i64, 0x2u64)] {
+            let u = PlaylistUpsert {
+                persistent_id: pid,
+                sync_source_id: source,
+                name: "p",
+                kind: PlaylistKind::Regular,
+                parent_persistent_id: None,
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: None,
+            };
+            let id = upsert(&db.engine, &u).await.unwrap();
+            delete(&db.engine, id).await.unwrap();
+        }
+        assert_eq!(
+            tombstoned_pids(&db.engine, 1).await.unwrap(),
+            std::collections::HashSet::from([0x1u64])
         );
     }
 
