@@ -743,6 +743,91 @@ async fn a_real_filesystem_sync_leaves_no_partial_and_copies_exactly() {
 }
 
 #[tokio::test]
+async fn an_offline_library_volume_never_wipes_the_device() {
+    // The library lives on a NAS or external drive that is not mounted.
+    // Every source stats as missing, so every track is skipped — and a
+    // skipped track must not look like a deselected one, or the whole
+    // device gets pruned.
+    let f = fixture().await;
+    let t = FakeTransport::new();
+    run(
+        &f.db.engine,
+        &shared(&t),
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
+    let before = t.files().len();
+    assert_eq!(before, 4, "3 tracks + 1 playlist");
+
+    // Take the whole library offline.
+    for path in &f.track_paths {
+        std::fs::remove_file(path).unwrap();
+    }
+
+    let err = run(
+        &f.db.engine,
+        &shared(&t),
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .expect_err("an unreadable library must abort, not prune");
+
+    assert!(
+        matches!(err, EngineError::LibraryUnavailable { .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        t.files().len(),
+        before,
+        "not one file may be removed because the library was unreachable"
+    );
+    assert_eq!(f.manifest_len().await, 4, "the manifest must survive too");
+}
+
+#[tokio::test]
+async fn one_unreadable_track_does_not_prune_the_others() {
+    let f = fixture().await;
+    let t = FakeTransport::new();
+    run(
+        &f.db.engine,
+        &shared(&t),
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
+
+    // A single source goes missing — a partial mount, a renamed folder.
+    std::fs::remove_file(&f.track_paths[1]).unwrap();
+
+    let done = run(
+        &f.db.engine,
+        &shared(&t),
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(done.skipped, 1);
+    assert_eq!(
+        done.deleted, 0,
+        "a track we could not read is not a track the user deselected"
+    );
+    assert!(t
+        .stat(&DevicePath::new("/Music/Bonobo/Migration/02 Outlier.flac"))
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
 async fn a_device_without_rename_writes_straight_to_the_destination() {
     // No production transport reports rename: false yet, so without
     // this the whole no-staging branch — including its lack of an
@@ -1098,7 +1183,7 @@ async fn a_smart_playlist_resolves_at_sync_time() {
 async fn build_plan_reports_bytes_without_writing() {
     let f = fixture().await;
     let t = FakeTransport::new();
-    let (plan, skips) = build_plan(&f.db.engine, &f.device().await, &shared(&t))
+    let (plan, skips, _) = build_plan(&f.db.engine, &f.device().await, &shared(&t))
         .await
         .unwrap();
 
@@ -1122,7 +1207,7 @@ async fn two_tracks_rendering_to_one_path_are_both_kept() {
         .unwrap();
 
     let t = FakeTransport::new();
-    let (plan, _) = build_plan(&f.db.engine, &f.device().await, &shared(&t))
+    let (plan, _, _) = build_plan(&f.db.engine, &f.device().await, &shared(&t))
         .await
         .unwrap();
     let paths: Vec<&str> = plan.adds.iter().map(|d| d.device_path.as_str()).collect();

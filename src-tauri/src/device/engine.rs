@@ -140,10 +140,33 @@ pub enum EngineError {
     /// intact and recorded; `last_sync_at` is deliberately not stamped.
     #[error("sync cancelled")]
     Cancelled,
+    /// Not one selected track could be read. Almost always an unmounted
+    /// library volume — and continuing would prune the device against a
+    /// selection that resolved to nothing.
+    #[error(
+        "none of the {selected} selected tracks could be read — \
+         is the library volume mounted?"
+    )]
+    LibraryUnavailable { selected: usize },
+    /// Work was planned and every item of it failed. Reporting success
+    /// here would show a fresh sync for a device that is not there.
+    #[error("nothing could be written to the device ({failed} failures)")]
+    NothingWritten { failed: u64 },
 }
 
 fn db_err(e: impl Into<anyhow::Error>) -> EngineError {
     EngineError::Db(e.into())
+}
+
+/// An advisory raised while planning: the track still syncs, but the
+/// user should know something about how.
+///
+/// Collected rather than emitted directly because planning runs on the
+/// blocking pool, with no observer in scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub kind: DeviceWarningKind,
+    pub detail: String,
 }
 
 /// Why a track in the selection did not reach the device.
@@ -229,7 +252,7 @@ pub async fn build_plan(
     engine: &SqliteRawEngine,
     device: &DeviceRow,
     transport: &SharedTransport,
-) -> Result<(SyncPlan, Vec<Skip>), EngineError> {
+) -> Result<(SyncPlan, Vec<Skip>, Vec<Note>), EngineError> {
     let caps = transport.capabilities();
     let root = DevicePath::new(&device.root_path);
     let selected = resolve_selection(engine, &device.selection).await?;
@@ -241,12 +264,36 @@ pub async fn build_plan(
     // the whole loop goes to the blocking pool rather than stalling the
     // async worker.
     let template = device.layout_template.clone();
-    let (desired, skips) =
+    let (desired, skips, notes) =
         tokio::task::spawn_blocking(move || render_desired(&selected, &template, &root, &caps))
             .await
             .map_err(db_err)?;
 
-    Ok((manifest::diff(&desired, &existing), skips))
+    // A track we could not read is not a track the user deselected.
+    // Without this, an unreadable source drops out of `desired`, the
+    // diff calls its manifest row an orphan, and the prune phase
+    // deletes a file the user still wants — an unmounted library volume
+    // would wipe the device and report success.
+    let skipped: HashSet<i64> = skips.iter().map(|s| s.track_id).collect();
+    let mut plan = manifest::diff(&desired, &existing);
+    plan.orphans
+        .retain(|row| !row.track_id.is_some_and(|id| skipped.contains(&id)));
+
+    Ok((plan, skips, notes))
+}
+
+/// Whether the library itself looks unreachable, rather than a few
+/// files being genuinely gone.
+///
+/// Every selected track failing to stat means the volume is not
+/// mounted far more often than it means the user deleted their whole
+/// library. Syncing on that reading is never what they wanted.
+fn library_looks_offline(selected: usize, skips: &[Skip]) -> bool {
+    selected > 0
+        && skips.len() == selected
+        && skips
+            .iter()
+            .all(|s| s.reason == SkipReason::MissingSourceFile)
 }
 
 /// Pure, blocking half of [`build_plan`]: stat each source file and
@@ -256,9 +303,10 @@ fn render_desired(
     template: &str,
     root: &DevicePath,
     caps: &super::transport::Capabilities,
-) -> (Vec<Desired>, Vec<Skip>) {
+) -> (Vec<Desired>, Vec<Skip>, Vec<Note>) {
     let mut desired = Vec::with_capacity(selected.len());
     let mut skips = Vec::new();
+    let mut notes = Vec::new();
     // Two tracks can legitimately render to the same path (same album,
     // same title). Suffix the later ones so neither is silently lost.
     let mut taken: HashSet<String> = HashSet::new();
@@ -289,7 +337,14 @@ fn render_desired(
                 continue;
             }
         };
-        let path = dedupe_path(rendered, &mut taken);
+        let rendered_str = rendered.as_str().to_string();
+        let (path, collided) = dedupe_path(rendered, &mut taken, caps.max_path_bytes);
+        if collided {
+            notes.push(Note {
+                kind: DeviceWarningKind::NameCollision,
+                detail: format!("{rendered_str} → {}", path.as_str()),
+            });
+        }
 
         desired.push(Desired {
             track_id: row.id,
@@ -308,13 +363,20 @@ fn render_desired(
         });
     }
 
-    (desired, skips)
+    (desired, skips, notes)
 }
 
 /// Suffix ` (2)`, ` (3)` … until the path is unclaimed this run.
-fn dedupe_path(path: DevicePath, taken: &mut HashSet<String>) -> DevicePath {
+///
+/// Returns whether a suffix was needed, so the caller can warn: two
+/// tracks landing on one name is worth telling the user about.
+fn dedupe_path(
+    path: DevicePath,
+    taken: &mut HashSet<String>,
+    max_bytes: usize,
+) -> (DevicePath, bool) {
     if taken.insert(path.as_str().to_string()) {
-        return path;
+        return (path, false);
     }
     let parent = path.parent().unwrap_or_else(|| DevicePath::new("/"));
     let name = path.file_name().unwrap_or("file");
@@ -323,9 +385,14 @@ fn dedupe_path(path: DevicePath, taken: &mut HashSet<String>) -> DevicePath {
         None => (name, String::new()),
     };
     for n in 2..1000 {
-        let candidate = parent.join(&format!("{stem} ({n}){ext}"));
+        // The stem already fills the device's byte budget, so make room
+        // for the suffix rather than overshooting it — an over-long
+        // name is a permanent, unexplained failure on every run.
+        let suffix = format!(" ({n})");
+        let budget = max_bytes.saturating_sub(ext.len() + suffix.len());
+        let candidate = parent.join(&format!("{}{suffix}{ext}", trim_to(stem, budget)));
         if taken.insert(candidate.as_str().to_string()) {
-            return candidate;
+            return (candidate, true);
         }
     }
     // Exhausted the suffixes. Returning `path` would hand back a name
@@ -336,9 +403,23 @@ fn dedupe_path(path: DevicePath, taken: &mut HashSet<String>) -> DevicePath {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let candidate = parent.join(&format!("{stem} ({ts:x}){ext}"));
+    let suffix = format!(" ({ts:x})");
+    let budget = max_bytes.saturating_sub(ext.len() + suffix.len());
+    let candidate = parent.join(&format!("{}{suffix}{ext}", trim_to(stem, budget)));
     taken.insert(candidate.as_str().to_string());
-    candidate
+    (candidate, true)
+}
+
+/// Truncate on a character boundary, for building a suffixed name.
+fn trim_to(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Run one full sync.
@@ -377,7 +458,14 @@ pub async fn run(
     let partial_name = run_partial_name();
 
     report(obs, device.id, DevicePhase::Planning, 0, 1, "planning");
-    let (plan, skips) = build_plan(engine, device, transport).await?;
+    let (plan, skips, notes) = build_plan(engine, device, transport).await?;
+    for note in &notes {
+        warn(obs, device.id, note.kind, note.detail.clone());
+    }
+    let selected = plan.adds.len() + plan.replaces.len() + plan.unchanged + skips.len();
+    if library_looks_offline(selected, &skips) {
+        return Err(EngineError::LibraryUnavailable { selected });
+    }
     clean_partials(transport, &plan, &partial_name).await;
     done.skipped = skips.len() as u64;
     for skip in &skips {
@@ -398,6 +486,7 @@ pub async fn run(
         }
     }
 
+    let planned = (plan.adds.len() + plan.replaces.len()) as u64;
     let uploaded = upload_phase(
         engine,
         transport,
@@ -409,6 +498,17 @@ pub async fn run(
         &partial_name,
     )
     .await?;
+
+    // Work was planned and none of it landed. That is a device that is
+    // not really there — an unmounted root fails every path check — and
+    // falling through would stamp `last_sync_at` and show the user a
+    // fresh, successful sync.
+    let written = done.added + done.replaced;
+    if planned > 0 && written == 0 && !cancel.load(Ordering::Relaxed) {
+        return Err(EngineError::NothingWritten {
+            failed: done.skipped,
+        });
+    }
 
     done.playlists_written =
         playlist_phase(engine, transport, obs, device, &uploaded, cancel).await?;
@@ -877,6 +977,25 @@ async fn playlist_phase(
 
         let file = dir.join(&m3u::playlist_file_name(name, ancestors, &caps));
         let body = m3u::render_m3u8(&entries, &dir);
+
+        // A playlist that has tracks but landed none of them renders as
+        // a bare header. Writing that would truncate a correct playlist
+        // already on the device — the damage a moved library folder or
+        // a run of upload failures would otherwise cause.
+        if entries.is_empty() && !rows.is_empty() {
+            written_paths.insert(file.as_str().to_string());
+            warn(
+                obs,
+                device.id,
+                DeviceWarningKind::UploadFailed,
+                format!(
+                    "{}: left alone — none of its {} tracks reached the device",
+                    file.as_str(),
+                    rows.len()
+                ),
+            );
+            continue;
+        }
 
         // Claim the path before attempting the write, so a failure
         // below cannot let the mirror sweep delete the copy already on

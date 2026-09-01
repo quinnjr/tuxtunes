@@ -12,6 +12,10 @@ use crate::fs::path::{PathRenderError, TrackFields};
 /// separately, becoming `-` so an "AC/DC" artist stays readable.
 const ILLEGAL: &[char] = &[':', '*', '?', '"', '<', '>', '|'];
 
+/// Stand-in for a name that sanitises away to nothing. A file still
+/// needs *some* name; a directory is dropped instead (see `render`).
+const PLACEHOLDER: &str = "_";
+
 /// Device names that are reserved on Windows regardless of extension.
 const RESERVED: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -55,7 +59,7 @@ pub fn sanitize_segment(raw: &str, max_bytes: usize) -> String {
         .to_string();
 
     if s.is_empty() {
-        return "_".to_string();
+        return PLACEHOLDER.to_string();
     }
 
     // Split off the extension before both the reserved-name check and
@@ -127,13 +131,33 @@ pub fn render(
         return Err(LayoutError::Render(PathRenderError::MissingExt));
     }
     let expanded = crate::fs::path::expand_tokens(template, t)?;
+    if expanded.trim().is_empty() {
+        return Err(LayoutError::Empty);
+    }
+    let segments: Vec<&str> = expanded.split('/').collect();
+    let last = segments.len().saturating_sub(1);
+
     let mut out = root.clone();
     let mut any = false;
-    for segment in expanded.split('/') {
+    for (i, segment) in segments.iter().enumerate() {
+        if i == last {
+            // The file name. Split the extension off the *raw* value
+            // before sanitising: a title made only of illegal
+            // characters ("???.flac") would otherwise collapse onto the
+            // extension and yield a file literally named "flac".
+            let (stem, ext) = split_extension(segment);
+            let budget = caps.max_path_bytes.saturating_sub(ext.len());
+            let clean_stem = sanitize_segment(stem, budget);
+            out = out.join(&format!("{clean_stem}{ext}"));
+            any = true;
+            continue;
+        }
+        // A directory segment that sanitises away entirely (an album
+        // titled "???") is dropped rather than turned into a "_"
+        // placeholder, which two different such albums would share.
+        // Judged on the sanitised value: the raw one is not empty.
         let clean = sanitize_segment(segment, caps.max_path_bytes);
-        // `sanitize_segment` never returns empty, but an empty input
-        // segment (a `//` in the template) should still be skipped.
-        if segment.trim().is_empty() {
+        if segment.trim().is_empty() || clean == PLACEHOLDER {
             continue;
         }
         out = out.join(&clean);
@@ -349,6 +373,34 @@ mod tests {
         for segment in got.as_str().split('/').filter(|s| !s.is_empty()) {
             assert!(segment.len() <= 8, "segment {segment:?} exceeds the cap");
         }
+    }
+
+    #[test]
+    fn a_title_of_only_illegal_characters_keeps_its_extension() {
+        let mut f = fields();
+        f.title = "???";
+        let got = render("{title}.{ext}", &DevicePath::new("/Music"), &f, &caps()).unwrap();
+        assert_eq!(
+            got.as_str(),
+            "/Music/_.flac",
+            "the extension must survive a name that sanitises away"
+        );
+    }
+
+    #[test]
+    fn a_directory_that_sanitises_away_is_dropped_not_merged() {
+        // Two different albums whose names are all illegal characters
+        // would otherwise both become "_" and interleave in one folder.
+        let mut f = fields();
+        f.album = Some("???");
+        let got = render(
+            "{album_artist}/{album}/{title}.{ext}",
+            &DevicePath::new("/Music"),
+            &f,
+            &caps(),
+        )
+        .unwrap();
+        assert_eq!(got.as_str(), "/Music/Bonobo/Kerala.flac");
     }
 
     #[test]

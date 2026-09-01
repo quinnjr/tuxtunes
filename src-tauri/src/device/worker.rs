@@ -209,7 +209,13 @@ async fn sync_device(
         .map_err(|e| EngineError::Db(anyhow::Error::from(e)))?;
     write(LogLevel::Info, &format!("syncing '{}'", device.name));
 
-    let transport = transport_for(&device)?;
+    // `FsTransport::new` canonicalises the root, which blocks on a
+    // wedged mount — and does so before the first `op()` deadline could
+    // apply, so it goes to the blocking pool too.
+    let row = device.clone();
+    let transport = tokio::task::spawn_blocking(move || transport_for(&row))
+        .await
+        .map_err(|e| EngineError::Db(anyhow::Error::from(e)))??;
     obs.progress(&DeviceProgress {
         device_id,
         phase: DevicePhase::Enumerating,

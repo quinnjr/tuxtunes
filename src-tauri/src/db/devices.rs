@@ -100,9 +100,14 @@ pub async fn upsert_by_key(
     mount_path: Option<&str>,
     key_is_weak: bool,
 ) -> Result<i64, DevicesError> {
+    // The JSON columns are written explicitly rather than left to the
+    // table's DEFAULTs: `schema.prax` is the source of truth and its
+    // generated DDL carries no defaults, so relying on them would break
+    // the first insert the moment the schema is regenerated.
     let sql =
-        "INSERT INTO devices (device_key, name, kind, mount_path, key_is_weak, last_seen_at) \
-               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP) \
+        "INSERT INTO devices (device_key, name, kind, mount_path, key_is_weak, last_seen_at, \
+                selection, profile_override, transcode_policy, stats_cursors, conflict_rules) \
+               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, '[]', '{}', '{}', '{}', '{}') \
                ON CONFLICT(device_key) DO UPDATE SET \
                  kind = excluded.kind, \
                  mount_path = COALESCE(excluded.mount_path, devices.mount_path), \

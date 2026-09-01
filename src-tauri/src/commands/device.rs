@@ -236,8 +236,14 @@ pub async fn preview_device_sync(
     let device = devices::get(&state.db.engine, device_id)
         .await
         .map_err(|e| e.to_string())?;
-    let transport = filesystem_transport(&device)?;
-    let (plan, skips) = engine::build_plan(&state.db.engine, &device, &transport)
+    // Constructing the transport canonicalises the mount, which blocks
+    // on a wedged one; keep it off the runtime like every other
+    // filesystem call in this file.
+    let row = device.clone();
+    let transport = tokio::task::spawn_blocking(move || filesystem_transport(&row))
+        .await
+        .map_err(|e| e.to_string())??;
+    let (plan, skips, _notes) = engine::build_plan(&state.db.engine, &device, &transport)
         .await
         .map_err(|e| e.to_string())?;
     // statvfs blocks uninterruptibly on a wedged mount, so it must not
@@ -358,7 +364,7 @@ mod tests {
         let (_f, _m, db, id) = setup().await;
         let device = devices::get(&db.engine, id).await.unwrap();
         let t = filesystem_transport(&device).unwrap();
-        let (plan, skips) = engine::build_plan(&db.engine, &device, &t).await.unwrap();
+        let (plan, skips, _) = engine::build_plan(&db.engine, &device, &t).await.unwrap();
         assert!(plan.adds.is_empty());
         assert!(skips.is_empty());
     }
@@ -380,7 +386,7 @@ mod tests {
 
         let device = devices::get(&db.engine, id).await.unwrap();
         let t = filesystem_transport(&device).unwrap();
-        let (plan, _) = engine::build_plan(&db.engine, &device, &t).await.unwrap();
+        let (plan, _, _) = engine::build_plan(&db.engine, &device, &t).await.unwrap();
 
         assert_eq!(plan.adds.len(), 1);
         assert_eq!(plan.bytes_out, 10);

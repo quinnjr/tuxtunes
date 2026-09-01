@@ -251,7 +251,8 @@ model Device {
     last_seen_at     DateTime?
     last_sync_at     DateTime?
 
-    // Initialized to [] / {} by the application on insert.
+    // Initialized to [] / {} by `db::devices::upsert_by_key` on insert;
+    // the generated DDL carries no defaults for these.
     /// `[{ kind: playlist|album|smart|all, id }]`.
     selection        Json
     /// Codec allow/deny lists and rate/depth ceilings.
