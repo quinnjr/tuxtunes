@@ -799,7 +799,9 @@ mod tests {
         .await
         .unwrap();
         // The next sync re-applies the source's descriptive fields…
-        update_descriptive_fields(&db.engine, id, &u, 0, 0).await.unwrap();
+        update_descriptive_fields(&db.engine, id, &u, 0, 0)
+            .await
+            .unwrap();
         let row = get(&db.engine, id).await.unwrap();
         // …but the user's edits win for the editable set.
         assert_eq!(row.title, "My Title");
@@ -817,7 +819,10 @@ mod tests {
         seed_source(&db).await;
         let u = itl_fixture(8, "Source Title", "/tmp/u.flac");
         let id = insert_from_itl(&db.engine, &u).await.unwrap();
-        let renamed = ItlTrackUpsert { title: "Retagged", ..u };
+        let renamed = ItlTrackUpsert {
+            title: "Retagged",
+            ..u
+        };
         update_descriptive_fields(&db.engine, id, &renamed, 0, 0)
             .await
             .unwrap();

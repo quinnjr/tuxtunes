@@ -1,4 +1,4 @@
-import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnDestroy, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
 import { LibraryView, UiService } from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
@@ -17,13 +17,24 @@ import { TrackListViewComponent } from '../track-list-view/track-list-view.compo
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './main-content.component.html',
 })
-export class MainContentComponent {
+export class MainContentComponent implements OnDestroy {
   protected readonly ui = inject(UiService);
   protected readonly library = inject(LibraryService);
   protected readonly viewMode = this.ui.libraryView;
   protected readonly modes: readonly LibraryView[] = ['tracks', 'albums', 'artists'] as const;
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * The device view replaces this component rather than nesting inside
+   * it, so switching to a device destroys it. A pending search debounce
+   * would otherwise fire afterwards and refresh a list nothing is
+   * showing.
+   */
+  ngOnDestroy(): void {
+    if (this.searchTimer !== null) clearTimeout(this.searchTimer);
+    this.searchTimer = null;
+  }
 
   /**
    * The segmented control always addresses the whole library, so

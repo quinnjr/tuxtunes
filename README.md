@@ -52,6 +52,24 @@ library that keeps working after iTunes is gone.
   `in the last`, `not in the last`, plus nested any/all groups.
 - Live preview: see the matching track count while you build the rule, before saving.
 
+**Device sync**
+
+- Push selected playlists and albums to **Android phones and DAPs** from the Devices
+  section of the sidebar, with **as little compression as possible**: anything the
+  device can decode is copied bit-for-bit, never re-encoded.
+- Playlists are written as UTF-8 `.m3u8` with device-relative paths — readable by
+  Poweramp, USB Audio Player Pro, Musicolet, Vinyl, VLC and most DAP firmware — plus a
+  native playlist object where the device supports one.
+- **Mirroring is safe by construction.** TuxTunes keeps a manifest of exactly what it
+  wrote to each device, and only ever deletes from that list; files you put on the
+  device yourself are never touched.
+- Dry-run preview before every sync: what will be copied, replaced, removed and skipped,
+  and how many bytes it will move.
+- Today this reaches devices through a **mounted path** — gvfs/mtpfs mounts, SD-card
+  readers, and DAPs in USB mass-storage mode. Native MTP (libmtp on Linux, Windows
+  Portable Devices on Windows) and lossless transcoding for codecs Android cannot decode
+  are the next phases; see `docs/mtp-windows-verification.md` for the Windows status.
+
 **Desktop integration**
 
 - **MPRIS2** — play/pause/next/previous and metadata from your DE, media keys, and
@@ -140,6 +158,8 @@ theme / ui / context-menu                            ▼
                                                     verify, artwork, hash)
                                           sync/    (.itl reconcile, path_map,
                                                     conflict, worker)
+                                          device/  (outbound push: transport,
+                                                    layout, manifest, m3u8)
                                           playback/(libmpv engine, prefetch,
                                                     ReplayGain, stats)
        ◄──── listen() ── events ───────── integration/ (MPRIS, tray, notify)
@@ -151,7 +171,7 @@ theme / ui / context-menu                            ▼
 of truth: [Prax ORM](https://crates.io/crates/prax-orm) generates Rust types at compile
 time, and `prax-typegen` generates the TypeScript + Zod models under
 `src/app/models/generated`. It is deliberately denormalized to four tables — `Track`,
-`Playlist`, `SyncSource`, `Preference`.
+`Playlist`, `SyncSource`, `Preference` — plus `Device` and `DeviceObject` for device sync.
 
 **Layout.**
 
@@ -162,7 +182,8 @@ time, and `prax-typegen` generates the TypeScript + Zod models under
 | `src-tauri/src/commands`    | Tauri command surface (~46 commands)                                                                                       |
 | `src-tauri/src/db`          | Query layer over Prax/SQLite                                                                                               |
 | `src-tauri/src/fs`          | Ingest, organize, relink, verify, artwork, hashing                                                                         |
-| `src-tauri/src/sync`        | iTunes `.itl` reconciliation pipeline                                                                                      |
+| `src-tauri/src/sync`        | iTunes `.itl` reconciliation pipeline (inbound)                                                                            |
+| `src-tauri/src/device`      | Outbound device sync: transports, layout, manifest, playlists                                                              |
 | `src-tauri/src/playback`    | mpv engine, device config, play/skip stats                                                                                 |
 | `src-tauri/src/integration` | MPRIS, tray, notifications                                                                                                 |
 | `docs/plans`                | Design + implementation documents                                                                                          |

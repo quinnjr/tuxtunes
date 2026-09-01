@@ -42,3 +42,6 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 tempfile = "3"
+# `test-util` (not part of tokio's "full") provides the paused clock the
+# device timeout tests use to elapse a 30s deadline instantly.
+tokio = { version = "1", features = ["full", "test-util"] }
