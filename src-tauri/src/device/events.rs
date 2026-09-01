@@ -75,6 +75,11 @@ pub struct DeviceComplete {
     pub playlists_written: u64,
     pub skipped: u64,
     pub bytes_written: u64,
+    /// The user stopped the run. The counts above are still real — they
+    /// describe what reached the device before the stop — but the
+    /// selection was not fully applied, so `last_sync_at` is not
+    /// stamped and the UI says so rather than claiming success.
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -150,9 +155,11 @@ mod tests {
             playlists_written: 5,
             skipped: 6,
             bytes_written: 7,
+            cancelled: false,
         };
         let json = serde_json::to_string(&c).unwrap();
         for key in [
+            "cancelled",
             "added",
             "replaced",
             "unchanged",

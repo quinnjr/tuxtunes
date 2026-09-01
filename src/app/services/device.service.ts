@@ -94,6 +94,7 @@ export class DeviceService implements OnDestroy {
         playlists_written: number;
         skipped: number;
         bytes_written: number;
+        cancelled: boolean;
       }>('device:complete', (raw) => {
         this.lastComplete.set({
           deviceId: raw.device_id,
@@ -104,6 +105,7 @@ export class DeviceService implements OnDestroy {
           playlistsWritten: raw.playlists_written,
           skipped: raw.skipped,
           bytesWritten: raw.bytes_written,
+          cancelled: raw.cancelled,
         });
         // A finished sync updates last_sync_at on the row.
         void this.refresh();

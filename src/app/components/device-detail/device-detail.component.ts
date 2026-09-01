@@ -1,5 +1,13 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { Device, SelectionEntry, formatBytes } from '../../models/device';
+import {
+  Device,
+  DeviceComplete,
+  DeviceFailed,
+  DeviceProgress,
+  DeviceWarning,
+  SelectionEntry,
+} from '../../models/device';
+import { formatByteSize } from '../../utils/format';
 import { DeviceService } from '../../services/device.service';
 import { LibraryService, Playlist } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
@@ -17,6 +25,22 @@ export class DeviceDetailComponent {
   /** Whether the raw sync log is expanded. */
   protected readonly logOpen = signal(false);
 
+  /**
+   * Selection as the user has left it, ahead of the round-trip.
+   *
+   * `device().selection` only updates after `update_device_selection`
+   * and the refresh that follows it both resolve, so two quick clicks
+   * would each build from the same stale snapshot and the first would
+   * be lost. Keyed by device id so it cannot leak across devices.
+   */
+  readonly #pending = signal<{ deviceId: number; selection: SelectionEntry[] } | null>(null);
+
+  /** The selection to render and to build the next edit from. */
+  #currentSelection(device: Device): SelectionEntry[] {
+    const pending = this.#pending();
+    return pending?.deviceId === device.id ? pending.selection : device.selection;
+  }
+
   protected readonly device = computed<Device | undefined>(this.#computeDevice.bind(this));
   /** Playlists and smart playlists, flat; folders cannot be synced. */
   protected readonly syncablePlaylists = computed<Playlist[]>(this.#computeSyncable.bind(this));
@@ -25,8 +49,37 @@ export class DeviceDetailComponent {
   protected readonly percent = computed(this.#computePercent.bind(this));
   protected readonly usedPercent = computed(this.#computeUsedPercent.bind(this));
 
+  // The service keeps one set of run-state signals, so everything the
+  // panel shows is filtered to the device actually on screen. Without
+  // this, opening device B right after syncing device A shows A's
+  // progress, warnings and summary as if they were B's.
+  protected readonly progress = computed(this.#computeProgress.bind(this));
+  protected readonly warnings = computed(this.#computeWarnings.bind(this));
+  protected readonly lastComplete = computed(this.#computeComplete.bind(this));
+  protected readonly lastError = computed(this.#computeError.bind(this));
+
   #computeDevice(): Device | undefined {
     return this.devices.byId(this.ui.activeDeviceId());
+  }
+
+  #computeProgress(): DeviceProgress | null {
+    const p = this.devices.progress();
+    return p !== null && p.deviceId === this.device()?.id ? p : null;
+  }
+
+  #computeWarnings(): DeviceWarning[] {
+    const id = this.device()?.id;
+    return this.devices.warnings().filter((w) => w.deviceId === id);
+  }
+
+  #computeComplete(): DeviceComplete | null {
+    const c = this.devices.lastComplete();
+    return c !== null && c.deviceId === this.device()?.id ? c : null;
+  }
+
+  #computeError(): DeviceFailed | null {
+    const e = this.devices.lastError();
+    return e !== null && e.deviceId === this.device()?.id ? e : null;
   }
 
   #computeSyncable(): Playlist[] {
@@ -34,14 +87,11 @@ export class DeviceDetailComponent {
   }
 
   #computeRunning(): boolean {
-    return (
-      this.devices.runState() === 'running' &&
-      this.devices.progress()?.deviceId === this.device()?.id
-    );
+    return this.devices.runState() === 'running' && this.progress() !== null;
   }
 
   #computePercent(): number {
-    const p = this.devices.progress();
+    const p = this.progress();
     if (p === null || p.total === 0) return 0;
     return Math.min(100, Math.floor((p.current / p.total) * 100));
   }
@@ -60,7 +110,9 @@ export class DeviceDetailComponent {
     const device = this.device();
     if (!device) return false;
     const kind = playlist.kind === 'smart' ? 'smart' : 'playlist';
-    return device.selection.some((e) => e.kind === kind && 'id' in e && e.id === playlist.id);
+    return this.#currentSelection(device).some(
+      (e) => e.kind === kind && 'id' in e && e.id === playlist.id,
+    );
   }
 
   /**
@@ -73,18 +125,25 @@ export class DeviceDetailComponent {
     const device = this.device();
     if (!device) return;
     const kind = playlist.kind === 'smart' ? 'smart' : 'playlist';
-    const without = device.selection.filter(
-      (e) => !(e.kind === kind && 'id' in e && e.id === playlist.id),
-    );
+    const current = this.#currentSelection(device);
+    const without = current.filter((e) => !(e.kind === kind && 'id' in e && e.id === playlist.id));
     const next: SelectionEntry[] =
-      without.length === device.selection.length
-        ? [...device.selection, { kind, id: playlist.id }]
-        : without;
-    void this.ui.guard(this.devices.updateSelection(device.id, next));
+      without.length === current.length ? [...current, { kind, id: playlist.id }] : without;
+
+    // Record the intent before the round-trip so a second click builds
+    // on it rather than on the stale server copy.
+    this.#pending.set({ deviceId: device.id, selection: next });
+    void this.ui.guard(
+      this.devices.updateSelection(device.id, next).finally(() => {
+        // Drop the override only if nothing newer replaced it.
+        if (this.#pending()?.selection === next) this.#pending.set(null);
+      }),
+    );
   }
 
   protected selectedCount(): number {
-    return this.device()?.selection.length ?? 0;
+    const device = this.device();
+    return device ? this.#currentSelection(device).length : 0;
   }
 
   protected preview(): void {
@@ -126,5 +185,8 @@ export class DeviceDetailComponent {
     this.setMirrorDeletes(device, (event.target as HTMLInputElement).checked);
   }
 
-  protected readonly bytes = formatBytes;
+  /** The app already has one byte formatter; a second one that
+   * disagreed (1000-based "GB" vs 1024-based "GiB") would show two
+   * different sizes for the same number in one window. */
+  protected readonly bytes = formatByteSize;
 }

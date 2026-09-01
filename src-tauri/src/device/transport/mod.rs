@@ -154,6 +154,12 @@ pub enum TransportError {
     /// than hanging the worker forever.
     #[error("device stopped responding during {0}")]
     Timeout(String),
+    /// A replace cleared the old object and then failed to move the new
+    /// one into place, so the destination is now empty. The caller must
+    /// drop the manifest row: it would otherwise claim a file that is
+    /// no longer there.
+    #[error("{0} was replaced but the new copy could not be moved into place: {1}")]
+    Replaced(String, String),
     #[error("transport error: {0}")]
     Other(#[source] anyhow::Error),
 }

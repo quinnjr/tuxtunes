@@ -119,6 +119,8 @@ export interface DeviceComplete {
   playlistsWritten: number;
   skipped: number;
   bytesWritten: number;
+  /** The user stopped the run; the counts describe what did land. */
+  cancelled: boolean;
 }
 
 export interface DeviceFailed {
@@ -160,17 +162,4 @@ export function mapPlanSummary(r: SyncPlanSummaryRaw): SyncPlanSummary {
     freeBytes: r.free_bytes,
     totalBytes: r.total_bytes,
   };
-}
-
-/** Human-readable byte size, e.g. `1.4 GB`. */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1000) return `${bytes} B`;
-  const units = ['kB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1000;
-  let unit = 0;
-  while (value >= 1000 && unit < units.length - 1) {
-    value /= 1000;
-    unit += 1;
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
 }

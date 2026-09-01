@@ -303,6 +303,8 @@ model DeviceObject {
     @@unique([device_id, device_path])
     @@index([device_id, track_id])
     @@index([device_id, kind])
+    /// `detach_track` filters on track_id alone.
+    @@index([track_id])
 }
 
 /// Singleton app settings (key/value JSON).

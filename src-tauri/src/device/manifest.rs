@@ -68,11 +68,20 @@ pub fn diff(desired: &[Desired], existing: &[DeviceObjectRow]) -> SyncPlan {
             }
             Some(have) => {
                 claimed.insert(have.device_path.as_str(), ());
-                // A missing hash on either side means we cannot prove
-                // the bytes match, so re-push rather than assume.
                 let same = have.encoded_codec == want.encoded_codec
                     && match (&have.source_hash, &want.source_hash) {
                         (Some(a), Some(b)) => a == b,
+                        // Neither side has a hash. The ITL importer
+                        // never computes one, so this is the *normal*
+                        // case for a synced library — treating it as
+                        // "changed" would re-push the whole library on
+                        // every run and then trip the free-space check.
+                        // Size is the best available proxy.
+                        (None, None) => have.size_bytes == want.size_bytes,
+                        // One side is hashed and the other is not (a
+                        // verify pass filled it in since). Equality
+                        // cannot be proven, so re-push once; the next
+                        // run compares hash to hash and settles.
                         _ => false,
                     };
                 if same {
@@ -176,6 +185,34 @@ mod tests {
             1,
             "changing the transcode policy must re-push"
         );
+    }
+
+    #[test]
+    fn an_unhashed_library_is_stable_across_runs() {
+        // The iTunes ITL importer never writes `file_hash`, so this is
+        // the ordinary case for a synced library, not an edge case.
+        let mut want = desired_at("/Music/a.flac", "unused");
+        want.source_hash = None;
+        let mut have = existing_at(1, "/Music/a.flac", "unused", "copy:flac");
+        have.source_hash = None;
+
+        let plan = diff(&[want], &[have]);
+
+        assert_eq!(plan.unchanged, 1, "an unhashed track must not re-push");
+        assert_eq!(plan.bytes_out, 0);
+    }
+
+    #[test]
+    fn an_unhashed_track_whose_size_changed_is_replaced() {
+        let mut want = desired_at("/Music/a.flac", "unused");
+        want.source_hash = None;
+        want.size_bytes = 200;
+        let mut have = existing_at(1, "/Music/a.flac", "unused", "copy:flac");
+        have.source_hash = None;
+
+        let plan = diff(&[want], &[have]);
+
+        assert_eq!(plan.replaces.len(), 1, "size is the fallback signal");
     }
 
     #[test]

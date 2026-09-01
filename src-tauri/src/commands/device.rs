@@ -51,15 +51,21 @@ pub async fn add_filesystem_device(
         &args.name,
         "filesystem",
         Some(&args.mount_path),
-        // A mount path is reusable: the next card in the same reader
-        // gets the same key. Marking the key weak keeps pruning off, so
-        // swapping cards can never delete the new card's contents.
-        true,
+        // Not weak. A mount path *is* reusable, but the user picked
+        // this folder deliberately, and the manifest already provides
+        // the real protection: only objects TuxTunes recorded writing
+        // are ever deletion candidates, and the upload path refuses to
+        // touch anything it has no row for. Marking every filesystem
+        // device weak disabled pruning outright — and filesystem is the
+        // only kind with a transport today, so it made `mirror_deletes`
+        // a no-op and the settings checkbox a lie.
+        false,
     )
     .await
     .map_err(|e| e.to_string())?;
 
     if let Some(root) = args.root_path {
+        validate_root_path(&root)?;
         let current = devices::get(&state.db.engine, id)
             .await
             .map_err(|e| e.to_string())?;
@@ -143,10 +149,12 @@ pub async fn refresh_devices(state: tauri::State<'_, AppState>) -> Result<Vec<De
         if row.kind != "filesystem" {
             continue;
         }
-        let present = row
-            .mount_path
-            .as_deref()
-            .is_some_and(|p| PathBuf::from(p).is_dir());
+        // `is_dir` stats the mount, which blocks on a wedged one.
+        let mount = row.mount_path.clone();
+        let present =
+            tokio::task::spawn_blocking(move || mount.is_some_and(|p| PathBuf::from(p).is_dir()))
+                .await
+                .map_err(|e| e.to_string())?;
         devices::set_seen(&state.db.engine, row.id, present)
             .await
             .map_err(|e| e.to_string())?;
@@ -167,12 +175,31 @@ pub async fn update_device_selection(
         .map_err(|e| e.to_string())
 }
 
+/// Reject a device root that cannot address anything on the device.
+///
+/// `root_path` is free text from the settings panel, and every track
+/// path is built under it — a `..` segment fails 100% of uploads with a
+/// per-track permission error and no hint as to why.
+fn validate_root_path(root: &str) -> Result<(), String> {
+    let path = crate::device::transport::DevicePath::new(root);
+    for segment in path.as_str().split('/').filter(|s| !s.is_empty()) {
+        if segment == ".." || segment == "." || segment.contains('\\') || segment.contains(':') {
+            return Err(format!(
+                "'{root}' is not a valid device folder: \
+                 use a plain path like /Music"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn update_device_settings(
     state: tauri::State<'_, AppState>,
     device_id: i64,
     settings: DeviceSettings,
 ) -> Result<(), String> {
+    validate_root_path(&settings.root_path)?;
     devices::update_settings(&state.db.engine, device_id, &settings)
         .await
         .map_err(|e| e.to_string())
@@ -213,8 +240,15 @@ pub async fn preview_device_sync(
     let (plan, skips) = engine::build_plan(&state.db.engine, &device, &transport)
         .await
         .map_err(|e| e.to_string())?;
+    // statvfs blocks uninterruptibly on a wedged mount, so it must not
+    // run inline on the async runtime: repeated Preview clicks would
+    // otherwise consume a tokio worker each and starve the shared
+    // runtime that also serves the DB and playback.
     let storage: Option<StorageInfo> = if transport.capabilities().free_space {
-        transport.free_space().ok()
+        let t = Arc::clone(&transport);
+        tokio::task::spawn_blocking(move || t.free_space().ok())
+            .await
+            .map_err(|e| e.to_string())?
     } else {
         None
     };
@@ -355,6 +389,19 @@ mod tests {
             0,
             "a dry run must not touch the device"
         );
+    }
+
+    #[test]
+    fn a_root_path_that_cannot_address_the_device_is_rejected() {
+        for bad in ["/../Music", "../Music", "/Music/./x", r"/C:\Music", r"/a\b"] {
+            assert!(
+                validate_root_path(bad).is_err(),
+                "{bad:?} should be refused before it fails every upload"
+            );
+        }
+        for good in ["/Music", "Music", "/", "/Storage/Music"] {
+            assert!(validate_root_path(good).is_ok(), "{good:?} should be fine");
+        }
     }
 
     #[test]

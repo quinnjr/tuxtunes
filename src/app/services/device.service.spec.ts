@@ -1,6 +1,6 @@
 import { Injector, runInInjectionContext } from '@angular/core';
 import { describe, expect, it, vi } from 'vitest';
-import { formatBytes, type DeviceRaw } from '../models/device';
+import { type DeviceRaw } from '../models/device';
 import { DeviceService } from './device.service';
 import { TauriService } from './tauri.service';
 
@@ -269,15 +269,5 @@ describe('DeviceService', () => {
     expect(offs.length).toBeGreaterThan(0);
     svc.ngOnDestroy();
     for (const off of offs) expect(off).toHaveBeenCalled();
-  });
-});
-
-describe('formatBytes', () => {
-  it('renders byte counts at a readable scale', () => {
-    expect(formatBytes(0)).toBe('0 B');
-    expect(formatBytes(999)).toBe('999 B');
-    expect(formatBytes(1500)).toBe('1.5 kB');
-    expect(formatBytes(15_000)).toBe('15 kB');
-    expect(formatBytes(1_400_000_000)).toBe('1.4 GB');
   });
 });

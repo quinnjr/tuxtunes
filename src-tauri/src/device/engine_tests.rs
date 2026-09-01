@@ -676,7 +676,7 @@ async fn a_failed_upload_leaves_no_partial_file_on_the_device() {
     .unwrap();
 
     assert!(
-        t.files().iter().all(|(p, _)| !p.ends_with(".tuxpart")),
+        t.files().iter().all(|(p, _)| !p.contains(".tuxpart-")),
         "a partial transfer must not survive: {:?}",
         t.files().iter().map(|(p, _)| p).collect::<Vec<_>>()
     );
@@ -693,8 +693,17 @@ async fn a_real_filesystem_sync_leaves_no_partial_and_copies_exactly() {
         mount.path().to_path_buf(),
     ));
 
-    // Make one source unreadable so the upload of it fails mid-run.
-    std::fs::remove_file(&f.track_paths[1]).unwrap();
+    // Truncate a source to zero *after* planning would stat it, so the
+    // write itself is what fails. Deleting the file instead — as an
+    // earlier version of this test did — makes `render_desired` drop
+    // the track at plan time, so no write is ever attempted and the
+    // assertion below proves nothing.
+    let saboteur = f.track_paths[1].clone();
+
+    // Replace the file with a directory: it stats fine during planning
+    // and fails on open during the copy.
+    std::fs::remove_file(&saboteur).unwrap();
+    std::fs::create_dir(&saboteur).unwrap();
 
     let done = run(
         &f.db.engine,
@@ -706,7 +715,8 @@ async fn a_real_filesystem_sync_leaves_no_partial_and_copies_exactly() {
     .await
     .unwrap();
 
-    assert_eq!(done.added, 2);
+    assert_eq!(done.added, 2, "the failed write must not be counted");
+    assert_eq!(done.skipped, 1);
     let mut leftovers = Vec::new();
     let mut stack = vec![mount.path().to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -714,7 +724,7 @@ async fn a_real_filesystem_sync_leaves_no_partial_and_copies_exactly() {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.to_string_lossy().ends_with(".tuxpart") {
+            } else if path.to_string_lossy().contains(".tuxpart-") {
                 leftovers.push(path);
             }
         }
@@ -730,6 +740,42 @@ async fn a_real_filesystem_sync_leaves_no_partial_and_copies_exactly() {
         std::fs::read(&f.track_paths[0]).unwrap(),
         "a supported codec must reach a real device bit-exact"
     );
+}
+
+#[tokio::test]
+async fn a_device_without_rename_writes_straight_to_the_destination() {
+    // No production transport reports rename: false yet, so without
+    // this the whole no-staging branch — including its lack of an
+    // occupancy guard — would ship unexercised.
+    let f = fixture().await;
+    let caps = crate::device::transport::Capabilities {
+        playlist_objects: false,
+        free_space: true,
+        rename: false,
+        max_path_bytes: 255,
+        filesystem: crate::device::transport::FilesystemKind::Fat32,
+    };
+    let t = FakeTransport::with_caps(caps);
+
+    let done = run(
+        &f.db.engine,
+        &shared(&t),
+        &RecordingObserver::default(),
+        &f.device().await,
+        &no_cancel(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(done.added, 3);
+    assert!(
+        t.files().iter().all(|(p, _)| !p.contains(".tuxpart-")),
+        "no staging file should exist on a transport that cannot rename"
+    );
+    assert!(t
+        .files()
+        .iter()
+        .any(|(p, _)| p == "/Music/Bonobo/Migration/01 Kerala.flac"));
 }
 
 #[tokio::test]
@@ -839,7 +885,7 @@ async fn cancellation_stops_before_uploading() {
     let t = FakeTransport::new();
     let obs = RecordingObserver::default();
 
-    let err = run(
+    let done = run(
         &f.db.engine,
         &shared(&t),
         &obs,
@@ -847,9 +893,10 @@ async fn cancellation_stops_before_uploading() {
         &cancelled(),
     )
     .await
-    .expect_err("a cancelled run must not report success");
+    .expect("stopping is what the user asked for, not a failure");
 
-    assert!(matches!(err, EngineError::Cancelled), "{err:?}");
+    assert!(done.cancelled, "the run must report that it was stopped");
+    assert_eq!(done.added, 0);
     assert!(t.files().is_empty());
     assert_eq!(
         obs.phases().last(),
@@ -884,7 +931,7 @@ async fn a_leftover_partial_from_an_earlier_run_is_cleaned_up() {
     let t = FakeTransport::new();
     t.mkdir_all(&DevicePath::new("/Music/Bonobo/Migration"))
         .unwrap();
-    let stale = DevicePath::new("/Music/Bonobo/Migration/99 Ghost.flac.tuxpart");
+    let stale = DevicePath::new("/Music/Bonobo/Migration/.tuxpart-deadbeef");
     {
         let mut w = t.open_write(&stale, 1).unwrap();
         std::io::Write::write_all(&mut w, b"x").unwrap();

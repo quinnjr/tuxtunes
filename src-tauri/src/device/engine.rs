@@ -63,6 +63,29 @@ const COPY_STALL_TIMEOUT: Duration = Duration::from_secs(3);
 /// Directory, relative to the device root, holding the `.m3u8` files.
 const PLAYLIST_DIR: &str = "Playlists";
 
+/// Prefix for the staging name an upload writes to before renaming
+/// into place.
+///
+/// A short fixed name rather than `<final name>.tuxpart`: the final
+/// name may already sit exactly at the device's `max_path_bytes`, and
+/// appending to it produced an unfixable `ENAMETOOLONG` for every such
+/// track.
+const PARTIAL_PREFIX: &str = ".tuxpart-";
+
+/// The staging name for this run.
+///
+/// Unique per run, so the cleanup sweep can tell a leftover from an
+/// earlier run apart from the file this run is writing right now — an
+/// orphaned sweep (its deadline elapsed, but a blocking task cannot be
+/// cancelled) would otherwise delete a transfer in flight.
+fn run_partial_name() -> String {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{PARTIAL_PREFIX}{nonce:x}")
+}
+
 /// A shared handle to the device, so blocking work can be moved onto
 /// the blocking pool without borrowing.
 pub type SharedTransport = Arc<dyn DeviceTransport>;
@@ -158,9 +181,18 @@ pub async fn resolve_selection(
     let mut out = Vec::new();
     for entry in selection {
         let rows = match entry {
-            SelectionEntry::Playlist { id } => db_playlists::tracks_for_regular(engine, *id)
-                .await
-                .map_err(db_err)?,
+            SelectionEntry::Playlist { id } => {
+                match db_playlists::tracks_for_regular(engine, *id).await {
+                    Ok(rows) => rows,
+                    // The playlist was deleted while still selected.
+                    // Nothing prunes `devices.selection`, and failing
+                    // hard here would lock the device out of both sync
+                    // and preview with no way to clear the entry — the
+                    // Smart arm below already skips for the same reason.
+                    Err(db_playlists::PlaylistsError::NotFound(_)) => continue,
+                    Err(e) => return Err(db_err(e)),
+                }
+            }
             SelectionEntry::Smart { id } => {
                 let Some(raw) = db_playlists::get_smart_rule(engine, *id)
                     .await
@@ -296,7 +328,17 @@ fn dedupe_path(path: DevicePath, taken: &mut HashSet<String>) -> DevicePath {
             return candidate;
         }
     }
-    path
+    // Exhausted the suffixes. Returning `path` would hand back a name
+    // already claimed this run, so two tracks would race for it and one
+    // would silently overwrite the other; fall back to a timestamp, as
+    // `fs::path::resolve_collision` does.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let candidate = parent.join(&format!("{stem} ({ts:x}){ext}"));
+    taken.insert(candidate.as_str().to_string());
+    candidate
 }
 
 /// Run one full sync.
@@ -330,9 +372,13 @@ pub async fn run(
         None
     };
 
+    // One staging name for the whole run: the cleanup sweep below
+    // uses it to leave this run's in-flight transfer alone.
+    let partial_name = run_partial_name();
+
     report(obs, device.id, DevicePhase::Planning, 0, 1, "planning");
     let (plan, skips) = build_plan(engine, device, transport).await?;
-    clean_partials(transport, &plan).await;
+    clean_partials(transport, &plan, &partial_name).await;
     done.skipped = skips.len() as u64;
     for skip in &skips {
         warn(
@@ -352,7 +398,17 @@ pub async fn run(
         }
     }
 
-    let uploaded = upload_phase(engine, transport, obs, device, &plan, cancel, &mut done).await?;
+    let uploaded = upload_phase(
+        engine,
+        transport,
+        obs,
+        device,
+        &plan,
+        cancel,
+        &mut done,
+        &partial_name,
+    )
+    .await?;
 
     done.playlists_written =
         playlist_phase(engine, transport, obs, device, &uploaded, cancel).await?;
@@ -362,7 +418,11 @@ pub async fn run(
     // A cancelled run reached only part of the selection. Stamping
     // last_sync_at would make it indistinguishable from a finished one
     // and let the next run treat the remainder as already handled.
+    //
+    // It is still a success, not a failure: everything transferred is
+    // intact and recorded, and the counts describe what really landed.
     if cancel.load(Ordering::Relaxed) {
+        done.cancelled = true;
         report(
             obs,
             device.id,
@@ -371,7 +431,7 @@ pub async fn run(
             1,
             "cancelled".to_string(),
         );
-        return Err(EngineError::Cancelled);
+        return Ok(done);
     }
 
     report(obs, device.id, DevicePhase::Finalizing, 1, 1, "done");
@@ -384,6 +444,7 @@ pub async fn run(
 /// Upload every add and replace, recording each in the manifest only
 /// after it lands. Returns `track_id -> device_path` for everything
 /// now on the device, which the playlist phase needs.
+#[allow(clippy::too_many_arguments)]
 async fn upload_phase(
     engine: &SqliteRawEngine,
     transport: &SharedTransport,
@@ -392,6 +453,7 @@ async fn upload_phase(
     plan: &SyncPlan,
     cancel: &Arc<AtomicBool>,
     done: &mut DeviceComplete,
+    partial_name: &str,
 ) -> Result<HashMap<i64, String>, EngineError> {
     done.unchanged = plan.unchanged as u64;
 
@@ -433,7 +495,7 @@ async fn upload_phase(
             want.device_path.clone(),
         );
 
-        match upload_one_watched(transport, want, cancel).await {
+        match upload_one_watched(transport, want, cancel, partial_name).await {
             Ok(bytes) => {
                 device_objects::upsert(
                     engine,
@@ -471,6 +533,40 @@ async fn upload_phase(
             }
             // The user asked to stop; not a failure, and not a skip.
             Err(TransportError::Cancelled) => break,
+            // The old copy is gone and the new one did not land. Drop
+            // the row so the manifest stops claiming a file that is no
+            // longer there, and so the next run re-adds it.
+            Err(e @ TransportError::Replaced(..)) => {
+                done.skipped += 1;
+                if let Some((row_id, _)) = plan
+                    .replaces
+                    .iter()
+                    .find(|(_, d)| d.device_path == want.device_path)
+                {
+                    device_objects::remove_by_id(engine, *row_id)
+                        .await
+                        .map_err(db_err)?;
+                }
+                present.remove(&want.track_id);
+                warn(
+                    obs,
+                    device.id,
+                    DeviceWarningKind::UploadFailed,
+                    format!("{}: {e}", want.device_path),
+                );
+            }
+            // The device is gone. Continuing would burn a full stall
+            // window per remaining track — hours on a large selection —
+            // and every one of them would fail identically.
+            Err(e @ (TransportError::Disconnected | TransportError::Timeout(_))) => {
+                warn(
+                    obs,
+                    device.id,
+                    DeviceWarningKind::UploadFailed,
+                    format!("{}: {e}", want.device_path),
+                );
+                return Err(EngineError::Transport(e));
+            }
             Err(e) => {
                 done.skipped += 1;
                 warn(
@@ -505,6 +601,7 @@ async fn upload_one_watched(
     transport: &SharedTransport,
     want: &Desired,
     cancel: &Arc<AtomicBool>,
+    partial_name: &str,
 ) -> Result<u64, TransportError> {
     let progress = Arc::new(AtomicU64::new(0));
     let abort = Arc::new(AtomicBool::new(false));
@@ -515,8 +612,16 @@ async fn upload_one_watched(
         let cancel = Arc::clone(cancel);
         let abort = Arc::clone(&abort);
         let progress = Arc::clone(&progress);
+        let partial = partial_name.to_string();
         tokio::task::spawn_blocking(move || {
-            upload_one(transport.as_ref(), &want, &cancel, &abort, &progress)
+            upload_one(
+                transport.as_ref(),
+                &want,
+                &cancel,
+                &abort,
+                &progress,
+                &partial,
+            )
         })
     };
 
@@ -538,7 +643,7 @@ async fn upload_one_watched(
     }
 }
 
-/// Stream one track onto the device, writing to a `.tuxpart` name and
+/// Stream one track onto the device, writing to a staging name and
 /// renaming into place where the transport supports it, so a partial
 /// transfer never occupies the real path.
 fn upload_one(
@@ -547,12 +652,15 @@ fn upload_one(
     cancel: &AtomicBool,
     abort: &AtomicBool,
     progress: &AtomicU64,
+    partial_name: &str,
 ) -> Result<u64, TransportError> {
+    let final_path = DevicePath::new(&want.device_path);
     let use_temp = transport.capabilities().rename;
-    let write_path = if use_temp {
-        DevicePath::new(&format!("{}.tuxpart", want.device_path))
-    } else {
-        DevicePath::new(&want.device_path)
+    let write_path = match (use_temp, final_path.parent()) {
+        (true, Some(parent)) => parent.join(partial_name),
+        // Without rename — or at the root, which cannot happen for a
+        // rendered track — write straight to the destination.
+        _ => final_path.clone(),
     };
 
     let result = copy_one(
@@ -566,8 +674,8 @@ fn upload_one(
     );
     if result.is_err() && use_temp {
         // A real transport materialises the destination on open, so a
-        // failure anywhere above leaves a partial `.tuxpart` behind
-        // that no manifest row would ever account for.
+        // failure anywhere above leaves a partial behind that no
+        // manifest row would ever account for.
         let _ = transport.delete(&write_path);
     }
     result
@@ -620,26 +728,50 @@ fn copy_one(
     }
 
     if use_temp {
-        // Clear the old object first — not every device's rename
-        // replaces an existing name. Only ever an object we recorded:
-        // clobbering a file we did not write would break the
-        // subsystem's core promise (see the module docs).
-        if want.replaces_existing {
-            match transport.delete(&final_path) {
-                Ok(()) | Err(TransportError::NotFound(_)) => {}
-                // Could not clear the old object. Bail rather than
-                // rename onto it: the destination keeps the previous
-                // good copy, `upload_one` drops the partial, and the
-                // next run retries the whole track.
-                Err(e) => return Err(e),
+        if !want.replaces_existing {
+            match transport.stat(&final_path)? {
+                // Same size as what we were about to write. Almost
+                // certainly our own file from before the manifest was
+                // lost (a forgotten and re-added device, or a crash
+                // between the rename and the manifest insert), so adopt
+                // it instead of refusing forever with no repair path.
+                Some(stat) if stat.size_bytes == want.size_bytes.max(0) as u64 => {
+                    let _ = transport.delete(write_path);
+                    return Ok(0);
+                }
+                // A different file with our name: someone else's.
+                // Refusing is the whole point of the subsystem's
+                // non-destruction promise.
+                Some(_) => return Err(TransportError::Occupied(want.device_path.clone())),
+                None => {}
             }
-        } else if transport.stat(&final_path)?.is_some() {
-            // No manifest row claims this path, so the file there is
-            // someone else's. Refusing is the whole point of the
-            // subsystem's non-destruction promise.
-            return Err(TransportError::Occupied(want.device_path.clone()));
         }
-        transport.rename(write_path, &final_path)?;
+
+        // Try the rename first. Where it replaces atomically the old
+        // object is never absent, which matters because a failure
+        // *after* an unconditional delete would leave the destination
+        // empty while the manifest row still claimed the old file was
+        // there — and the playlist written minutes later would point
+        // at nothing.
+        match transport.rename(write_path, &final_path) {
+            Ok(()) => {}
+            Err(first) => {
+                // Not every device's rename replaces an existing name.
+                // Clear and retry, but only a path we recorded writing.
+                if !want.replaces_existing {
+                    return Err(first);
+                }
+                match transport.delete(&final_path) {
+                    Ok(()) | Err(TransportError::NotFound(_)) => {}
+                    // Could not clear it: the destination keeps the
+                    // previous good copy and the next run retries.
+                    Err(e) => return Err(e),
+                }
+                transport.rename(write_path, &final_path).map_err(|e| {
+                    TransportError::Replaced(want.device_path.clone(), e.to_string())
+                })?;
+            }
+        }
     }
     Ok(written)
 }
@@ -677,14 +809,45 @@ async fn playlist_phase(
     let total = wanted.len() as u64;
     if total > 0 {
         let d = dir.clone();
-        op(transport, "creating the playlist directory", move |t| {
+        if let Err(e) = op(transport, "creating the playlist directory", move |t| {
             t.mkdir_all(&d).map(|_| ())
         })
-        .await?;
+        .await
+        {
+            // Every track already uploaded and its manifest rows are
+            // committed. Failing the whole run here would throw those
+            // counts away and skip `mark_synced`, so this is a warning
+            // like the per-playlist write below.
+            warn(
+                obs,
+                device.id,
+                DeviceWarningKind::UploadFailed,
+                format!("{}: {e}", dir.as_str()),
+            );
+            return Ok(0);
+        }
     }
 
+    // Paths the mirror sweep below must not touch. A playlist that is
+    // still selected belongs here even when this run failed to write
+    // it, or one transient error would delete the good copy already on
+    // the device.
     let mut written_paths = BTreeSet::new();
     let mut count = 0u64;
+
+    // One read, used both for the overwrite check below and by the
+    // mirror sweep at the end.
+    let playlist_rows: Vec<_> = device_objects::list_for_device(engine, device.id)
+        .await
+        .map_err(db_err)?
+        .into_iter()
+        .filter(|r| r.kind == KIND_PLAYLIST)
+        .collect();
+    // Playlist paths the manifest already claims — ours to overwrite.
+    let known_paths: HashSet<&str> = playlist_rows
+        .iter()
+        .map(|r| r.device_path.as_str())
+        .collect();
 
     for (i, (playlist_id, name, ancestors)) in wanted.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
@@ -714,6 +877,43 @@ async fn playlist_phase(
 
         let file = dir.join(&m3u::playlist_file_name(name, ancestors, &caps));
         let body = m3u::render_m3u8(&entries, &dir);
+
+        // Claim the path before attempting the write, so a failure
+        // below cannot let the mirror sweep delete the copy already on
+        // the device for a playlist that is still selected.
+        written_paths.insert(file.as_str().to_string());
+
+        // `/Music/Playlists/<name>.m3u8` is the conventional location,
+        // so the user may well have their own file there. `open_write`
+        // truncates, so this must be checked first — the track path
+        // makes the same check for the same reason.
+        if !known_paths.contains(file.as_str()) {
+            let f = file.clone();
+            match op(transport, "checking a playlist path", move |t| t.stat(&f)).await {
+                Ok(Some(_)) => {
+                    warn(
+                        obs,
+                        device.id,
+                        DeviceWarningKind::UploadFailed,
+                        format!(
+                            "{}: a file TuxTunes did not write is already there",
+                            file.as_str()
+                        ),
+                    );
+                    continue;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warn(
+                        obs,
+                        device.id,
+                        DeviceWarningKind::UploadFailed,
+                        format!("{}: {e}", file.as_str()),
+                    );
+                    continue;
+                }
+            }
+        }
 
         {
             let f = file.clone();
@@ -772,17 +972,13 @@ async fn playlist_phase(
         .await
         .map_err(db_err)?;
 
-        written_paths.insert(file.as_str().to_string());
         count += 1;
     }
 
     // Playlists we wrote on an earlier run but no longer want.
     if device.mirror_deletes && !device.key_is_weak && !cancel.load(Ordering::Relaxed) {
-        for row in device_objects::list_for_device(engine, device.id)
-            .await
-            .map_err(db_err)?
-        {
-            if row.kind != KIND_PLAYLIST || written_paths.contains(&row.device_path) {
+        for row in &playlist_rows {
+            if written_paths.contains(&row.device_path) {
                 continue;
             }
             let path = DevicePath::new(&row.device_path);
@@ -840,6 +1036,47 @@ async fn prune_phase(
             row.device_path.clone(),
         );
         let path = DevicePath::new(&row.device_path);
+
+        // Confirm the file still looks like the one we wrote before
+        // removing it. A mount path is a reusable identity — swap the
+        // SD card in a reader and the manifest still points at paths
+        // that now hold someone else's music. This size check is the
+        // guard that makes mirroring safe on such a device.
+        let probe = path.clone();
+        match op(transport, "checking a track before deleting", move |t| {
+            t.stat(&probe)
+        })
+        .await
+        {
+            Ok(Some(stat)) if stat.size_bytes != row.size_bytes.max(0) as u64 => {
+                warn(
+                    obs,
+                    device.id,
+                    DeviceWarningKind::DeleteFailed,
+                    format!(
+                        "{}: left alone — the file there is not the one TuxTunes wrote",
+                        row.device_path
+                    ),
+                );
+                // Stop tracking it: whatever is there is not ours.
+                device_objects::remove_by_id(engine, row.id)
+                    .await
+                    .map_err(db_err)?;
+                continue;
+            }
+            // Already gone, or matches what we recorded.
+            Ok(_) => {}
+            Err(e) => {
+                warn(
+                    obs,
+                    device.id,
+                    DeviceWarningKind::DeleteFailed,
+                    format!("{}: {e}", row.device_path),
+                );
+                continue;
+            }
+        }
+
         let target = path.clone();
         match op(transport, "deleting a track", move |t| t.delete(&target)).await {
             Ok(()) | Err(TransportError::NotFound(_)) => {}
@@ -870,6 +1107,18 @@ async fn prune_phase(
     Ok(deleted)
 }
 
+/// Whether `path` lies strictly inside `root`, by whole segments.
+///
+/// String prefixing alone would treat `/Music2` as inside `/Music`.
+fn is_under(path: &DevicePath, root: &DevicePath) -> bool {
+    if root.as_str() == "/" {
+        return path.as_str() != "/";
+    }
+    path.as_str()
+        .strip_prefix(root.as_str())
+        .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Walk each touched directory upwards, removing those we emptied,
 /// stopping at the device root so we never delete it.
 fn remove_empty_dirs(
@@ -879,7 +1128,11 @@ fn remove_empty_dirs(
 ) {
     for start in parents {
         let mut cursor = DevicePath::new(start);
-        while cursor != *root && cursor.as_str() != "/" {
+        // Containment, not equality: after the user edits `root_path`,
+        // old manifest paths sit outside the current root, and an
+        // equality test would walk straight past it and delete
+        // directories above the configured root.
+        while cursor != *root && cursor.as_str() != "/" && is_under(&cursor, root) {
             match transport.list(&cursor) {
                 Ok(children) if children.is_empty() => {
                     if transport.delete(&cursor).is_err() {
@@ -902,8 +1155,9 @@ fn remove_empty_dirs(
 /// Only directories this run will write into are visited: walking the
 /// whole device on every sync is slow over MTP, and a `.tuxpart`
 /// outside the tree we are about to touch is not ours to delete.
-async fn clean_partials(transport: &SharedTransport, plan: &SyncPlan) {
+async fn clean_partials(transport: &SharedTransport, plan: &SyncPlan, keep: &str) {
     let dirs = partial_scan_dirs(plan);
+    let keep = keep.to_string();
     if dirs.is_empty() {
         return;
     }
@@ -913,7 +1167,13 @@ async fn clean_partials(transport: &SharedTransport, plan: &SyncPlan) {
                 continue;
             };
             for child in children {
-                if !child.is_dir && child.path.as_str().ends_with(".tuxpart") {
+                let Some(name) = child.path.file_name() else {
+                    continue;
+                };
+                // Never this run's staging file: on a timeout this
+                // sweep is orphaned rather than cancelled, and could
+                // otherwise delete a transfer already in flight.
+                if !child.is_dir && name.starts_with(PARTIAL_PREFIX) && name != keep {
                     let _ = t.delete(&child.path);
                 }
             }

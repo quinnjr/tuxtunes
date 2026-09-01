@@ -53,3 +53,7 @@ CREATE INDEX "idx_device_objects_device_id_track_id"
     ON "device_objects" ("device_id", "track_id");
 CREATE INDEX "idx_device_objects_device_id_kind"
     ON "device_objects" ("device_id", "kind");
+-- `detach_track` filters on track_id alone when a track is deleted;
+-- the composite index above has device_id leftmost and cannot serve it.
+CREATE INDEX "idx_device_objects_track_id"
+    ON "device_objects" ("track_id");

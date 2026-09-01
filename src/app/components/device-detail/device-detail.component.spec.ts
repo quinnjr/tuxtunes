@@ -160,6 +160,24 @@ describe('DeviceDetailComponent', () => {
     });
   });
 
+  it('two quick ticks both survive, rather than the first being lost', async () => {
+    // `device().selection` only updates after the round-trip, so
+    // without a local pending copy the second click would rebuild from
+    // the stale snapshot and drop the first.
+    const { fixture, stub } = await setup();
+    byTestId<HTMLInputElement>(fixture, 'select-5')?.click();
+    byTestId<HTMLInputElement>(fixture, 'select-6')?.click();
+    await fixture.whenStable();
+
+    expect(stub.invoke).toHaveBeenCalledWith('update_device_selection', {
+      deviceId: 1,
+      selection: [
+        { kind: 'playlist', id: 5 },
+        { kind: 'smart', id: 6 },
+      ],
+    });
+  });
+
   it('Sync is disabled until something is selected', async () => {
     const { fixture } = await setup();
     expect(byTestId<HTMLButtonElement>(fixture, 'run-sync')?.disabled).toBe(true);
@@ -184,7 +202,7 @@ describe('DeviceDetailComponent', () => {
     const summary = byTestId(fixture, 'plan-summary')?.textContent ?? '';
     expect(summary).toContain('3 to copy bit-exact');
     expect(summary).toContain('2 to remove');
-    expect(summary).toContain('1.5 MB to transfer');
+    expect(summary).toContain('1.43 MiB to transfer');
   });
 
   it('Cancel replaces Sync only while a run is in flight', async () => {
@@ -241,12 +259,13 @@ describe('DeviceDetailComponent', () => {
       playlists_written: 1,
       skipped: 0,
       bytes_written: 2_000_000,
+      cancelled: false,
     });
     fixture.detectChanges();
     const summary = byTestId(fixture, 'last-complete')?.textContent ?? '';
     expect(summary).toContain('3 added');
     expect(summary).toContain('1 playlist written');
-    expect(summary).toContain('2.0 MB transferred');
+    expect(summary).toContain('1.91 MiB transferred');
   });
 
   it('toggling mirror deletes persists the whole settings row', async () => {
@@ -264,6 +283,67 @@ describe('DeviceDetailComponent', () => {
         write_playlist_objects: true,
       },
     });
+  });
+
+  it('ignores run state belonging to another device', async () => {
+    const { fixture, stub } = await setup();
+    // Device 2's run, while device 1 is on screen.
+    stub.emit('device:progress', {
+      device_id: 2,
+      phase: 'uploading',
+      current: 1,
+      total: 4,
+      message: 'other.flac',
+    });
+    stub.emit('device:warning', {
+      device_id: 2,
+      kind: 'upload_failed',
+      detail: 'not ours',
+    });
+    stub.emit('device:complete', {
+      device_id: 2,
+      added: 9,
+      replaced: 0,
+      unchanged: 0,
+      deleted: 0,
+      playlists_written: 0,
+      skipped: 0,
+      bytes_written: 1,
+      cancelled: false,
+    });
+    fixture.detectChanges();
+
+    expect(byTestId(fixture, 'progress')).toBeNull();
+    expect(byTestId(fixture, 'warnings')).toBeNull();
+    expect(byTestId(fixture, 'last-complete')).toBeNull();
+    expect(byTestId(fixture, 'cancel-sync')).toBeNull();
+  });
+
+  it('shows a failure message when the sync fails', async () => {
+    const { fixture, stub } = await setup();
+    stub.emit('device:failed', { device_id: 1, error: 'device disconnected' });
+    fixture.detectChanges();
+    expect(byTestId(fixture, 'sync-error')?.textContent).toContain('device disconnected');
+  });
+
+  it('a stopped run is reported as stopped, not as a completed sync', async () => {
+    const { fixture, stub } = await setup();
+    stub.emit('device:complete', {
+      device_id: 1,
+      added: 4,
+      replaced: 0,
+      unchanged: 0,
+      deleted: 0,
+      playlists_written: 0,
+      skipped: 0,
+      bytes_written: 40,
+      cancelled: true,
+    });
+    fixture.detectChanges();
+    const summary = byTestId(fixture, 'last-complete')?.textContent ?? '';
+    expect(summary).toContain('Stopped');
+    expect(summary).toContain('4 added');
+    expect(byTestId(fixture, 'sync-error')).toBeNull();
   });
 
   it('explains that removal stays off for a device with a weak key', async () => {

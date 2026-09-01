@@ -20,6 +20,11 @@ pub struct FsTransport {
 
 impl FsTransport {
     pub fn new(root: PathBuf) -> Self {
+        // Resolve the root once so containment is judged against real
+        // paths. A device root is very often reached through a symlink
+        // (/run/media/... , ~/Music), and comparing un-resolved paths
+        // would make every check below meaningless.
+        let root = std::fs::canonicalize(&root).unwrap_or(root);
         Self { root }
     }
 
@@ -27,10 +32,11 @@ impl FsTransport {
     /// escape `root`. `DevicePath` normalisation removes empty
     /// segments but preserves `..`, so this is the check that matters.
     fn resolve(&self, path: &DevicePath) -> Result<PathBuf, TransportError> {
+        let denied = || TransportError::PermissionDenied(path.as_str().to_string());
         let mut out = self.root.clone();
         for segment in path.as_str().split('/').filter(|s| !s.is_empty()) {
             if segment == ".." || segment == "." {
-                return Err(TransportError::PermissionDenied(path.as_str().to_string()));
+                return Err(denied());
             }
             // `DevicePath` normalises on '/' only. A segment carrying a
             // backslash, a drive prefix, or a UNC root is absolute to
@@ -41,16 +47,43 @@ impl FsTransport {
                 || Path::new(segment).is_absolute()
                 || Path::new(segment).components().count() != 1
             {
-                return Err(TransportError::PermissionDenied(path.as_str().to_string()));
+                return Err(denied());
             }
             out.push(segment);
         }
-        // Belt and braces: whatever the segments claimed, the result
-        // must still live under the root.
+
+        // The segment checks are textual, so they cannot see a symlink.
+        // Resolve the deepest part of the path that exists and confirm
+        // *that* is still inside the root: a symlinked album directory
+        // would otherwise let writes — and, worse, prune's deletes —
+        // land anywhere on the filesystem.
+        let anchor = existing_ancestor(&out);
+        if let Ok(real) = std::fs::canonicalize(&anchor) {
+            if !real.starts_with(&self.root) {
+                return Err(denied());
+            }
+        }
         if !out.starts_with(&self.root) {
-            return Err(TransportError::PermissionDenied(path.as_str().to_string()));
+            return Err(denied());
         }
         Ok(out)
+    }
+}
+
+/// The nearest ancestor of `path` that exists, for canonicalisation.
+///
+/// `canonicalize` fails on a path that is not there yet, which is the
+/// normal case for a file about to be written.
+fn existing_ancestor(path: &Path) -> PathBuf {
+    let mut cursor = path;
+    loop {
+        if cursor.exists() {
+            return cursor.to_path_buf();
+        }
+        match cursor.parent() {
+            Some(parent) => cursor = parent,
+            None => return cursor.to_path_buf(),
+        }
     }
 }
 
@@ -254,6 +287,44 @@ mod tests {
                 "{hostile:?} should be refused, got {err:?}"
             );
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlink_cannot_lead_writes_or_deletes_out_of_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("device");
+        let outside = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        // An escape hatch inside the device root.
+        std::os::unix::fs::symlink(&outside, root.join("Music")).unwrap();
+
+        let t = FsTransport::new(root);
+        let err = t
+            .stat(&DevicePath::new("/Music/x.flac"))
+            .expect_err("a symlinked directory must not lead outside the root");
+        assert!(
+            matches!(err, TransportError::PermissionDenied(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlinked_root_is_still_usable() {
+        // The common case: the device is reached *through* a symlink.
+        // Canonicalising the root at construction is what keeps this
+        // working while the check above still refuses escapes.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let t = FsTransport::new(link);
+        t.mkdir_all(&DevicePath::new("/Music")).unwrap();
+        assert!(real.join("Music").is_dir());
     }
 
     #[test]
