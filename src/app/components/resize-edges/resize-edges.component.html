@@ -1,0 +1,10 @@
+@if (active) {
+  @for (edge of edges; track edge.dir) {
+    <div
+      class="fixed z-[100] {{ edge.class }}"
+      role="presentation"
+      [attr.data-resize]="edge.dir"
+      (mousedown)="onMouseDown($event, edge.dir)"
+    ></div>
+  }
+}

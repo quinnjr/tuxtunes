@@ -1,0 +1,47 @@
+@if (win.customControls) {
+  <div
+    class="mac-traffic-lights flex shrink-0 items-center gap-2 pl-1 pr-2"
+    role="group"
+    aria-label="Window controls"
+  >
+    <button
+      type="button"
+      class="mac-traffic-light mac-traffic-light-close"
+      aria-label="Close"
+      title="Close"
+      (click)="close()"
+    >
+      <svg viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M3.5 3.5l5 5M8.5 3.5l-5 5" />
+      </svg>
+    </button>
+    <button
+      type="button"
+      class="mac-traffic-light mac-traffic-light-minimize"
+      aria-label="Minimize"
+      title="Minimize"
+      (click)="minimize()"
+    >
+      <svg viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M3 6h6" />
+      </svg>
+    </button>
+    <button
+      type="button"
+      class="mac-traffic-light mac-traffic-light-zoom"
+      [attr.aria-label]="win.maximized() ? 'Restore' : 'Zoom'"
+      [title]="win.fullscreen() ? 'Exit full screen' : 'Zoom (Alt-click: full screen)'"
+      (click)="zoom($event)"
+    >
+      @if (win.maximized() || win.fullscreen()) {
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3 6.5V9h2.5M9 5.5V3H6.5" />
+        </svg>
+      } @else {
+        <svg viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3 5V3h2M9 7v2H7" />
+        </svg>
+      }
+    </button>
+  </div>
+}

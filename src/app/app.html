@@ -1,4 +1,4 @@
-<div class="flex h-screen flex-col">
+<div class="flex h-screen flex-col" [class.frameless]="frameless()">
   <app-menu-bar />
   <app-transport-bar />
   <div class="flex flex-1 overflow-hidden">
@@ -19,3 +19,4 @@
 <app-confirm-dialog />
 <app-track-info />
 <app-context-menu />
+<app-resize-edges />

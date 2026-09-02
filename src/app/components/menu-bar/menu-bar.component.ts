@@ -9,18 +9,28 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
+import { WindowService } from '../../services/window.service';
+import { WindowControlsComponent } from '../window-controls/window-controls.component';
 
 type MenuId = 'file' | 'settings';
 
+/**
+ * The menu bar doubles as the window's title bar: the window is
+ * frameless, so its empty area is the drag region (Tauri's injected
+ * `data-tauri-drag-region` handler also maps double-click to
+ * maximize). On macOS the native traffic lights overlay the left edge,
+ * so the bar pads past them instead of drawing its own.
+ */
 @Component({
   selector: 'app-menu-bar',
-  imports: [FaIconComponent],
+  imports: [FaIconComponent, WindowControlsComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './menu-bar.component.html',
 })
 export class MenuBarComponent {
   private readonly library = inject(LibraryService);
   private readonly ui = inject(UiService);
+  protected readonly win = inject(WindowService);
 
   protected readonly faPlus = faPlus;
   protected readonly faFolderPlus = faFolderPlus;

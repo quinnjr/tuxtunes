@@ -1,4 +1,11 @@
-import { Component, HostListener, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  HostListener,
+  OnInit,
+  computed,
+  inject,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { ConfirmDialogComponent } from './components/confirm-dialog/confirm-dialog.component';
 import { ContextMenuComponent } from './components/context-menu/context-menu.component';
 import { DeviceDetailComponent } from './components/device-detail/device-detail.component';
@@ -8,6 +15,7 @@ import { MenuBarComponent } from './components/menu-bar/menu-bar.component';
 import { NamePromptComponent } from './components/name-prompt/name-prompt.component';
 import { NowPlayingPanelComponent } from './components/now-playing-panel/now-playing-panel.component';
 import { PreferencesPanelComponent } from './components/preferences-panel/preferences-panel.component';
+import { ResizeEdgesComponent } from './components/resize-edges/resize-edges.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
 import { SmartPlaylistEditorComponent } from './components/smart-playlist-editor/smart-playlist-editor.component';
 import { StatusBarComponent } from './components/status-bar/status-bar.component';
@@ -15,6 +23,7 @@ import { TrackInfoComponent } from './components/track-info/track-info.component
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
 import { LibraryService } from './services/library.service';
 import { UiService } from './services/ui.service';
+import { WindowService } from './services/window.service';
 
 @Component({
   selector: 'app-root',
@@ -28,6 +37,7 @@ import { UiService } from './services/ui.service';
     NamePromptComponent,
     NowPlayingPanelComponent,
     PreferencesPanelComponent,
+    ResizeEdgesComponent,
     SidebarComponent,
     SmartPlaylistEditorComponent,
     StatusBarComponent,
@@ -41,6 +51,18 @@ import { UiService } from './services/ui.service';
 export class App implements OnInit {
   private readonly library = inject(LibraryService);
   protected readonly ui = inject(UiService);
+  private readonly win = inject(WindowService);
+
+  /**
+   * A frameless Linux window has no compositor-drawn border, so the
+   * shell draws a hairline to keep its edge visible against a same-
+   * colored desktop. Maximized and fullscreen windows have no edge.
+   */
+  protected readonly frameless = computed(this.#computeFrameless.bind(this));
+
+  #computeFrameless(): boolean {
+    return this.win.customResize && !this.win.maximized() && !this.win.fullscreen();
+  }
 
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshStats());
