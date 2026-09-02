@@ -1,0 +1,75 @@
+<div class="h-full overflow-y-auto bg-bg-primary p-6">
+  @if (albums().length === 0) {
+    <div class="flex h-full items-center justify-center text-text-muted">
+      This playlist is empty
+    </div>
+  } @else {
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] items-start gap-6">
+      @for (a of albums(); track trackByAlbum($index, a)) {
+        <div
+          class="flex flex-col gap-2"
+          [class.col-span-full]="isExpanded(a)"
+          [attr.data-album]="a.key"
+          (appInView)="onCardVisible(a)"
+          (contextmenu)="onAlbumContextMenu(a, $event)"
+        >
+          <button
+            type="button"
+            (click)="toggle(a)"
+            [attr.aria-expanded]="isExpanded(a)"
+            class="group flex w-[170px] flex-col gap-2 text-left"
+          >
+            <div class="mac-card aspect-square bg-bg-tertiary">
+              @if (coverUrl(a.artworkPath); as src) {
+                <img [src]="src" alt="" class="h-full w-full object-cover" />
+              } @else {
+                <div class="flex h-full w-full items-center justify-center text-text-muted">
+                  <span class="text-caption2 uppercase tracking-wider">No art</span>
+                </div>
+              }
+            </div>
+            <div class="flex flex-col">
+              <span class="truncate text-body font-medium text-text-primary">{{ a.album }}</span>
+              <span class="truncate text-caption text-text-secondary">
+                {{ a.artist }}
+                @if (a.year) {
+                  <span class="text-text-muted"> · {{ a.year }}</span>
+                }
+              </span>
+              <span class="tnum text-caption text-text-muted">
+                {{ a.tracks.length }} {{ a.tracks.length === 1 ? 'song' : 'songs' }} ·
+                {{ formatDuration(a.totalDurationMs) }}
+              </span>
+            </div>
+          </button>
+          @if (isExpanded(a)) {
+            <ol
+              class="divide-y divide-border rounded-md bg-bg-surface text-body"
+              [attr.data-tracks-for]="a.key"
+            >
+              @for (t of a.tracks; track trackByTrack($index, t)) {
+                <li
+                  (dblclick)="play(t)"
+                  (contextmenu)="onTrackContextMenu(t, $event); $event.stopPropagation()"
+                  class="flex cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-bg-elevated"
+                  [class.text-text-muted]="t.missing"
+                >
+                  <span class="tnum w-6 shrink-0 text-right text-text-muted">
+                    {{ t.trackNumber ?? $index + 1 }}
+                  </span>
+                  <span class="min-w-0 flex-1 truncate">
+                    {{ t.title }}
+                    @if (t.artist && t.artist !== a.artist) {
+                      <span class="text-text-muted"> — {{ t.artist }}</span>
+                    }
+                  </span>
+                  <span class="tnum text-text-muted">{{ formatDuration(t.durationMs) }}</span>
+                </li>
+              }
+            </ol>
+          }
+        </div>
+      }
+    </div>
+  }
+</div>

@@ -3,6 +3,14 @@ import { toErrorMessage } from '../utils/errors';
 
 export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
 
+/**
+ * How an open playlist is presented: `albums` is the per-album picker
+ * (artwork cards that drop down into their tracks), `songs` the flat
+ * list in playlist order. The library's tracks/albums/artists split
+ * only applies to "all songs".
+ */
+export type PlaylistView = 'albums' | 'songs';
+
 export interface NamePromptRequest {
   title: string;
   initial: string;
@@ -25,6 +33,9 @@ export class UiService {
 
   /** Top-level view selection. Drives main-content's active component. */
   readonly libraryView = signal<LibraryView>('tracks');
+
+  /** Presentation of the active playlist; sticky across playlists. */
+  readonly playlistView = signal<PlaylistView>('albums');
 
   /** Whether the column browser strip is shown above the active view. */
   readonly columnBrowserOpen = signal(false);

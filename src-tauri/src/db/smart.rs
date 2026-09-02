@@ -194,6 +194,12 @@ fn resolve_field(name: &str) -> Option<FieldMeta> {
 
 // ----- Compiler -----------------------------------------------------------
 
+/// Order for a rule with no `selected_by`: album artist, album, disc,
+/// track, then title — a stable, human-readable 1..N listing.
+pub const DEFAULT_ORDER: &str = "COALESCE(album_artist, artist) COLLATE NOCASE ASC, \
+     album COLLATE NOCASE ASC, disc_number ASC NULLS LAST, \
+     track_number ASC NULLS LAST, title COLLATE NOCASE ASC, id ASC";
+
 /// Compiled SQL fragment + bound parameters.
 #[derive(Debug, Default)]
 pub struct CompiledQuery {
@@ -209,11 +215,15 @@ pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartEr
     // overriding `root.match_all` for this one call only.
     let where_sql = compile_group(&rule.root, &mut params, Some(rule.match_all))?;
 
+    // Without an explicit selection order, list the way iTunes shows an
+    // unlimited smart playlist: album by album, tracks 1..N. The old
+    // `date_added DESC` fallback ran every album backwards (N..1),
+    // since tracks are imported in disc/track order.
     let order = rule
         .limit
         .as_ref()
         .and_then(|l| l.selected_by.map(order_for))
-        .unwrap_or_else(|| "date_added DESC".to_string());
+        .unwrap_or_else(|| DEFAULT_ORDER.to_string());
 
     let limit_clause = match &rule.limit {
         Some(Limit {

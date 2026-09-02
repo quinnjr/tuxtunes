@@ -7,6 +7,7 @@ import { MainContentComponent } from './main-content.component';
 
 interface MainInternals {
   setMode(mode: string): void;
+  setPlaylistMode(mode: 'albums' | 'songs'): void;
   toggleBrowser(): void;
   onSearchInput(event: Event): void;
   clearSearch(): void;
@@ -83,5 +84,62 @@ describe('MainContentComponent', () => {
     cmp.clearSearch();
     expect(library.search()).toBe('');
     expect(refresh).toHaveBeenCalled();
+  });
+
+  describe('with a playlist open', () => {
+    function openPlaylist(library: LibraryService) {
+      library.playlists.set([
+        {
+          id: 3,
+          name: 'Mix',
+          kind: 'regular',
+          parentId: null,
+          sortOrder: 0,
+          trackCount: 2,
+          synced: false,
+        },
+      ]);
+      library.activePlaylistId.set(3);
+    }
+
+    it('swaps the library toggle for the albums/songs toggle', () => {
+      const { fixture, library } = setup();
+      const el = fixture.nativeElement as HTMLElement;
+      expect(el.querySelector('[data-testid="library-modes"]')).not.toBeNull();
+      expect(el.querySelector('[data-testid="playlist-modes"]')).toBeNull();
+      openPlaylist(library);
+      fixture.detectChanges();
+      expect(el.querySelector('[data-testid="library-modes"]')).toBeNull();
+      const labels = [...el.querySelectorAll('[data-testid="playlist-modes"] button')].map((b) =>
+        b.textContent?.trim(),
+      );
+      expect(labels).toEqual(['albums', 'songs']);
+    });
+
+    it('shows the album picker by default and the flat list on "songs"', () => {
+      const { fixture, library, cmp, ui } = setup();
+      openPlaylist(library);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      expect(el.querySelector('app-playlist-album-picker')).not.toBeNull();
+      expect(el.querySelector('app-track-list-view')).toBeNull();
+      cmp.setPlaylistMode('songs');
+      fixture.detectChanges();
+      expect(ui.playlistView()).toBe('songs');
+      expect(el.querySelector('app-playlist-album-picker')).toBeNull();
+      expect(el.querySelector('app-track-list-view')).not.toBeNull();
+    });
+
+    it('leaving the playlist via a library mode restores the library toggle', () => {
+      const { fixture, library, cmp } = setup();
+      openPlaylist(library);
+      fixture.detectChanges();
+      cmp.setMode('albums');
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      expect(library.activePlaylistId()).toBeNull();
+      expect(el.querySelector('[data-testid="library-modes"]')).not.toBeNull();
+      expect(el.querySelector('app-album-grid-view')).not.toBeNull();
+    });
   });
 });
