@@ -5,7 +5,7 @@
 
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
-use lofty::tag::Accessor;
+use lofty::tag::{Accessor, ItemKey};
 use prax_query::filter::FilterValue;
 use prax_sqlite::raw::SqliteRawEngine;
 use std::path::Path;
@@ -30,6 +30,11 @@ struct ProbeResult {
     title: Option<String>,
     artist: Option<String>,
     album: Option<String>,
+    album_artist: Option<String>,
+    genre: Option<String>,
+    year: Option<i64>,
+    track_number: Option<i64>,
+    disc_number: Option<i64>,
     duration_ms: i64,
     sample_rate: Option<i64>,
     bit_depth: Option<i64>,
@@ -53,10 +58,23 @@ fn probe_blocking(path: &Path) -> Result<ProbeResult, IngestError> {
     let props = tagged.properties();
     let primary_tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
+    // Empty strings become NULL so an album with a blank album-artist
+    // tag groups and sorts with its untagged siblings rather than
+    // forming its own "" artist.
+    let text = |s: &str| {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_string())
+    };
+
     Ok(ProbeResult {
-        title: primary_tag.and_then(|t| t.title().map(|s| s.to_string())),
-        artist: primary_tag.and_then(|t| t.artist().map(|s| s.to_string())),
-        album: primary_tag.and_then(|t| t.album().map(|s| s.to_string())),
+        title: primary_tag.and_then(|t| t.title().and_then(|s| text(&s))),
+        artist: primary_tag.and_then(|t| t.artist().and_then(|s| text(&s))),
+        album: primary_tag.and_then(|t| t.album().and_then(|s| text(&s))),
+        album_artist: primary_tag.and_then(|t| t.get_string(&ItemKey::AlbumArtist).and_then(text)),
+        genre: primary_tag.and_then(|t| t.genre().and_then(|s| text(&s))),
+        year: primary_tag.and_then(|t| t.year().map(|y| y as i64)),
+        track_number: primary_tag.and_then(|t| t.track().map(|n| n as i64)),
+        disc_number: primary_tag.and_then(|t| t.disk().map(|n| n as i64)),
         duration_ms: props.duration().as_millis() as i64,
         sample_rate: props.sample_rate().map(|r| r as i64),
         bit_depth: props.bit_depth().map(|b| b as i64),
@@ -79,31 +97,29 @@ pub async fn probe_and_add(engine: &SqliteRawEngine, path: &Path) -> Result<i64,
     });
     let title = title.ok_or_else(|| IngestError::NoFileName(path.display().to_string()))?;
 
-    let artist = probed.artist;
-    let album = probed.album;
-    let duration_ms = probed.duration_ms;
-    let sample_rate = probed.sample_rate;
-    let bit_depth = probed.bit_depth;
-    let channels = probed.channels;
-    let bit_rate = probed.bit_rate;
-    let size_bytes = probed.size_bytes;
+    let opt_str = |v: Option<String>| v.map(FilterValue::String).unwrap_or(FilterValue::Null);
+    let opt_int = |v: Option<i64>| v.map(FilterValue::Int).unwrap_or(FilterValue::Null);
 
-    let sql = "INSERT INTO tracks (title, artist, album, duration_ms, size_bytes, \
+    let sql = "INSERT INTO tracks (title, artist, album, album_artist, genre, year, \
+               track_number, disc_number, duration_ms, size_bytes, \
                sample_rate, bit_depth, channels, bit_rate, file_path, playlist_ids) \
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]') RETURNING id";
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]') RETURNING id";
 
     let params: Vec<FilterValue> = vec![
         FilterValue::String(title),
-        artist.map(FilterValue::String).unwrap_or(FilterValue::Null),
-        album.map(FilterValue::String).unwrap_or(FilterValue::Null),
-        FilterValue::Int(duration_ms),
-        FilterValue::Int(size_bytes),
-        sample_rate
-            .map(FilterValue::Int)
-            .unwrap_or(FilterValue::Null),
-        bit_depth.map(FilterValue::Int).unwrap_or(FilterValue::Null),
-        channels.map(FilterValue::Int).unwrap_or(FilterValue::Null),
-        bit_rate.map(FilterValue::Int).unwrap_or(FilterValue::Null),
+        opt_str(probed.artist),
+        opt_str(probed.album),
+        opt_str(probed.album_artist),
+        opt_str(probed.genre),
+        opt_int(probed.year),
+        opt_int(probed.track_number),
+        opt_int(probed.disc_number),
+        FilterValue::Int(probed.duration_ms),
+        FilterValue::Int(probed.size_bytes),
+        opt_int(probed.sample_rate),
+        opt_int(probed.bit_depth),
+        opt_int(probed.channels),
+        opt_int(probed.bit_rate),
         FilterValue::String(path.display().to_string()),
     ];
 
@@ -267,6 +283,81 @@ mod tests {
         let row = crate::db::tracks::get(&db.engine, id).await.unwrap();
         assert_eq!(row.title, "probe_test");
         assert_eq!(row.file_path, wav.display().to_string());
+    }
+
+    /// Like `write_minimal_wav` but with an even-length data chunk: RIFF
+    /// requires odd chunks to be padded, and `write_minimal_wav`'s
+    /// one-byte chunk has no pad, so a tag appended after it is not
+    /// found on re-read. Fine for the untagged tests above; not here.
+    fn write_taggable_wav(path: &Path) {
+        let bytes: &[u8] = &[
+            b'R', b'I', b'F', b'F', 0x26, 0, 0, 0, b'W', b'A', b'V', b'E', b'f', b'm', b't', b' ',
+            0x10, 0, 0, 0, 0x01, 0, 0x01, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 0x01, 0, 0x08, 0,
+            b'd', b'a', b't', b'a', 0x02, 0, 0, 0, 0x80, 0x80,
+        ];
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[tokio::test]
+    async fn probe_and_add_stores_album_artist_disc_track_genre_and_year() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("tagged.wav");
+        write_taggable_wav(&wav);
+        crate::fs::tags::write_metadata(
+            &wav,
+            &crate::db::tracks::MetadataEdit {
+                title: "Anthem, Pt. 2",
+                artist: Some("blink-182"),
+                album: Some("Take Off Your Pants and Jacket"),
+                album_artist: Some("blink-182"),
+                genre: Some("Punk"),
+                year: Some(2001),
+                track_number: Some(1),
+                disc_number: Some(2),
+            },
+        )
+        .unwrap();
+
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp_db.path()).await.unwrap();
+        let id = probe_and_add(&db.engine, &wav).await.unwrap();
+        let row = crate::db::tracks::get(&db.engine, id).await.unwrap();
+
+        assert_eq!(row.title, "Anthem, Pt. 2");
+        assert_eq!(row.album_artist.as_deref(), Some("blink-182"));
+        assert_eq!(row.genre.as_deref(), Some("Punk"));
+        assert_eq!(row.year, Some(2001));
+        assert_eq!(row.track_number, Some(1));
+        assert_eq!(row.disc_number, Some(2));
+    }
+
+    #[tokio::test]
+    async fn probe_and_add_stores_blank_text_tags_as_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("blank.wav");
+        write_taggable_wav(&wav);
+        crate::fs::tags::write_metadata(
+            &wav,
+            &crate::db::tracks::MetadataEdit {
+                title: "x",
+                artist: Some("  "),
+                album: None,
+                album_artist: None,
+                genre: None,
+                year: None,
+                track_number: None,
+                disc_number: None,
+            },
+        )
+        .unwrap();
+
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp_db.path()).await.unwrap();
+        let id = probe_and_add(&db.engine, &wav).await.unwrap();
+        let row = crate::db::tracks::get(&db.engine, id).await.unwrap();
+        assert_eq!(row.artist, None);
+        assert_eq!(row.album_artist, None);
+        assert_eq!(row.track_number, None);
     }
 
     #[test]

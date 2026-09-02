@@ -130,6 +130,30 @@ describe('MainContentComponent', () => {
       expect(el.querySelector('app-track-list-view')).not.toBeNull();
     });
 
+    it('keys the toolbar on the id so it never disagrees with the body', () => {
+      const { fixture, library } = setup();
+      // Row not loaded yet: the toggle still swaps, the name line waits.
+      library.activePlaylistId.set(42);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      expect(el.querySelector('[data-testid="playlist-modes"]')).not.toBeNull();
+      expect(el.querySelector('[data-testid="active-playlist"]')).toBeNull();
+      expect(el.querySelector('app-playlist-album-picker')).not.toBeNull();
+    });
+
+    it('keeps one track list mounted when leaving a playlist from "songs"', () => {
+      const { fixture, library, cmp, ui } = setup();
+      openPlaylist(library);
+      ui.playlistView.set('songs');
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      const before = el.querySelector('app-track-list-view');
+      expect(before).not.toBeNull();
+      cmp.setMode('tracks');
+      fixture.detectChanges();
+      expect(el.querySelector('app-track-list-view')).toBe(before);
+    });
+
     it('leaving the playlist via a library mode restores the library toggle', () => {
       const { fixture, library, cmp } = setup();
       openPlaylist(library);

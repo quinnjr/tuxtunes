@@ -42,5 +42,8 @@ fn macos_window_override_mirrors_base_window() {
     }
     assert_eq!(base.get("decorations"), Some(&Value::Bool(false)));
     assert_eq!(mac.get("decorations"), Some(&Value::Bool(true)));
-    assert_eq!(mac.get("titleBarStyle"), Some(&Value::String("Overlay".into())));
+    assert_eq!(
+        mac.get("titleBarStyle"),
+        Some(&Value::String("Overlay".into()))
+    );
 }

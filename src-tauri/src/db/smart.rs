@@ -194,11 +194,16 @@ fn resolve_field(name: &str) -> Option<FieldMeta> {
 
 // ----- Compiler -----------------------------------------------------------
 
-/// Order for a rule with no `selected_by`: album artist, album, disc,
-/// track, then title — a stable, human-readable 1..N listing.
-pub const DEFAULT_ORDER: &str = "COALESCE(album_artist, artist) COLLATE NOCASE ASC, \
-     album COLLATE NOCASE ASC, disc_number ASC NULLS LAST, \
-     track_number ASC NULLS LAST, title COLLATE NOCASE ASC, id ASC";
+/// Order for a rule with no `selected_by`: album artist (falling back
+/// to artist, blanks treated as missing and sorted last, the same
+/// expression `albums.rs` groups by), album, disc, track, then title —
+/// a stable, human-readable 1..N listing. `id` breaks every tie so a
+/// LIMIT picks the same rows on every plan.
+pub const DEFAULT_ORDER: &str = "COALESCE(NULLIF(album_artist, ''), NULLIF(artist, '')) \
+     COLLATE NOCASE ASC NULLS LAST, \
+     NULLIF(album, '') COLLATE NOCASE ASC NULLS LAST, \
+     disc_number ASC NULLS LAST, track_number ASC NULLS LAST, \
+     title COLLATE NOCASE ASC, id ASC";
 
 /// Compiled SQL fragment + bound parameters.
 #[derive(Debug, Default)]
@@ -210,6 +215,21 @@ pub struct CompiledQuery {
 /// Compile a smart-playlist rule into `SELECT … FROM tracks WHERE … LIMIT …`
 /// against the `tracks` table. Order is determined by `selected_by`.
 pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartError> {
+    compile_inner(rule, columns, true)
+}
+
+/// Like [`compile`] but without an `ORDER BY`, for callers that only
+/// count or otherwise ignore row order — an ordered scan would build a
+/// temp B-tree for nothing.
+pub fn compile_unordered(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartError> {
+    compile_inner(rule, columns, false)
+}
+
+fn compile_inner(
+    rule: &SmartRule,
+    columns: &str,
+    ordered: bool,
+) -> Result<CompiledQuery, SmartError> {
     let mut params: Vec<FV> = Vec::new();
     // `rule.match_all` is authoritative for the root group's joiner,
     // overriding `root.match_all` for this one call only.
@@ -224,6 +244,11 @@ pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartEr
         .as_ref()
         .and_then(|l| l.selected_by.map(order_for))
         .unwrap_or_else(|| DEFAULT_ORDER.to_string());
+    let order_clause = if ordered {
+        format!("ORDER BY {order}")
+    } else {
+        String::new()
+    };
 
     let limit_clause = match &rule.limit {
         Some(Limit {
@@ -239,7 +264,7 @@ pub fn compile(rule: &SmartRule, columns: &str) -> Result<CompiledQuery, SmartEr
     };
 
     let sql =
-        format!("SELECT {columns} FROM tracks WHERE {where_sql} ORDER BY {order} {limit_clause}");
+        format!("SELECT {columns} FROM tracks WHERE {where_sql} {order_clause} {limit_clause}");
 
     Ok(CompiledQuery { sql, params })
 }
@@ -512,17 +537,21 @@ fn date_relative(
     Ok(format!("{column} {cmp} datetime('now', '{modifier}')"))
 }
 
+/// Every non-random mode ends in an `id` tie-break: a `LIMIT n` over a
+/// single key with ties would otherwise return whichever tied rows the
+/// query plan happened to visit, and device sync re-evaluates rules on
+/// each run and diffs the result, so a plan change would churn files.
 fn order_for(mode: SelectionMode) -> String {
     match mode {
         SelectionMode::Random => "RANDOM()".to_string(),
-        SelectionMode::SongName => "title COLLATE NOCASE ASC".to_string(),
-        SelectionMode::Album => "album COLLATE NOCASE ASC".to_string(),
-        SelectionMode::Artist => "artist COLLATE NOCASE ASC".to_string(),
-        SelectionMode::Genre => "genre COLLATE NOCASE ASC".to_string(),
-        SelectionMode::MostRecentlyAdded => "date_added DESC".to_string(),
-        SelectionMode::MostOftenPlayed => "play_count DESC".to_string(),
-        SelectionMode::MostRecentlyPlayed => "last_played DESC NULLS LAST".to_string(),
-        SelectionMode::HighestRating => "rating DESC".to_string(),
+        SelectionMode::SongName => "title COLLATE NOCASE ASC, id ASC".to_string(),
+        SelectionMode::Album => "album COLLATE NOCASE ASC, id ASC".to_string(),
+        SelectionMode::Artist => "artist COLLATE NOCASE ASC, id ASC".to_string(),
+        SelectionMode::Genre => "genre COLLATE NOCASE ASC, id ASC".to_string(),
+        SelectionMode::MostRecentlyAdded => "date_added DESC, id DESC".to_string(),
+        SelectionMode::MostOftenPlayed => "play_count DESC, id DESC".to_string(),
+        SelectionMode::MostRecentlyPlayed => "last_played DESC NULLS LAST, id DESC".to_string(),
+        SelectionMode::HighestRating => "rating DESC, id DESC".to_string(),
     }
 }
 
@@ -630,7 +659,7 @@ pub async fn preview_count(engine: &SqliteRawEngine, rule: &SmartRule) -> Result
         limit: None,
         ..rule.clone()
     };
-    let q = compile(&no_limit, "1")?;
+    let q = compile_unordered(&no_limit, "1")?;
     let count_sql = format!("SELECT COUNT(*) FROM ({})", q.sql);
     engine
         .raw_sql_scalar::<i64>(&count_sql, &q.params)

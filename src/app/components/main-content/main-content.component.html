@@ -1,8 +1,10 @@
 <section class="flex h-full flex-1 flex-col bg-bg-primary">
   <header class="mac-toolbar flex items-center gap-2 px-4 py-2">
-    @if (library.activePlaylist(); as playlist) {
+    @if (library.activePlaylistId() !== null) {
       <!-- A playlist is browsed by album or as a flat list; the
-           library's tracks/albums/artists split only applies to all songs. -->
+           library's tracks/albums/artists split only applies to all songs.
+           Keyed on the id, like the body below, so header and content
+           never disagree while the playlist row is still loading. -->
       <div class="mac-segmented" data-testid="playlist-modes">
         @for (mode of playlistModes; track mode) {
           <button
@@ -16,13 +18,15 @@
           </button>
         }
       </div>
-      <div class="flex min-w-0 items-center gap-1.5 text-body" data-testid="active-playlist">
-        <span class="text-text-muted">›</span>
-        <span class="truncate font-medium text-text-primary">{{ playlist.name }}</span>
-        @if (playlist.trackCount !== null) {
-          <span class="text-caption text-text-muted">({{ playlist.trackCount }})</span>
-        }
-      </div>
+      @if (library.activePlaylist(); as playlist) {
+        <div class="flex min-w-0 items-center gap-1.5 text-body" data-testid="active-playlist">
+          <span class="text-text-muted">›</span>
+          <span class="truncate font-medium text-text-primary">{{ playlist.name }}</span>
+          @if (playlist.trackCount !== null) {
+            <span class="text-caption text-text-muted">({{ playlist.trackCount }})</span>
+          }
+        </div>
+      }
     } @else {
       <div class="mac-segmented" data-testid="library-modes">
         @for (mode of modes; track mode) {
@@ -82,17 +86,15 @@
       </div>
     }
     <div class="flex-1 overflow-hidden">
-      @if (library.activePlaylistId() !== null) {
-        @if (ui.playlistView() === 'albums') {
-          <app-playlist-album-picker class="block h-full" />
-        } @else {
-          <app-track-list-view class="block h-full" />
-        }
+      <!-- One track-list branch serves both a playlist's "songs" view and
+           the library's "tracks" view, so leaving a playlist keeps the
+           list mounted instead of destroying and re-fetching it. -->
+      @if (showPicker()) {
+        <app-playlist-album-picker class="block h-full" />
+      } @else if (showTrackList()) {
+        <app-track-list-view class="block h-full" />
       } @else {
         @switch (viewMode()) {
-          @case ('tracks') {
-            <app-track-list-view class="block h-full" />
-          }
           @case ('albums') {
             <app-album-grid-view class="block h-full" />
           }

@@ -1,4 +1,4 @@
-import { Component, OnDestroy, inject, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnDestroy, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
 import { LibraryView, PlaylistView, UiService } from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
@@ -25,6 +25,21 @@ export class MainContentComponent implements OnDestroy {
   protected readonly viewMode = this.ui.libraryView;
   protected readonly modes: readonly LibraryView[] = ['tracks', 'albums', 'artists'] as const;
   protected readonly playlistModes: readonly PlaylistView[] = ['albums', 'songs'] as const;
+
+  /** An open playlist in its per-album presentation. */
+  protected readonly showPicker = computed(this.#computeShowPicker.bind(this));
+
+  /** The flat list: a playlist's "songs" view or the library's "tracks" view. */
+  protected readonly showTrackList = computed(this.#computeShowTrackList.bind(this));
+
+  #computeShowPicker(): boolean {
+    return this.library.activePlaylistId() !== null && this.ui.playlistView() === 'albums';
+  }
+
+  #computeShowTrackList(): boolean {
+    if (this.library.activePlaylistId() !== null) return this.ui.playlistView() === 'songs';
+    return this.viewMode() === 'tracks';
+  }
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
 

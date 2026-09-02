@@ -1,7 +1,11 @@
 <div class="h-full overflow-y-auto bg-bg-primary p-6">
   @if (albums().length === 0) {
     <div class="flex h-full items-center justify-center text-text-muted">
-      This playlist is empty
+      @if (library.search().trim() !== '') {
+        No songs match “{{ library.search().trim() }}”
+      } @else {
+        This playlist is empty
+      }
     </div>
   } @else {
     <div class="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] items-start gap-6">
@@ -38,24 +42,25 @@
               </span>
               <span class="tnum text-caption text-text-muted">
                 {{ a.tracks.length }} {{ a.tracks.length === 1 ? 'song' : 'songs' }} ·
-                {{ formatDuration(a.totalDurationMs) }}
+                {{ formatTotal(a.totalDurationMs) }}
               </span>
             </div>
           </button>
           @if (isExpanded(a)) {
+            <!-- Keyed by position: a synced playlist may list a track twice. -->
             <ol
               class="divide-y divide-border rounded-md bg-bg-surface text-body"
               [attr.data-tracks-for]="a.key"
             >
-              @for (t of a.tracks; track trackByTrack($index, t)) {
+              @for (t of a.tracks; track $index) {
                 <li
-                  (dblclick)="play(t)"
+                  (dblclick)="playFrom(a, t)"
                   (contextmenu)="onTrackContextMenu(t, $event); $event.stopPropagation()"
                   class="flex cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-bg-elevated"
                   [class.text-text-muted]="t.missing"
                 >
                   <span class="tnum w-6 shrink-0 text-right text-text-muted">
-                    {{ t.trackNumber ?? $index + 1 }}
+                    {{ t.trackNumber ?? '' }}
                   </span>
                   <span class="min-w-0 flex-1 truncate">
                     {{ t.title }}
