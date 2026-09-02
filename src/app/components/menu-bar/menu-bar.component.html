@@ -1,9 +1,19 @@
+<!--
+  "deep" makes every non-clickable pixel of the bar a drag handle
+  (a bare attribute only matches the nav itself, leaving the gaps
+  around the traffic lights dead). Buttons block dragging on their
+  own; the menu popovers and the click catcher opt out explicitly.
+-->
 <nav
-  class="mac-toolbar relative z-40 flex h-8 shrink-0 items-center gap-1 px-2 text-body text-text-secondary"
+  data-tauri-drag-region="deep"
+  class="mac-toolbar relative z-40 flex h-8 shrink-0 select-none items-center gap-1 px-2 text-body text-text-secondary"
+  [class.pl-20]="win.nativeTrafficLights()"
 >
+  <app-window-controls />
   <!-- Outside-click / Escape catcher; only mounted while a menu is open. -->
   @if (openMenu() !== null) {
     <div
+      data-tauri-drag-region="false"
       class="fixed inset-0 z-30"
       role="presentation"
       (click)="close()"
@@ -24,6 +34,7 @@
     </button>
     @if (openMenu() === 'file') {
       <div
+        data-tauri-drag-region="false"
         class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
         role="menu"
       >
@@ -76,6 +87,7 @@
     </button>
     @if (openMenu() === 'settings') {
       <div
+        data-tauri-drag-region="false"
         class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
         role="menu"
       >

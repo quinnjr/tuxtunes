@@ -6,3 +6,4 @@ pub mod playlists;
 pub mod preferences;
 pub mod smart;
 pub mod sync;
+pub mod window;

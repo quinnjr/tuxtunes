@@ -285,6 +285,75 @@ input[type='range'] {
       0 10px 20px color-mix(in srgb, #000000 14%, transparent);
   }
 
+  /* Traffic lights for the frameless window (Linux, Windows). The
+     glyphs are hidden at rest and appear when the pointer enters the
+     group (or a dot is focused), exactly as AppKit does; the dots stay
+     the same three colors in both themes because they are the one
+     macOS element that never re-tints. */
+  .mac-traffic-light {
+    position: relative;
+    width: 12px;
+    height: 12px;
+    border-radius: 9999px;
+    border: 0.5px solid color-mix(in srgb, #000000 12%, transparent);
+    padding: 0;
+    cursor: default;
+  }
+
+  /* The visible dot is 12px on a 20px pitch; the hit area is the full
+     pitch so a slightly-off press lands on the intended dot rather than
+     its neighbour (Close sits next to Minimize). */
+  .mac-traffic-light::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: inherit;
+  }
+
+  .mac-traffic-light svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    fill: none;
+    stroke: color-mix(in srgb, #000000 60%, transparent);
+    stroke-width: 1.25;
+    stroke-linecap: round;
+    transition: opacity 80ms ease;
+  }
+
+  .mac-traffic-lights:hover .mac-traffic-light svg,
+  .mac-traffic-lights:focus-within .mac-traffic-light svg {
+    opacity: 1;
+  }
+
+  .mac-traffic-light:active {
+    filter: brightness(0.8);
+  }
+
+  .mac-traffic-light-close {
+    background-color: #ff5f57;
+  }
+
+  .mac-traffic-light-minimize {
+    background-color: #febc2e;
+  }
+
+  .mac-traffic-light-zoom {
+    background-color: #28c840;
+  }
+
+  /* Frameless Linux windows get no compositor border; a hairline keeps
+     the edge legible against a same-colored desktop. An outline, not
+     an inset shadow: the shell's children tile it edge-to-edge with
+     opaque backgrounds, and a shadow paints beneath them while an
+     outline paints above every descendant. */
+  .frameless {
+    outline: 1px solid var(--color-border-strong);
+    outline-offset: -1px;
+  }
+
   /* Modal sheets (import wizard, preferences). Opaque surface, not
      vibrancy — a sheet is a document you act on, and blur behind text
      fields hurts legibility. */

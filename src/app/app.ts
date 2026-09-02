@@ -15,6 +15,7 @@ import { TrackInfoComponent } from './components/track-info/track-info.component
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
 import { LibraryService } from './services/library.service';
 import { UiService } from './services/ui.service';
+import { WindowService } from './services/window.service';
 
 @Component({
   selector: 'app-root',
@@ -41,6 +42,7 @@ import { UiService } from './services/ui.service';
 export class App implements OnInit {
   private readonly library = inject(LibraryService);
   protected readonly ui = inject(UiService);
+  protected readonly win = inject(WindowService);
 
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshStats());
