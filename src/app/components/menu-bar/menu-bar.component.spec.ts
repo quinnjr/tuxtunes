@@ -1,7 +1,9 @@
+import { Provider, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { LibraryService } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
+import { WindowService } from '../../services/window.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { MenuBarComponent } from './menu-bar.component';
 
@@ -16,11 +18,11 @@ interface MenuBarInternals {
   openPreferences(): void;
 }
 
-function setup() {
+function setup(extraProviders: Provider[] = []) {
   const stub = tauriStub();
   TestBed.configureTestingModule({
     imports: [MenuBarComponent],
-    providers: appProviders(stub),
+    providers: [...appProviders(stub), ...extraProviders],
   });
   const fixture = TestBed.createComponent(MenuBarComponent);
   fixture.detectChanges();
@@ -120,5 +122,39 @@ describe('MenuBarComponent', () => {
 
     expect(cmp.openMenu()).toBeNull();
     expect(ui.lastError()).toContain('folder locked');
+  });
+
+  describe('as the window title bar', () => {
+    it('is a deep drag region hosting the window controls', () => {
+      const { fixture } = setup();
+      const nav = (fixture.nativeElement as HTMLElement).querySelector('nav');
+      expect(nav?.getAttribute('data-tauri-drag-region')).toBe('deep');
+      expect(nav?.querySelector('app-window-controls')).not.toBeNull();
+    });
+
+    it('opts the popovers and the click catcher out of dragging', () => {
+      const { fixture, cmp } = setup();
+      cmp.toggle('file');
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      const optedOut = [...el.querySelectorAll('[data-tauri-drag-region="false"]')];
+      expect(optedOut.some((n) => n.getAttribute('role') === 'menu')).toBe(true);
+      expect(optedOut.some((n) => n.getAttribute('role') === 'presentation')).toBe(true);
+    });
+
+    it('pads past the native traffic lights only when macOS draws them', () => {
+      const nativeTrafficLights = signal(false);
+      const { fixture } = setup([
+        {
+          provide: WindowService,
+          useValue: { nativeTrafficLights, customControls: signal(false) },
+        },
+      ]);
+      const nav = (fixture.nativeElement as HTMLElement).querySelector('nav');
+      expect(nav?.classList.contains('pl-20')).toBe(false);
+      nativeTrafficLights.set(true);
+      fixture.detectChanges();
+      expect(nav?.classList.contains('pl-20')).toBe(true);
+    });
   });
 });

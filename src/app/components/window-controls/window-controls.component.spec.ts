@@ -1,25 +1,23 @@
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { WindowService } from '../../services/window.service';
 import { WindowControlsComponent } from './window-controls.component';
 
 interface Internals {
-  close(): void;
-  minimize(): void;
   zoom(event: MouseEvent): void;
 }
 
-function windowStub(overrides: Record<string, unknown> = {}) {
+/** Live signals so a test can flip window state on one mounted fixture. */
+function windowStub(customControls = true) {
   return {
-    customControls: true,
-    customResize: true,
-    maximized: vi.fn(() => false),
-    fullscreen: vi.fn(() => false),
+    customControls: signal(customControls),
+    maximized: signal(false),
+    fullscreen: signal(false),
     close: vi.fn(async () => undefined),
     minimize: vi.fn(async () => undefined),
     toggleMaximize: vi.fn(async () => undefined),
     toggleFullscreen: vi.fn(async () => undefined),
-    ...overrides,
   };
 }
 
@@ -30,22 +28,26 @@ function setup(stub = windowStub()) {
   });
   const fixture = TestBed.createComponent(WindowControlsComponent);
   fixture.detectChanges();
+  const el = fixture.nativeElement as HTMLElement;
   return {
     fixture,
     stub,
+    el,
     cmp: fixture.componentInstance as unknown as Internals,
-    el: fixture.nativeElement as HTMLElement,
+    zoomButton: () => el.querySelector<HTMLButtonElement>('.mac-traffic-light-zoom'),
   };
 }
 
 describe('WindowControlsComponent', () => {
-  it('renders three traffic lights when the platform draws its own controls', () => {
+  it('renders three traffic lights, all out of the tab ring', () => {
     const { el } = setup();
-    expect(el.querySelectorAll('button.mac-traffic-light')).toHaveLength(3);
+    const buttons = [...el.querySelectorAll<HTMLButtonElement>('button.mac-traffic-light')];
+    expect(buttons).toHaveLength(3);
+    expect(buttons.every((b) => b.tabIndex === -1)).toBe(true);
   });
 
   it('renders nothing when the OS provides native controls', () => {
-    const { el } = setup(windowStub({ customControls: false }));
+    const { el } = setup(windowStub(false));
     expect(el.querySelector('button')).toBeNull();
   });
 
@@ -66,9 +68,29 @@ describe('WindowControlsComponent', () => {
     expect(stub.toggleFullscreen).toHaveBeenCalledOnce();
   });
 
-  it('labels the zoom button Restore while maximized', () => {
-    const { el } = setup(windowStub({ maximized: vi.fn(() => true) }));
-    const zoom = el.querySelector<HTMLButtonElement>('.mac-traffic-light-zoom');
-    expect(zoom?.getAttribute('aria-label')).toBe('Restore');
+  it('a plain click while fullscreen exits fullscreen instead of toggling maximize', () => {
+    const { cmp, stub, fixture } = setup();
+    stub.fullscreen.set(true);
+    fixture.detectChanges();
+    cmp.zoom(new MouseEvent('click'));
+    expect(stub.toggleFullscreen).toHaveBeenCalledOnce();
+    expect(stub.toggleMaximize).not.toHaveBeenCalled();
+  });
+
+  it('re-labels the zoom button as the window state changes', () => {
+    const { stub, fixture, zoomButton } = setup();
+    expect(zoomButton()?.dataset['zoom']).toBe('maximize');
+    expect(zoomButton()?.getAttribute('aria-label')).toBe('Zoom (Alt-click: full screen)');
+
+    stub.maximized.set(true);
+    fixture.detectChanges();
+    expect(zoomButton()?.dataset['zoom']).toBe('restore');
+    expect(zoomButton()?.getAttribute('aria-label')).toBe('Restore');
+    expect(zoomButton()?.title).toBe('Restore');
+
+    stub.fullscreen.set(true);
+    fixture.detectChanges();
+    expect(zoomButton()?.dataset['zoom']).toBe('exit-fullscreen');
+    expect(zoomButton()?.getAttribute('aria-label')).toBe('Exit full screen');
   });
 });

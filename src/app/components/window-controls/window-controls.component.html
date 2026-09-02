@@ -1,11 +1,17 @@
-@if (win.customControls) {
+@if (win.customControls()) {
+  <!--
+    tabindex=-1: native window controls are never in the tab ring, and
+    with them first in DOM order a Tab+Enter from launch would quit.
+    z-40: the menu bar's outside-click catcher (z-30) must not cover them.
+  -->
   <div
-    class="mac-traffic-lights flex shrink-0 items-center gap-2 pl-1 pr-2"
+    class="mac-traffic-lights relative z-40 flex shrink-0 items-center gap-2 pl-1 pr-2"
     role="group"
     aria-label="Window controls"
   >
     <button
       type="button"
+      tabindex="-1"
       class="mac-traffic-light mac-traffic-light-close"
       aria-label="Close"
       title="Close"
@@ -17,6 +23,7 @@
     </button>
     <button
       type="button"
+      tabindex="-1"
       class="mac-traffic-light mac-traffic-light-minimize"
       aria-label="Minimize"
       title="Minimize"
@@ -28,18 +35,20 @@
     </button>
     <button
       type="button"
+      tabindex="-1"
       class="mac-traffic-light mac-traffic-light-zoom"
-      [attr.aria-label]="win.maximized() ? 'Restore' : 'Zoom'"
-      [title]="win.fullscreen() ? 'Exit full screen' : 'Zoom (Alt-click: full screen)'"
+      [attr.data-zoom]="zoomAction()"
+      [attr.aria-label]="zoomLabel()"
+      [title]="zoomLabel()"
       (click)="zoom($event)"
     >
-      @if (win.maximized() || win.fullscreen()) {
+      @if (zoomAction() === 'maximize') {
         <svg viewBox="0 0 12 12" aria-hidden="true">
-          <path d="M3 6.5V9h2.5M9 5.5V3H6.5" />
+          <path d="M3 5V3h2M9 7v2H7" />
         </svg>
       } @else {
         <svg viewBox="0 0 12 12" aria-hidden="true">
-          <path d="M3 5V3h2M9 7v2H7" />
+          <path d="M3 6.5V9h2.5M9 5.5V3H6.5" />
         </svg>
       }
     </button>
