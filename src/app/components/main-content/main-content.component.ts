@@ -1,9 +1,10 @@
-import { Component, OnDestroy, inject, ChangeDetectionStrategy } from '@angular/core';
+import { Component, OnDestroy, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
-import { LibraryView, UiService } from '../../services/ui.service';
+import { LibraryView, PlaylistView, UiService } from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
 import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
 import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
+import { PlaylistAlbumPickerComponent } from '../playlist-album-picker/playlist-album-picker.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
 
 @Component({
@@ -12,6 +13,7 @@ import { TrackListViewComponent } from '../track-list-view/track-list-view.compo
     AlbumGridViewComponent,
     ArtistSplitViewComponent,
     ColumnBrowserComponent,
+    PlaylistAlbumPickerComponent,
     TrackListViewComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -22,6 +24,22 @@ export class MainContentComponent implements OnDestroy {
   protected readonly library = inject(LibraryService);
   protected readonly viewMode = this.ui.libraryView;
   protected readonly modes: readonly LibraryView[] = ['tracks', 'albums', 'artists'] as const;
+  protected readonly playlistModes: readonly PlaylistView[] = ['albums', 'songs'] as const;
+
+  /** An open playlist in its per-album presentation. */
+  protected readonly showPicker = computed(this.#computeShowPicker.bind(this));
+
+  /** The flat list: a playlist's "songs" view or the library's "tracks" view. */
+  protected readonly showTrackList = computed(this.#computeShowTrackList.bind(this));
+
+  #computeShowPicker(): boolean {
+    return this.library.activePlaylistId() !== null && this.ui.playlistView() === 'albums';
+  }
+
+  #computeShowTrackList(): boolean {
+    if (this.library.activePlaylistId() !== null) return this.ui.playlistView() === 'songs';
+    return this.viewMode() === 'tracks';
+  }
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -47,6 +65,11 @@ export class MainContentComponent implements OnDestroy {
     this.library.activePlaylistId.set(null);
     this.ui.libraryView.set(mode);
     if (hadPlaylist && mode === 'tracks') void this.ui.guard(this.library.refreshTracks());
+  }
+
+  /** Switch how the open playlist is presented; the rows are shared. */
+  protected setPlaylistMode(mode: PlaylistView): void {
+    this.ui.playlistView.set(mode);
   }
 
   protected toggleBrowser(): void {
