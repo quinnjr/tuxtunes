@@ -294,11 +294,10 @@ input[type='range'] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 2.875rem;
-    padding: 0;
+    /* Windows' caption-button width; in px because the root font is
+       13px and a rem value would shrink it. */
+    width: 46px;
     border: 0;
-    border-radius: 0;
-    background-color: transparent;
     color: var(--color-text-secondary);
     cursor: default;
     transition:

@@ -1,13 +1,18 @@
 <!--
   "deep" makes every non-clickable pixel of the bar a drag handle
   (a bare attribute only matches the nav itself, leaving the gaps
-  around the traffic lights dead). Buttons block dragging on their
-  own; the menu popovers and the click catcher opt out explicitly.
+  between the menus dead). Buttons block dragging on their own; the
+  menu popovers and the click catcher opt out explicitly.
+
+  Padding: on macOS the native traffic lights overlay the left edge, so
+  the bar pads past them; on Linux/Windows our caption buttons sit
+  flush against the right edge, so the bar drops its right padding.
 -->
 <nav
   data-tauri-drag-region="deep"
-  class="mac-toolbar relative z-40 flex h-8 shrink-0 select-none items-center gap-1 px-2 text-body text-text-secondary"
+  class="mac-toolbar relative z-40 flex h-8 shrink-0 select-none items-center gap-1 pl-2 pr-2 text-body text-text-secondary"
   [class.pl-20]="win.nativeTrafficLights()"
+  [class.pr-0]="win.customControls()"
 >
   <!-- Outside-click / Escape catcher; only mounted while a menu is open. -->
   @if (openMenu() !== null) {
@@ -103,5 +108,5 @@
   </div>
 
   <!-- Right edge: Linux/Windows caption buttons (nothing on macOS). -->
-  <app-window-controls class="ml-auto flex self-stretch" />
+  <app-window-controls class="ml-auto flex" />
 </nav>

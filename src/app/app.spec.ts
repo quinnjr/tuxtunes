@@ -1,8 +1,10 @@
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from './app';
 import { LibraryService } from './services/library.service';
 import { UiService } from './services/ui.service';
+import { WindowService } from './services/window.service';
 import { appProviders, tauriStub } from './test-helpers';
 
 describe('App', () => {
@@ -17,6 +19,46 @@ describe('App', () => {
     const spy = vi.spyOn(library, 'refreshStats').mockResolvedValue();
     fixture.detectChanges();
     expect(spy).toHaveBeenCalled();
+  });
+
+  describe('F11', () => {
+    function setupWithWindow(customControls: boolean) {
+      const stub = tauriStub();
+      const win = {
+        customControls: signal(customControls),
+        nativeTrafficLights: signal(false),
+        hairline: signal(false),
+        maximized: signal(false),
+        fullscreen: signal(false),
+        toggleFullscreen: vi.fn(async () => undefined),
+      };
+      TestBed.configureTestingModule({
+        imports: [App],
+        providers: [...appProviders(stub), { provide: WindowService, useValue: win }],
+      });
+      const fixture = TestBed.createComponent(App);
+      fixture.detectChanges();
+      const cmp = fixture.componentInstance as unknown as {
+        onFullscreenKey(e: Event): void;
+      };
+      return { cmp, win };
+    }
+
+    it('toggles fullscreen where the app draws its own window controls', () => {
+      const { cmp, win } = setupWithWindow(true);
+      const event = new KeyboardEvent('keydown', { key: 'F11', cancelable: true });
+      cmp.onFullscreenKey(event);
+      expect(win.toggleFullscreen).toHaveBeenCalledOnce();
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('is left to the OS where the window chrome is native', () => {
+      const { cmp, win } = setupWithWindow(false);
+      const event = new KeyboardEvent('keydown', { key: 'F11', cancelable: true });
+      cmp.onFullscreenKey(event);
+      expect(win.toggleFullscreen).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    });
   });
 
   it('suppresses the native context menu on ordinary elements', () => {

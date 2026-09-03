@@ -1,6 +1,6 @@
 //! Window-chrome support commands.
 //!
-//! The frontend decides whether to draw its own traffic lights and
+//! The frontend decides whether to draw its own caption buttons and
 //! hairline border per platform. The webview user agent is a fair
 //! first guess, but it is configurable (`app.windows[].userAgent`) and
 //! subject to UA reduction, so the compiled-in OS is the authority.

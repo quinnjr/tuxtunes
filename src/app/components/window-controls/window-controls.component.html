@@ -1,18 +1,16 @@
 @if (win.customControls()) {
   <!--
-    Native caption buttons for the frameless window on Linux and
-    Windows: minimize, maximize, close, right-aligned, the order every
-    desktop there uses. macOS never reaches this branch — its own
-    traffic lights overlay the toolbar.
+    Caption buttons for the frameless window on Linux and Windows:
+    minimize, maximize, close, right-aligned — the Windows and KDE
+    layout, and what most GTK themes show once a desktop enables the
+    minimize/maximize buttons. macOS never reaches this branch; its
+    own traffic lights overlay the toolbar.
 
     tabindex=-1: window controls are never in the tab ring.
-    z-40: the menu bar's outside-click catcher (z-30) must not cover them.
+    z-40 (with relative): the menu bar's fixed z-30 outside-click
+    catcher must not cover them while a menu is open.
   -->
-  <div
-    class="win-controls relative z-40 -mr-2 flex h-8 shrink-0 items-stretch self-stretch"
-    role="group"
-    aria-label="Window controls"
-  >
+  <div class="relative z-40 flex h-8 shrink-0" role="group" aria-label="Window controls">
     <button
       type="button"
       tabindex="-1"
@@ -21,8 +19,9 @@
       title="Minimize"
       (click)="minimize()"
     >
+      <!-- Half-integer y so the 1px stroke lands in one pixel row. -->
       <svg viewBox="0 0 10 10" aria-hidden="true">
-        <path d="M0 5h10" />
+        <path d="M0 5.5h10" />
       </svg>
     </button>
     <button

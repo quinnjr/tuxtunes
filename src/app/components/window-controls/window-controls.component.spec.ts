@@ -44,7 +44,7 @@ describe('WindowControlsComponent', () => {
     const buttons = [...el.querySelectorAll<HTMLButtonElement>('button.win-control')];
     expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
       'Minimize',
-      'Maximize (Alt-click: full screen)',
+      'Maximize (F11 or Alt-click: full screen)',
       'Close',
     ]);
     expect(buttons.every((b) => b.tabIndex === -1)).toBe(true);
@@ -84,7 +84,9 @@ describe('WindowControlsComponent', () => {
   it('re-labels the zoom button as the window state changes', () => {
     const { stub, fixture, zoomButton } = setup();
     expect(zoomButton()?.dataset['zoom']).toBe('maximize');
-    expect(zoomButton()?.getAttribute('aria-label')).toBe('Maximize (Alt-click: full screen)');
+    expect(zoomButton()?.getAttribute('aria-label')).toBe(
+      'Maximize (F11 or Alt-click: full screen)',
+    );
 
     stub.maximized.set(true);
     fixture.detectChanges();
