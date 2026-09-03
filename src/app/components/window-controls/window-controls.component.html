@@ -1,56 +1,60 @@
 @if (win.customControls()) {
   <!--
-    tabindex=-1: native window controls are never in the tab ring, and
-    with them first in DOM order a Tab+Enter from launch would quit.
-    z-40: the menu bar's outside-click catcher (z-30) must not cover them.
+    Caption buttons for the frameless window on Linux and Windows:
+    minimize, maximize, close, right-aligned — the Windows and KDE
+    layout, and what most GTK themes show once a desktop enables the
+    minimize/maximize buttons. macOS never reaches this branch; its
+    own traffic lights overlay the toolbar.
+
+    tabindex=-1: window controls are never in the tab ring.
+    z-40 (with relative): the menu bar's fixed z-30 outside-click
+    catcher must not cover them while a menu is open.
   -->
-  <div
-    class="mac-traffic-lights relative z-40 flex shrink-0 items-center gap-2 pl-1 pr-2"
-    role="group"
-    aria-label="Window controls"
-  >
+  <div class="relative z-40 flex h-8 shrink-0" role="group" aria-label="Window controls">
     <button
       type="button"
       tabindex="-1"
-      class="mac-traffic-light mac-traffic-light-close"
-      aria-label="Close"
-      title="Close"
-      (click)="close()"
-    >
-      <svg viewBox="0 0 12 12" aria-hidden="true">
-        <path d="M3.5 3.5l5 5M8.5 3.5l-5 5" />
-      </svg>
-    </button>
-    <button
-      type="button"
-      tabindex="-1"
-      class="mac-traffic-light mac-traffic-light-minimize"
+      class="win-control win-control-minimize"
       aria-label="Minimize"
       title="Minimize"
       (click)="minimize()"
     >
-      <svg viewBox="0 0 12 12" aria-hidden="true">
-        <path d="M3 6h6" />
+      <!-- Half-integer y so the 1px stroke lands in one pixel row. -->
+      <svg viewBox="0 0 10 10" aria-hidden="true">
+        <path d="M0 5.5h10" />
       </svg>
     </button>
     <button
       type="button"
       tabindex="-1"
-      class="mac-traffic-light mac-traffic-light-zoom"
+      class="win-control win-control-maximize"
       [attr.data-zoom]="zoomAction()"
       [attr.aria-label]="zoomLabel()"
       [title]="zoomLabel()"
       (click)="zoom($event)"
     >
       @if (zoomAction() === 'maximize') {
-        <svg viewBox="0 0 12 12" aria-hidden="true">
-          <path d="M3 5V3h2M9 7v2H7" />
+        <svg viewBox="0 0 10 10" aria-hidden="true">
+          <rect x="0.5" y="0.5" width="9" height="9" />
         </svg>
       } @else {
-        <svg viewBox="0 0 12 12" aria-hidden="true">
-          <path d="M3 6.5V9h2.5M9 5.5V3H6.5" />
+        <svg viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M2.5 2.5V0.5h7v7h-2" />
+          <rect x="0.5" y="2.5" width="7" height="7" />
         </svg>
       }
+    </button>
+    <button
+      type="button"
+      tabindex="-1"
+      class="win-control win-control-close"
+      aria-label="Close"
+      title="Close"
+      (click)="close()"
+    >
+      <svg viewBox="0 0 10 10" aria-hidden="true">
+        <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" />
+      </svg>
     </button>
   </div>
 }

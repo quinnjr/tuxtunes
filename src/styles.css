@@ -285,63 +285,60 @@ input[type='range'] {
       0 10px 20px color-mix(in srgb, #000000 14%, transparent);
   }
 
-  /* Traffic lights for the frameless window (Linux, Windows). The
-     glyphs are hidden at rest and appear when the pointer enters the
-     group (or a dot is focused), exactly as AppKit does; the dots stay
-     the same three colors in both themes because they are the one
-     macOS element that never re-tints. */
-  .mac-traffic-light {
-    position: relative;
-    width: 12px;
-    height: 12px;
-    border-radius: 9999px;
-    border: 0.5px solid color-mix(in srgb, #000000 12%, transparent);
-    padding: 0;
+  /* Caption buttons for the frameless window (Linux, Windows): the
+     platform's own layout — minimize, maximize, close, right-aligned,
+     each a full-height strip with a symbolic glyph, hover fill, and a
+     red close like every GNOME/KDE/Windows title bar. The macOS traffic
+     lights are never drawn by us; AppKit overlays the real ones. */
+  .win-control {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* Windows' caption-button width; in px because the root font is
+       13px and a rem value would shrink it. */
+    width: 46px;
+    border: 0;
+    color: var(--color-text-secondary);
     cursor: default;
+    transition:
+      background-color 80ms ease,
+      color 80ms ease;
   }
 
-  /* The visible dot is 12px on a 20px pitch; the hit area is the full
-     pitch so a slightly-off press lands on the intended dot rather than
-     its neighbour (Close sits next to Minimize). */
-  .mac-traffic-light::before {
-    content: '';
-    position: absolute;
-    inset: -4px;
-    border-radius: inherit;
-  }
-
-  .mac-traffic-light svg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0;
+  .win-control svg {
+    width: 10px;
+    height: 10px;
     fill: none;
-    stroke: color-mix(in srgb, #000000 60%, transparent);
-    stroke-width: 1.25;
-    stroke-linecap: round;
-    transition: opacity 80ms ease;
+    stroke: currentColor;
+    stroke-width: 1;
+    shape-rendering: crispEdges;
   }
 
-  .mac-traffic-lights:hover .mac-traffic-light svg,
-  .mac-traffic-lights:focus-within .mac-traffic-light svg {
-    opacity: 1;
+  .win-control:hover {
+    background-color: color-mix(in srgb, #ffffff 10%, transparent);
+    color: var(--color-text-primary);
   }
 
-  .mac-traffic-light:active {
-    filter: brightness(0.8);
+  .win-control:active {
+    background-color: color-mix(in srgb, #ffffff 16%, transparent);
   }
 
-  .mac-traffic-light-close {
-    background-color: #ff5f57;
+  :root[data-theme='light'] .win-control:hover {
+    background-color: color-mix(in srgb, #000000 8%, transparent);
   }
 
-  .mac-traffic-light-minimize {
-    background-color: #febc2e;
+  :root[data-theme='light'] .win-control:active {
+    background-color: color-mix(in srgb, #000000 14%, transparent);
   }
 
-  .mac-traffic-light-zoom {
-    background-color: #28c840;
+  .win-control-close:hover {
+    background-color: #c42b1c;
+    color: #ffffff;
+  }
+
+  .win-control-close:active {
+    background-color: #b3271a;
+    color: #ffffff;
   }
 
   /* Frameless Linux windows get no compositor border; a hairline keeps

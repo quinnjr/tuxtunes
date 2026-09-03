@@ -55,6 +55,19 @@ export class App implements OnInit {
    * Copy on selected text (a track title, an error message) has no
    * in-app replacement.
    */
+  /**
+   * F11 toggles fullscreen on Linux and Windows. The caption button's
+   * Alt-click does the same, but many Linux window managers grab
+   * Alt+click for their own move/resize before the webview sees it,
+   * so a keyboard route is the reliable one.
+   */
+  @HostListener('document:keydown.F11', ['$event'])
+  onFullscreenKey(event: Event): void {
+    if (!this.win.customControls()) return;
+    event.preventDefault();
+    void this.win.toggleFullscreen();
+  }
+
   @HostListener('document:contextmenu', ['$event'])
   onDocumentContextMenu(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;

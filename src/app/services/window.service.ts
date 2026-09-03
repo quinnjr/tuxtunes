@@ -48,10 +48,11 @@ export function coversMonitor(size: PixelSize, monitor: PixelSize | null): boole
 
 /**
  * The window is frameless (`decorations: false`) on Linux and Windows,
- * so the UI draws its own title bar and traffic lights. macOS keeps
- * native decorations in overlay mode: the real traffic lights float
- * over our toolbar. Edge resizing is native everywhere (Tauri's runtime
- * installs an undecorated-resize handler on Linux and Windows).
+ * so the UI draws its own title bar and caption buttons (minimize,
+ * maximize, close, on the right). macOS keeps native decorations in
+ * overlay mode: the real traffic lights float over our toolbar. Edge
+ * resizing is native everywhere (Tauri's runtime installs an
+ * undecorated-resize handler on Linux and Windows).
  *
  * Everything here is inert outside the Tauri webview so `ng serve` in
  * a browser still renders.

@@ -125,11 +125,34 @@ describe('MenuBarComponent', () => {
   });
 
   describe('as the window title bar', () => {
-    it('is a deep drag region hosting the window controls', () => {
+    it('is a deep drag region with the window controls pushed to the right edge', () => {
       const { fixture } = setup();
       const nav = (fixture.nativeElement as HTMLElement).querySelector('nav');
       expect(nav?.getAttribute('data-tauri-drag-region')).toBe('deep');
-      expect(nav?.querySelector('app-window-controls')).not.toBeNull();
+      const controls = nav?.querySelector('app-window-controls');
+      expect(controls).not.toBeNull();
+      expect(nav?.lastElementChild).toBe(controls);
+      expect(controls?.classList.contains('ml-auto')).toBe(true);
+    });
+
+    it('drops its right padding only when it draws the caption buttons', () => {
+      const customControls = signal(false);
+      const { fixture } = setup([
+        {
+          provide: WindowService,
+          useValue: {
+            nativeTrafficLights: signal(false),
+            customControls,
+            maximized: signal(false),
+            fullscreen: signal(false),
+          },
+        },
+      ]);
+      const nav = (fixture.nativeElement as HTMLElement).querySelector('nav');
+      expect(nav?.classList.contains('pr-0')).toBe(false);
+      customControls.set(true);
+      fixture.detectChanges();
+      expect(nav?.classList.contains('pr-0')).toBe(true);
     });
 
     it('opts the popovers and the click catcher out of dragging', () => {
