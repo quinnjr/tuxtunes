@@ -5,12 +5,12 @@ import { WindowService } from '../../services/window.service';
 export type ZoomAction = 'maximize' | 'restore' | 'exit-fullscreen';
 
 /**
- * macOS-style traffic lights for the frameless window on Linux and
- * Windows. On macOS the real buttons overlay the toolbar, so this
- * renders nothing there. The zoom button follows the AppKit contract:
- * click toggles maximize, Option/Alt-click enters fullscreen, and once
- * fullscreen a plain click leaves it again (there is no other way out;
- * the app has no F11 binding).
+ * Caption buttons for the frameless window on Linux and Windows, in
+ * those desktops' own layout: minimize, maximize, close on the right.
+ * On macOS the real traffic lights overlay the toolbar, so this renders
+ * nothing there. Maximize toggles maximize; Alt-click enters fullscreen,
+ * and once fullscreen a plain click leaves it again (there is no other
+ * way out; the app has no F11 binding).
  */
 @Component({
   selector: 'app-window-controls',
@@ -49,6 +49,6 @@ export class WindowControlsComponent {
     const action = this.zoomAction();
     if (action === 'exit-fullscreen') return 'Exit full screen';
     if (action === 'restore') return 'Restore';
-    return 'Zoom (Alt-click: full screen)';
+    return 'Maximize (Alt-click: full screen)';
   }
 }

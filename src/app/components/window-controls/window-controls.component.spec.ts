@@ -34,15 +34,19 @@ function setup(stub = windowStub()) {
     stub,
     el,
     cmp: fixture.componentInstance as unknown as Internals,
-    zoomButton: () => el.querySelector<HTMLButtonElement>('.mac-traffic-light-zoom'),
+    zoomButton: () => el.querySelector<HTMLButtonElement>('.win-control-maximize'),
   };
 }
 
 describe('WindowControlsComponent', () => {
-  it('renders three traffic lights, all out of the tab ring', () => {
+  it('renders minimize, maximize, close in that order, all out of the tab ring', () => {
     const { el } = setup();
-    const buttons = [...el.querySelectorAll<HTMLButtonElement>('button.mac-traffic-light')];
-    expect(buttons).toHaveLength(3);
+    const buttons = [...el.querySelectorAll<HTMLButtonElement>('button.win-control')];
+    expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Minimize',
+      'Maximize (Alt-click: full screen)',
+      'Close',
+    ]);
     expect(buttons.every((b) => b.tabIndex === -1)).toBe(true);
   });
 
@@ -53,8 +57,8 @@ describe('WindowControlsComponent', () => {
 
   it('close and minimize buttons call the window service', () => {
     const { el, stub } = setup();
-    el.querySelector<HTMLButtonElement>('.mac-traffic-light-close')?.click();
-    el.querySelector<HTMLButtonElement>('.mac-traffic-light-minimize')?.click();
+    el.querySelector<HTMLButtonElement>('.win-control-close')?.click();
+    el.querySelector<HTMLButtonElement>('.win-control-minimize')?.click();
     expect(stub.close).toHaveBeenCalledOnce();
     expect(stub.minimize).toHaveBeenCalledOnce();
   });
@@ -80,7 +84,7 @@ describe('WindowControlsComponent', () => {
   it('re-labels the zoom button as the window state changes', () => {
     const { stub, fixture, zoomButton } = setup();
     expect(zoomButton()?.dataset['zoom']).toBe('maximize');
-    expect(zoomButton()?.getAttribute('aria-label')).toBe('Zoom (Alt-click: full screen)');
+    expect(zoomButton()?.getAttribute('aria-label')).toBe('Maximize (Alt-click: full screen)');
 
     stub.maximized.set(true);
     fixture.detectChanges();

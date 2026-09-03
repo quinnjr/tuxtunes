@@ -9,7 +9,6 @@
   class="mac-toolbar relative z-40 flex h-8 shrink-0 select-none items-center gap-1 px-2 text-body text-text-secondary"
   [class.pl-20]="win.nativeTrafficLights()"
 >
-  <app-window-controls />
   <!-- Outside-click / Escape catcher; only mounted while a menu is open. -->
   @if (openMenu() !== null) {
     <div
@@ -102,4 +101,7 @@
       </div>
     }
   </div>
+
+  <!-- Right edge: Linux/Windows caption buttons (nothing on macOS). -->
+  <app-window-controls class="ml-auto flex self-stretch" />
 </nav>
