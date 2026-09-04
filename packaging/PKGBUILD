@@ -20,7 +20,7 @@ makedepends=(
   'git'
   'cargo'
   'nodejs'
-  'pnpm'
+  'npm'
 )
 provides=('tuxtunes')
 conflicts=('tuxtunes')
@@ -29,6 +29,21 @@ source=("$pkgname::git+${TUXTUNES_SRC:-$url.git}#branch=develop"
         'tuxtunes.desktop')
 sha256sums=('SKIP'
             'SKIP')
+
+# The repo is pnpm-only, but Arch's pnpm package collides with an
+# npm-global pnpm (both own /usr/bin/pnpm), so it is not a makedepend.
+# Use whatever pnpm is on PATH — pnpm 10+ switches itself to the
+# version pinned in package.json's "packageManager" — and otherwise
+# fetch exactly that version through npx.
+_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    pnpm "$@"
+  else
+    local ver
+    ver=$(node -p "require('./package.json').packageManager.split('@')[1]")
+    npx --yes "pnpm@$ver" "$@"
+  fi
+}
 
 pkgver() {
   cd "$pkgname"
@@ -39,7 +54,7 @@ pkgver() {
 
 prepare() {
   cd "$pkgname"
-  pnpm install --frozen-lockfile
+  _pnpm install --frozen-lockfile
   cargo fetch --locked --manifest-path src-tauri/Cargo.toml --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
@@ -47,7 +62,7 @@ build() {
   cd "$pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export NG_CLI_ANALYTICS=false
-  pnpm exec tauri build --no-bundle -- --frozen
+  _pnpm exec tauri build --no-bundle -- --frozen
 }
 
 package() {
