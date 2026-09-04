@@ -277,9 +277,10 @@ export class PlaybackService implements OnDestroy {
     }
   }
 
-  async play(trackId: number): Promise<void> {
+  /** Start a track; resolves to whether the engine accepted it. */
+  async play(trackId: number): Promise<boolean> {
     this.playSeq++;
-    await this.tryPlay(trackId);
+    return this.tryPlay(trackId);
   }
 
   /**
@@ -349,6 +350,8 @@ export class PlaybackService implements OnDestroy {
   }
 
   async stop(): Promise<void> {
+    // The engine drops its pre-queued file on Stop.
+    this.prefetched = null;
     await this.ui.guard(this.tauri.invoke<void>('stop'));
   }
 
@@ -372,12 +375,30 @@ export class PlaybackService implements OnDestroy {
   }
 
   enqueue(track: TrackRow): void {
-    this.queue.update((q) => [...q, track]);
-    this.refreshPrefetch();
+    this.enqueueAll([track]);
+  }
+
+  /** Append several rows with one queue write and one prefetch pass. */
+  enqueueAll(tracks: readonly TrackRow[]): void {
+    this.updateQueue((q) => [...q, ...tracks]);
   }
 
   playNext(track: TrackRow): void {
-    this.queue.update((q) => [track, ...q]);
+    this.playNextAll([track]);
+  }
+
+  /** Prepend several rows, in the given order, ahead of the queue. */
+  playNextAll(tracks: readonly TrackRow[]): void {
+    this.updateQueue((q) => [...tracks, ...q]);
+  }
+
+  /**
+   * Arbitrary queue rewrite. Every mutation must come through here (or
+   * a helper that does) so the engine's pre-queued track follows the
+   * new head.
+   */
+  updateQueue(update: (queue: readonly TrackRow[]) => TrackRow[]): void {
+    this.queue.update((q) => update(q));
     this.refreshPrefetch();
   }
 
@@ -418,21 +439,30 @@ export class PlaybackService implements OnDestroy {
     }
   }
 
-  /** What the engine has pre-queued behind the current track, if anything. */
-  private prefetched: { id: number; fromQueue: boolean } | null = null;
+  /**
+   * The track id the engine has been told to pre-queue behind the
+   * current one, or null. Recorded *before* the invoke goes out so a
+   * burst of queue edits dedupes in issue order — the engine applies
+   * the commands in that same order, so the last one wins on both
+   * sides. Cleared wherever the engine drops its playlist: a fresh
+   * load (`tryPlay`), Stop, and a completed gapless switch.
+   */
+  private prefetched: number | null = null;
+  /** Generation of `prefetchNext` calls, to ignore a stale failure. */
+  private prefetchSeq = 0;
 
   /**
    * The track that would follow `afterId`: the queue head, else the
    * next non-missing row in the visible list. Pure — no playback.
    */
-  private nextCandidate(afterId: number): { id: number; fromQueue: boolean } | null {
+  private nextCandidate(afterId: number): number | null {
     const head = this.queue().find((t) => !t.missing);
-    if (head) return { id: head.id, fromQueue: true };
+    if (head) return head.id;
     const rows = this.library.tracks();
     const start = rows.findIndex((t) => t.id === afterId);
     if (start === -1) return null;
     const row = rows.slice(start + 1).find((t) => !t.missing);
-    return row ? { id: row.id, fromQueue: false } : null;
+    return row ? row.id : null;
   }
 
   /**
@@ -441,18 +471,18 @@ export class PlaybackService implements OnDestroy {
    * failed prefetch (missing file) just leaves the normal EOF path.
    */
   private async prefetchNext(afterId: number): Promise<void> {
+    const seq = ++this.prefetchSeq;
     const cand = this.nextCandidate(afterId);
+    if (cand === this.prefetched) return;
+    this.prefetched = cand;
     try {
-      if (cand === null) {
-        if (this.prefetched !== null) await this.tauri.invoke<void>('clear_prefetch');
-        this.prefetched = null;
-        return;
-      }
-      if (this.prefetched?.id === cand.id) return;
-      await this.tauri.invoke<void>('prefetch_next', { trackId: cand.id });
-      this.prefetched = cand;
+      await (cand === null
+        ? this.tauri.invoke<void>('clear_prefetch')
+        : this.tauri.invoke<void>('prefetch_next', { trackId: cand }));
     } catch {
-      this.prefetched = null;
+      // A later call may already have superseded this one; only
+      // forget the record if it is still ours.
+      if (seq === this.prefetchSeq) this.prefetched = null;
     }
   }
 
@@ -462,13 +492,16 @@ export class PlaybackService implements OnDestroy {
     if (current !== null) void this.prefetchNext(current);
   }
 
+  /**
+   * The engine rolled into `nextId` on its own. Whatever we thought was
+   * pre-queued, a queue entry for the track now playing is consumed —
+   * leaving it would play the same song twice.
+   */
   private onPrefetchedStarted(nextId: number): void {
-    if (this.prefetched?.fromQueue && this.prefetched.id === nextId) {
-      this.queue.update((q) => {
-        const i = q.findIndex((t) => t.id === nextId);
-        return i === -1 ? q : q.filter((_, idx) => idx !== i);
-      });
-    }
+    this.queue.update((q) => {
+      const i = q.findIndex((t) => t.id === nextId);
+      return i === -1 ? q : q.filter((_, idx) => idx !== i);
+    });
     this.prefetched = null;
   }
 
@@ -517,6 +550,8 @@ export class PlaybackService implements OnDestroy {
 
   /** play(), reporting whether the engine accepted the track. */
   private async tryPlay(trackId: number): Promise<boolean> {
+    // `loadfile replace` discards whatever the engine had pre-queued.
+    this.prefetched = null;
     try {
       await this.tauri.invoke<void>('play_track', { trackId });
       this.ui.clearError();

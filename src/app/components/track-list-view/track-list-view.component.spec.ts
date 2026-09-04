@@ -104,7 +104,7 @@ describe('TrackListViewComponent', () => {
 
   it('play() forwards to PlaybackService.play', async () => {
     const { cmp, playback } = setup();
-    const spy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const spy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.play(TRACK(3));
     expect(spy).toHaveBeenCalledWith(3);
   });
@@ -181,7 +181,7 @@ describe('TrackListViewComponent', () => {
       stopPropagation: vi.fn(),
     } as unknown as MouseEvent);
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
-    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     const enqueueSpy = vi.spyOn(playback, 'enqueue');
     const playNextSpy = vi.spyOn(playback, 'playNext');
     items[0].action?.();
