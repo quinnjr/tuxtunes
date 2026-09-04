@@ -383,6 +383,40 @@ describe('PlaybackService', () => {
     expect(harness.invoke).toHaveBeenCalledWith('clear_prefetch');
   });
 
+  it('adopts a queue head the engine already prefetched by list order, so it pops on switch', async () => {
+    // Album-ordered playlist: the row after 1 is 2, and the album picker
+    // queues 2 right after starting 1. track-changed can land before the
+    // play_track invoke resolves, so the list-order prefetch of 2 goes out
+    // first and the later queue-head prefetch dedupes against it.
+    const harness: Harness = build(async (cmd, args) => {
+      if (cmd === 'play_track') {
+        harness.emit('playback:track-changed', {
+          track_id: args?.['trackId'],
+          prev_track_id: null,
+        });
+      }
+      return undefined;
+    });
+    await harness.ready;
+    harness.library.tracks.set([
+      { ...TRACK, id: 1 },
+      { ...TRACK, id: 2 },
+      { ...TRACK, id: 3 },
+    ]);
+    await harness.svc.play(1);
+    harness.svc.enqueue({ ...TRACK, id: 2 });
+    harness.svc.enqueue({ ...TRACK, id: 3 });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('prefetch_next', { trackId: 2 });
+    harness.invoke.mockClear();
+    harness.emit('playback:track-ended', { track_id: 1, next_track_id: 2 });
+    expect(harness.svc.queue().map((t) => t.id)).toEqual([3]);
+    harness.emit('playback:track-changed', { track_id: 2, prev_track_id: 1 });
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    expect(harness.invoke).toHaveBeenCalledWith('prefetch_next', { trackId: 3 });
+    expect(harness.invoke).not.toHaveBeenCalledWith('prefetch_next', { trackId: 2 });
+  });
+
   it('prefetches the queue head and pops it once the engine has switched to it', async () => {
     const harness = build();
     await harness.ready;

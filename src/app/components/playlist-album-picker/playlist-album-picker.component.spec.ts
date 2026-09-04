@@ -60,7 +60,7 @@ interface Internals {
   playFrom(a: PlaylistAlbum, t: TrackRow): Promise<void>;
   playAlbum(a: PlaylistAlbum): Promise<void>;
   onAlbumContextMenu(a: PlaylistAlbum, event: MouseEvent): void;
-  onTrackContextMenu(t: TrackRow, event: MouseEvent): void;
+  onTrackContextMenu(a: PlaylistAlbum, t: TrackRow, event: MouseEvent): void;
   coverUrl(p: string | null): string | null;
 }
 
@@ -370,10 +370,26 @@ describe('PlaylistAlbumPickerComponent', () => {
     expect(playNext.mock.calls.map((c) => c[0].id)).toEqual([2, 1]);
   });
 
+  it('track context menu Play lines up the rest of the card like double-click', async () => {
+    const { cmp, ctx, playback } = setup([
+      TRACK(1, { trackNumber: 1 }),
+      TRACK(2, { trackNumber: 2 }),
+      TRACK(3, { trackNumber: 3 }),
+    ]);
+    const items = captureMenu(ctx);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue();
+    const enqueue = vi.spyOn(playback, 'enqueue').mockImplementation(() => {});
+    const [album] = cmp.albums();
+    cmp.onTrackContextMenu(album, album.tracks[1], new MouseEvent('contextmenu'));
+    await items()[0].action?.();
+    expect(play).toHaveBeenCalledWith(2);
+    expect(enqueue.mock.calls.map((c) => c[0].id)).toEqual([3]);
+  });
+
   it('track context menu has Get Info… and Show in Files, no playlist removal for the library', async () => {
     const { cmp, ctx, ui, stub } = setup([TRACK(9)]);
     const items = captureMenu(ctx);
-    cmp.onTrackContextMenu(TRACK(9), new MouseEvent('contextmenu'));
+    cmp.onTrackContextMenu(cmp.albums()[0], TRACK(9), new MouseEvent('contextmenu'));
     const labels = items().map((i) => i.label);
     expect(labels).toEqual([
       'Play',
@@ -396,15 +412,15 @@ describe('PlaylistAlbumPickerComponent', () => {
 
     library.playlists.set([PLAYLIST({ synced: true })]);
     library.activePlaylistId.set(3);
-    cmp.onTrackContextMenu(TRACK(9), new MouseEvent('contextmenu'));
+    cmp.onTrackContextMenu(cmp.albums()[0], TRACK(9), new MouseEvent('contextmenu'));
     expect(items().map((i) => i.label)).not.toContain('Remove from Playlist');
 
     library.playlists.set([PLAYLIST({ kind: 'smart' })]);
-    cmp.onTrackContextMenu(TRACK(9), new MouseEvent('contextmenu'));
+    cmp.onTrackContextMenu(cmp.albums()[0], TRACK(9), new MouseEvent('contextmenu'));
     expect(items().map((i) => i.label)).not.toContain('Remove from Playlist');
 
     library.playlists.set([PLAYLIST()]);
-    cmp.onTrackContextMenu(TRACK(9), new MouseEvent('contextmenu'));
+    cmp.onTrackContextMenu(cmp.albums()[0], TRACK(9), new MouseEvent('contextmenu'));
     const item = items().find((i) => i.label === 'Remove from Playlist');
     expect(item).toBeDefined();
     await item?.action?.();

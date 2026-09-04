@@ -448,7 +448,13 @@ export class PlaybackService implements OnDestroy {
         this.prefetched = null;
         return;
       }
-      if (this.prefetched?.id === cand.id) return;
+      if (this.prefetched?.id === cand.id) {
+        // The engine already holds this file; only the bookkeeping can
+        // differ (a list-order prefetch that the queue then also named).
+        // Adopt the queue's claim so the switch pops the entry.
+        this.prefetched = cand;
+        return;
+      }
       await this.tauri.invoke<void>('prefetch_next', { trackId: cand.id });
       this.prefetched = cand;
     } catch {
@@ -463,12 +469,15 @@ export class PlaybackService implements OnDestroy {
   }
 
   private onPrefetchedStarted(nextId: number): void {
-    if (this.prefetched?.fromQueue && this.prefetched.id === nextId) {
-      this.queue.update((q) => {
-        const i = q.findIndex((t) => t.id === nextId);
-        return i === -1 ? q : q.filter((_, idx) => idx !== i);
-      });
-    }
+    const claimed = this.prefetched?.fromQueue === true && this.prefetched.id === nextId;
+    this.queue.update((q) => {
+      // Whatever the prefetch claimed, a queue head that just started is
+      // consumed; otherwise it would play a second time.
+      if (q.length > 0 && q[0].id === nextId) return q.slice(1);
+      if (!claimed) return q;
+      const i = q.findIndex((t) => t.id === nextId);
+      return i === -1 ? q : q.filter((_, idx) => idx !== i);
+    });
     this.prefetched = null;
   }
 

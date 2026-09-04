@@ -190,10 +190,6 @@ export class PlaylistAlbumPickerComponent {
     return formatTotalDuration(ms);
   }
 
-  protected async play(t: TrackRow): Promise<void> {
-    await this.ui.guard(this.playback.play(t.id));
-  }
-
   /**
    * Double-clicking a row plays it and lines up the rest of the card
    * after it, so playback continues 1..N through the album the way the
@@ -228,9 +224,10 @@ export class PlaylistAlbumPickerComponent {
     ]);
   }
 
-  protected onTrackContextMenu(t: TrackRow, event: MouseEvent): void {
+  protected onTrackContextMenu(a: PlaylistAlbum, t: TrackRow, event: MouseEvent): void {
     this.ctx.show(event, [
-      { label: 'Play', action: () => this.play(t) },
+      // Same as double-click: the card's remaining tracks follow.
+      { label: 'Play', action: () => this.playFrom(a, t) },
       { label: 'Add to queue', action: () => this.playback.enqueue(t) },
       { label: 'Play next', action: () => this.playback.playNext(t) },
       ...this.removeFromPlaylistItems(t),
