@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { App, mediaKeyAction } from './app';
+import { App } from './app';
 import { LibraryService } from './services/library.service';
 import { PlaybackService } from './services/playback.service';
 import { UiService } from './services/ui.service';
@@ -34,47 +34,71 @@ describe('App', () => {
       const playback = TestBed.inject(PlaybackService);
       const spies = {
         togglePlay: vi.spyOn(playback, 'togglePlay').mockResolvedValue(),
-        resume: vi.spyOn(playback, 'resume').mockResolvedValue(),
         pause: vi.spyOn(playback, 'pause').mockResolvedValue(),
         stop: vi.spyOn(playback, 'stop').mockResolvedValue(),
         next: vi.spyOn(playback, 'next').mockResolvedValue(null),
         previous: vi.spyOn(playback, 'previous').mockResolvedValue(),
       };
-      const cmp = fixture.componentInstance as unknown as {
-        onMediaKey(e: KeyboardEvent): void;
-      };
-      return { cmp, spies };
+      return { fixture, spies };
+    }
+
+    function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+      const event = new KeyboardEvent('keydown', { key, cancelable: true, bubbles: true, ...init });
+      document.dispatchEvent(event);
+      return event;
     }
 
     it.each([
       ['MediaPlayPause', 'togglePlay'],
-      ['MediaPlay', 'resume'],
+      ['MediaPlay', 'togglePlay'],
       ['MediaPause', 'pause'],
       ['MediaStop', 'stop'],
       ['MediaTrackNext', 'next'],
       ['MediaTrackPrevious', 'previous'],
     ] as const)('%s drives playback.%s', (key, method) => {
-      const { cmp, spies } = setup();
-      const event = new KeyboardEvent('keydown', { key, cancelable: true });
-      cmp.onMediaKey(event);
-      expect(spies[method]).toHaveBeenCalledOnce();
-      expect(event.defaultPrevented).toBe(true);
+      const { spies } = setup();
+      const event = press(key);
       for (const [name, spy] of Object.entries(spies)) {
-        if (name !== method) expect(spy).not.toHaveBeenCalled();
+        expect(spy).toHaveBeenCalledTimes(name === method ? 1 : 0);
       }
+      expect(event.defaultPrevented).toBe(true);
     });
 
     it('ignores ordinary keys', () => {
-      const { cmp, spies } = setup();
-      const event = new KeyboardEvent('keydown', { key: ' ', cancelable: true });
-      cmp.onMediaKey(event);
+      const { spies } = setup();
+      const event = press(' ');
       for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
       expect(event.defaultPrevented).toBe(false);
     });
 
-    it('mediaKeyAction returns null for non-media keys', () => {
-      expect(mediaKeyAction('Enter')).toBeNull();
-      expect(mediaKeyAction('MediaTrackNext')).toBe('next');
+    it('acts once for a held key', () => {
+      const { spies } = setup();
+      press('MediaTrackNext');
+      press('MediaTrackNext', { repeat: true });
+      press('MediaTrackNext', { repeat: true });
+      expect(spies.next).toHaveBeenCalledOnce();
+    });
+
+    it('is not swallowed by a dialog that stops propagation', () => {
+      const { spies } = setup();
+      const input = document.createElement('input');
+      input.addEventListener('keydown', (e) => e.stopPropagation());
+      document.body.append(input);
+      const event = new KeyboardEvent('keydown', {
+        key: 'MediaPlay',
+        cancelable: true,
+        bubbles: true,
+      });
+      input.dispatchEvent(event);
+      input.remove();
+      expect(spies.togglePlay).toHaveBeenCalledOnce();
+    });
+
+    it('stops listening once the component is destroyed', () => {
+      const { fixture, spies } = setup();
+      fixture.destroy();
+      press('MediaStop');
+      expect(spies.stop).not.toHaveBeenCalled();
     });
   });
 

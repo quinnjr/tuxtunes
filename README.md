@@ -76,19 +76,26 @@ library that keeps working after iTunes is gone.
   panel applets.
 - **Keyboard media keys** — play/pause, stop, next, and previous work directly while the
   window is focused. GNOME and KDE route them to MPRIS globally out of the box. On
-  compositors without a media-key daemon (XFCE on Wayland runs labwc, sway, Hyprland,
-  …), bind the keys to the MPRIS interface yourself — no `playerctl` needed:
+  compositors without a media-key daemon, bind the keys to the MPRIS interface yourself
+  (no `playerctl` needed); a compositor binding consumes the key before the window sees
+  it, so it replaces the in-app handler for that key rather than adding to it. The
+  target for each key is:
 
-  ```xml
-  <!-- ~/.config/xfce4/labwc/rc.xml (or ~/.config/labwc/rc.xml), inside <keyboard> -->
-  <keybind key="XF86AudioPlay"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlayPause"/></keybind>
-  <keybind key="XF86AudioStop"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Stop"/></keybind>
-  <keybind key="XF86AudioNext"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Next"/></keybind>
-  <keybind key="XF86AudioPrev"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Previous"/></keybind>
+  ```sh
+  busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlayPause   # XF86AudioPlay
+  busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Stop        # XF86AudioStop
+  busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Next        # XF86AudioNext
+  busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Previous    # XF86AudioPrev
   ```
 
-  Then `labwc --reconfigure`. Substitute `playerctl play-pause` etc. if you prefer a
-  binding that targets whichever player is active.
+  - labwc (XFCE 4.20 on Wayland uses it; `~/.config/xfce4/labwc/rc.xml`, else
+    `~/.config/labwc/rc.xml`), inside `<keyboard>`, then `labwc --reconfigure`:
+    `<keybind key="XF86_AudioPlay"><action name="Execute" command="busctl …"/></keybind>`
+  - sway: `bindsym XF86AudioPlay exec busctl …`
+  - Hyprland: `bind = , XF86AudioPlay, exec, busctl …`
+
+  Substitute `playerctl play-pause` and friends if you prefer a binding that targets
+  whichever player is active.
 
 - System tray, desktop notifications on track change, light/dark/system theming that
   follows `prefers-color-scheme`.

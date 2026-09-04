@@ -1,4 +1,12 @@
-import { Component, HostListener, OnInit, inject, ChangeDetectionStrategy } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
+import {
+  Component,
+  DestroyRef,
+  HostListener,
+  OnInit,
+  inject,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { ConfirmDialogComponent } from './components/confirm-dialog/confirm-dialog.component';
 import { ContextMenuComponent } from './components/context-menu/context-menu.component';
 import { DeviceDetailComponent } from './components/device-detail/device-detail.component';
@@ -43,6 +51,18 @@ import { WindowService } from './services/window.service';
 export class App implements OnInit {
   private readonly library = inject(LibraryService);
   private readonly playback = inject(PlaybackService);
+  private readonly document = inject(DOCUMENT);
+  private readonly destroyRef = inject(DestroyRef);
+
+  constructor() {
+    // Capture phase: dialogs stop keydown propagation to keep their
+    // text-entry shortcuts local, and a bubble-phase HostListener
+    // would never see a transport key pressed while one is open.
+    this.document.addEventListener('keydown', this.onMediaKey, { capture: true });
+    this.destroyRef.onDestroy(() =>
+      this.document.removeEventListener('keydown', this.onMediaKey, { capture: true }),
+    );
+  }
   protected readonly ui = inject(UiService);
   protected readonly win = inject(WindowService);
 
@@ -51,12 +71,22 @@ export class App implements OnInit {
   }
 
   /**
-   * The app draws its own context menus; the WebKit default never
-   * belongs in the UI. Two exceptions keep it: editable elements
-   * (paste, spell-check) and a live text selection — right-click →
-   * Copy on selected text (a track title, an error message) has no
-   * in-app replacement.
+   * Keyboard media keys while the window has focus. Desktops that grab
+   * these keys globally route them through MPRIS and the webview never
+   * sees them; this covers bare compositors, X11 without a settings
+   * daemon, and Windows. WebKitGTK reports the single play/pause key as
+   * `MediaPlay` (its toggle identity survives only in `event.code`),
+   * Chromium as `MediaPlayPause`; both mean toggle, as they do for every
+   * media-key daemon. Auto-repeat is ignored so a held key acts once.
    */
+  readonly onMediaKey = (event: KeyboardEvent): void => {
+    const run = MEDIA_KEYS[event.key];
+    if (run === undefined) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    void run(this.playback);
+  };
+
   /**
    * F11 toggles fullscreen on Linux and Windows. The caption button's
    * Alt-click does the same, but many Linux window managers grab
@@ -71,47 +101,12 @@ export class App implements OnInit {
   }
 
   /**
-   * Keyboard media keys (play/pause, stop, next, previous) while the
-   * window has focus. Desktops that grab these keys globally route
-   * them through MPRIS instead and the webview never sees them; this
-   * covers the rest (bare window managers, X11 without a settings
-   * daemon, Windows). WebKit reports the play key as either
-   * `MediaPlayPause` or a separate `MediaPlay` / `MediaPause` pair
-   * depending on the keyboard, so all three are handled.
+   * The app draws its own context menus; the WebKit default never
+   * belongs in the UI. Two exceptions keep it: editable elements
+   * (paste, spell-check) and a live text selection — right-click →
+   * Copy on selected text (a track title, an error message) has no
+   * in-app replacement.
    */
-  @HostListener('document:keydown', ['$event'])
-  onMediaKey(event: KeyboardEvent): void {
-    const action = mediaKeyAction(event.key);
-    if (action === null) return;
-    event.preventDefault();
-    switch (action) {
-      case 'toggle': {
-        void this.playback.togglePlay();
-        break;
-      }
-      case 'play': {
-        void this.playback.resume();
-        break;
-      }
-      case 'pause': {
-        void this.playback.pause();
-        break;
-      }
-      case 'stop': {
-        void this.playback.stop();
-        break;
-      }
-      case 'next': {
-        void this.playback.next();
-        break;
-      }
-      case 'previous': {
-        void this.playback.previous();
-        break;
-      }
-    }
-  }
-
   @HostListener('document:contextmenu', ['$event'])
   onDocumentContextMenu(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
@@ -130,31 +125,12 @@ export class App implements OnInit {
   }
 }
 
-export type MediaKeyAction = 'toggle' | 'play' | 'pause' | 'stop' | 'next' | 'previous';
-
-/** Map a DOM `KeyboardEvent.key` media-key name to a transport action. */
-export function mediaKeyAction(key: string): MediaKeyAction | null {
-  switch (key) {
-    case 'MediaPlayPause': {
-      return 'toggle';
-    }
-    case 'MediaPlay': {
-      return 'play';
-    }
-    case 'MediaPause': {
-      return 'pause';
-    }
-    case 'MediaStop': {
-      return 'stop';
-    }
-    case 'MediaTrackNext': {
-      return 'next';
-    }
-    case 'MediaTrackPrevious': {
-      return 'previous';
-    }
-    default: {
-      return null;
-    }
-  }
-}
+/** `KeyboardEvent.key` media-key names and the transport action each drives. */
+export const MEDIA_KEYS: Record<string, (playback: PlaybackService) => Promise<unknown>> = {
+  MediaPlayPause: (p) => p.togglePlay(),
+  MediaPlay: (p) => p.togglePlay(),
+  MediaPause: (p) => p.pause(),
+  MediaStop: (p) => p.stop(),
+  MediaTrackNext: (p) => p.next(),
+  MediaTrackPrevious: (p) => p.previous(),
+};
