@@ -114,7 +114,10 @@ makepkg -si
 ```
 
 Installs `tuxtunes` (GUI) and `tuxtunes-cli` (headless sync), plus a desktop entry and
-icons. To build from a local checkout instead of cloning again:
+icons. Build dependencies are `git`, `cargo`, `nodejs`, and `npm`; pnpm is used from
+`PATH` if present and otherwise fetched at the version pinned in `package.json` via
+`npx`, so it is deliberately not a makedepend (Arch's `pnpm` package conflicts with an
+npm-global install). To build from a local checkout instead of cloning again:
 
 ```bash
 TUXTUNES_SRC=file:///path/to/tuxtunes makepkg -si
