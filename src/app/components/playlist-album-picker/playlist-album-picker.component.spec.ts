@@ -56,7 +56,6 @@ interface Internals {
   isExpanded(a: PlaylistAlbum): boolean;
   toggle(a: PlaylistAlbum): void;
   onCardVisible(a: PlaylistAlbum): void;
-  play(t: TrackRow): Promise<void>;
   playFrom(a: PlaylistAlbum, t: TrackRow): Promise<void>;
   playAlbum(a: PlaylistAlbum): Promise<void>;
   onAlbumContextMenu(a: PlaylistAlbum, event: MouseEvent): void;
@@ -240,6 +239,26 @@ describe('PlaylistAlbumPickerComponent', () => {
     expect(el.querySelectorAll('[data-tracks-for] li.text-accent')).toHaveLength(0);
   });
 
+  it('marks only the first copy of a duplicated track as current', () => {
+    const { cmp, fixture, el, playback } = setup([TRACK(7), TRACK(7)]);
+    cmp.toggle(cmp.albums()[0]);
+    playback.currentTrackId.set(7);
+    fixture.detectChanges();
+    expect(el.querySelectorAll('[data-tracks-for] li[aria-current="true"]')).toHaveLength(1);
+    expect(el.querySelectorAll('[data-tracks-for] li.text-accent')).toHaveLength(1);
+  });
+
+  it('dims a missing row with opacity so the current colour still shows', () => {
+    const { cmp, fixture, el, playback } = setup([TRACK(1, { missing: true })]);
+    cmp.toggle(cmp.albums()[0]);
+    playback.currentTrackId.set(1);
+    fixture.detectChanges();
+    const row = el.querySelector('[data-tracks-for] li')!;
+    expect(row.classList.contains('opacity-50')).toBe(true);
+    expect(row.classList.contains('text-accent')).toBe(true);
+    expect(row.classList.contains('text-text-muted')).toBe(false);
+  });
+
   it('renders a duplicated track twice without a keying error', () => {
     const { cmp, fixture, el } = setup([TRACK(1), TRACK(1)]);
     cmp.toggle(cmp.albums()[0]);
@@ -327,14 +346,54 @@ describe('PlaylistAlbumPickerComponent', () => {
       TRACK(2, { trackNumber: 2 }),
       TRACK(3, { trackNumber: 3 }),
     ]);
-    const play = vi.spyOn(playback, 'play').mockResolvedValue();
-    const enqueue = vi.spyOn(playback, 'enqueue').mockImplementation(() => undefined);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
     cmp.toggle(cmp.albums()[0]);
     fixture.detectChanges();
     el.querySelectorAll('[data-tracks-for] li')[1].dispatchEvent(new MouseEvent('dblclick'));
     await fixture.whenStable();
     expect(play).toHaveBeenCalledWith(2);
-    expect(enqueue.mock.calls.map((c) => c[0].id)).toEqual([3]);
+    expect(playback.queue().map((t) => t.id)).toEqual([3]);
+  });
+
+  it('playFrom puts the card tail ahead of the queue and drops its own stale entries', async () => {
+    const { cmp, playback } = setup([
+      TRACK(1, { trackNumber: 1 }),
+      TRACK(2, { trackNumber: 2 }),
+      TRACK(3, { trackNumber: 3 }),
+    ]);
+    vi.spyOn(playback, 'play').mockResolvedValue(true);
+    playback.queue.set([TRACK(99, { album: 'Other' })]);
+    const [album] = cmp.albums();
+    await cmp.playFrom(album, album.tracks[0]);
+    expect(playback.queue().map((t) => t.id)).toEqual([2, 3, 99]);
+    // Re-picking a later row replaces the earlier tail instead of appending.
+    await cmp.playFrom(album, album.tracks[1]);
+    expect(playback.queue().map((t) => t.id)).toEqual([3, 99]);
+  });
+
+  it('playFrom anchors on the exact row, so a duplicated track queues from its own copy', async () => {
+    const { cmp, playback } = setup([TRACK(10), TRACK(42), TRACK(11), TRACK(42), TRACK(12)]);
+    vi.spyOn(playback, 'play').mockResolvedValue(true);
+    const [album] = cmp.albums();
+    await cmp.playFrom(album, album.tracks[3]);
+    expect(playback.queue().map((t) => t.id)).toEqual([12]);
+  });
+
+  it('playFrom queues nothing when the row fails to start', async () => {
+    const { cmp, playback } = setup([TRACK(1), TRACK(2)]);
+    vi.spyOn(playback, 'play').mockResolvedValue(false);
+    const [album] = cmp.albums();
+    await cmp.playFrom(album, album.tracks[0]);
+    expect(playback.queue()).toEqual([]);
+  });
+
+  it('playFrom re-reads the card so a menu opened before a refresh does not queue removed rows', async () => {
+    const { cmp, library, playback } = setup([TRACK(1), TRACK(2), TRACK(3)]);
+    vi.spyOn(playback, 'play').mockResolvedValue(true);
+    const [stale] = cmp.albums();
+    library.tracks.set([TRACK(1), TRACK(3)]);
+    await cmp.playFrom(stale, stale.tracks[0]);
+    expect(playback.queue().map((t) => t.id)).toEqual([3]);
   });
 
   it('playAlbum plays the first track and queues the rest in card order', async () => {
@@ -343,11 +402,10 @@ describe('PlaylistAlbumPickerComponent', () => {
       TRACK(2, { trackNumber: 1 }),
       TRACK(3, { trackNumber: 3 }),
     ]);
-    const play = vi.spyOn(playback, 'play').mockResolvedValue();
-    const enqueue = vi.spyOn(playback, 'enqueue').mockImplementation(() => undefined);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.playAlbum(cmp.albums()[0]);
     expect(play).toHaveBeenCalledWith(2);
-    expect(enqueue.mock.calls.map((c) => c[0].id)).toEqual([1, 3]);
+    expect(playback.queue().map((t) => t.id)).toEqual([1, 3]);
   });
 
   it('album context menu offers play / queue / play next over the album slice', async () => {
@@ -356,8 +414,7 @@ describe('PlaylistAlbumPickerComponent', () => {
       TRACK(2, { trackNumber: 2 }),
     ]);
     const items = captureMenu(ctx);
-    const enqueue = vi.spyOn(playback, 'enqueue').mockImplementation(() => undefined);
-    const playNext = vi.spyOn(playback, 'playNext').mockImplementation(() => undefined);
+    playback.queue.set([TRACK(99, { album: 'Other' })]);
     cmp.onAlbumContextMenu(cmp.albums()[0], new MouseEvent('contextmenu'));
     expect(items().map((i) => i.label)).toEqual([
       'Play album (2)',
@@ -365,9 +422,9 @@ describe('PlaylistAlbumPickerComponent', () => {
       'Play album next',
     ]);
     await items()[1].action?.();
-    expect(enqueue.mock.calls.map((c) => c[0].id)).toEqual([1, 2]);
+    expect(playback.queue().map((t) => t.id)).toEqual([99, 1, 2]);
     await items()[2].action?.();
-    expect(playNext.mock.calls.map((c) => c[0].id)).toEqual([2, 1]);
+    expect(playback.queue().map((t) => t.id)).toEqual([1, 2, 99, 1, 2]);
   });
 
   it('track context menu Play lines up the rest of the card like double-click', async () => {
@@ -377,13 +434,12 @@ describe('PlaylistAlbumPickerComponent', () => {
       TRACK(3, { trackNumber: 3 }),
     ]);
     const items = captureMenu(ctx);
-    const play = vi.spyOn(playback, 'play').mockResolvedValue();
-    const enqueue = vi.spyOn(playback, 'enqueue').mockImplementation(() => {});
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
     const [album] = cmp.albums();
     cmp.onTrackContextMenu(album, album.tracks[1], new MouseEvent('contextmenu'));
     await items()[0].action?.();
     expect(play).toHaveBeenCalledWith(2);
-    expect(enqueue.mock.calls.map((c) => c[0].id)).toEqual([3]);
+    expect(playback.queue().map((t) => t.id)).toEqual([3]);
   });
 
   it('track context menu has Get Info… and Show in Files, no playlist removal for the library', async () => {

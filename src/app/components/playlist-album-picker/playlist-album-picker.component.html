@@ -52,18 +52,21 @@
               class="divide-y divide-border rounded-md bg-bg-surface text-body"
               [attr.data-tracks-for]="a.key"
             >
-              @for (t of a.tracks; track $index) {
+              @for (t of a.tracks; track $index; let i = $index) {
+                @let current = isCurrent(a, i);
                 <li
                   (dblclick)="playFrom(a, t)"
                   (contextmenu)="onTrackContextMenu(a, t, $event); $event.stopPropagation()"
                   class="flex cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-bg-elevated"
-                  [class.text-text-muted]="t.missing"
-                  [class.text-accent]="isCurrent(t)"
-                  [attr.aria-current]="isCurrent(t) ? 'true' : null"
+                  [class.opacity-50]="t.missing"
+                  [class.text-accent]="current"
+                  [attr.aria-current]="current ? 'true' : null"
                 >
                   <span class="tnum w-6 shrink-0 text-right text-text-muted">
-                    @if (isCurrent(t)) {
-                      <span aria-hidden="true" class="text-accent">♫</span>
+                    @if (current) {
+                      <span aria-hidden="true" class="text-caption2 leading-none text-accent"
+                        >♫</span
+                      >
                     } @else {
                       {{ t.trackNumber ?? '' }}
                     }

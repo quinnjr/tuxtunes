@@ -193,7 +193,7 @@ describe('AlbumGridViewComponent', () => {
 
   it('play() forwards to PlaybackService', async () => {
     const { cmp, playback } = setup();
-    const spy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const spy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.play(TRACK(1));
     expect(spy).toHaveBeenCalledWith(1);
   });
@@ -201,7 +201,7 @@ describe('AlbumGridViewComponent', () => {
   it('onAlbumContextMenu loads tracks lazily then offers play/queue/next actions', async () => {
     const { cmp, ctx, library, playback } = setup();
     vi.spyOn(library, 'tracksForAlbum').mockResolvedValue([TRACK(1), TRACK(2)]);
-    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     const enqueueSpy = vi.spyOn(playback, 'enqueue');
     const playNextSpy = vi.spyOn(playback, 'playNext');
     const showSpy = vi.spyOn(ctx, 'show');
@@ -248,7 +248,7 @@ describe('AlbumGridViewComponent', () => {
     const { cmp, ctx, library, playback } = setup();
     vi.spyOn(library, 'tracksForAlbum').mockResolvedValue([]);
     const showSpy = vi.spyOn(ctx, 'show');
-    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.onAlbumContextMenu(ALBUM(), {
       preventDefault: vi.fn(),
       stopPropagation: vi.fn(),
@@ -261,7 +261,7 @@ describe('AlbumGridViewComponent', () => {
   it('onTrackContextMenu offers Play / Add / Play-next', () => {
     const { cmp, ctx, playback } = setup();
     const showSpy = vi.spyOn(ctx, 'show');
-    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     const enqueueSpy = vi.spyOn(playback, 'enqueue');
     const playNextSpy = vi.spyOn(playback, 'playNext');
     cmp.onTrackContextMenu(TRACK(5), {

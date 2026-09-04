@@ -177,9 +177,14 @@ export class PlaylistAlbumPickerComponent {
     return convertFileSrc(artworkPath);
   }
 
-  /** The row the player is on, styled like the all-songs list. */
-  protected isCurrent(t: TrackRow): boolean {
-    return this.playback.currentTrackId() === t.id;
+  /**
+   * The row the player is on, styled like the all-songs list. A synced
+   * playlist may list a track twice; only the first copy is marked so
+   * a single row is ever "current".
+   */
+  protected isCurrent(a: PlaylistAlbum, index: number): boolean {
+    const id = this.playback.currentTrackId();
+    return id !== null && a.tracks.findIndex((x) => x.id === id) === index;
   }
 
   protected formatDuration(ms: number): string {
@@ -191,14 +196,26 @@ export class PlaylistAlbumPickerComponent {
   }
 
   /**
-   * Double-clicking a row plays it and lines up the rest of the card
-   * after it, so playback continues 1..N through the album the way the
-   * card shows it rather than falling through to stored playlist order.
+   * Play a row and line up the rest of the card after it, so playback
+   * continues 1..N through the album the way the card shows it rather
+   * than falling through to stored playlist order. The tail goes ahead
+   * of anything already queued, and any of the card's own tracks still
+   * queued from an earlier start are dropped first, so re-picking a row
+   * never plays part of the album twice. Nothing is queued if the row
+   * failed to start.
    */
   protected async playFrom(a: PlaylistAlbum, t: TrackRow): Promise<void> {
-    const start = a.tracks.findIndex((x) => x.id === t.id);
-    await this.ui.guard(this.playback.play(t.id));
-    for (const rest of a.tracks.slice(start + 1)) this.playback.enqueue(rest);
+    // The menu closure may hold a snapshot; the card can have been
+    // regrouped since it opened.
+    const album = this.albums().find((x) => x.key === a.key) ?? a;
+    let start = album.tracks.indexOf(t);
+    if (start === -1) start = album.tracks.findIndex((x) => x.id === t.id);
+    if (start === -1) return;
+    const started = await this.playback.play(album.tracks[start].id);
+    if (!started) return;
+    const own = new Set(album.tracks.map((x) => x.id));
+    const tail = album.tracks.slice(start + 1);
+    this.playback.updateQueue((q) => [...tail, ...q.filter((x) => !own.has(x.id))]);
   }
 
   protected async playAlbum(a: PlaylistAlbum): Promise<void> {
@@ -209,18 +226,8 @@ export class PlaylistAlbumPickerComponent {
   protected onAlbumContextMenu(a: PlaylistAlbum, event: MouseEvent): void {
     this.ctx.show(event, [
       { label: `Play album (${a.tracks.length})`, action: () => this.playAlbum(a) },
-      {
-        label: 'Add album to queue',
-        action: () => {
-          for (const t of a.tracks) this.playback.enqueue(t);
-        },
-      },
-      {
-        label: 'Play album next',
-        action: () => {
-          for (const t of [...a.tracks].reverse()) this.playback.playNext(t);
-        },
-      },
+      { label: 'Add album to queue', action: () => this.playback.enqueueAll(a.tracks) },
+      { label: 'Play album next', action: () => this.playback.playNextAll(a.tracks) },
     ]);
   }
 

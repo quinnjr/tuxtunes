@@ -133,17 +133,19 @@ describe('NowPlayingPanelComponent', () => {
     expect(ui.nowPlayingOpen()).toBe(false);
   });
 
-  it('drop reorders the queue via moveItemInArray', () => {
+  it('drop reorders the queue through the service so the prefetch follows the new head', () => {
     const { cmp, playback } = setup();
     playback.queue.set([TRACK(1), TRACK(2), TRACK(3)]);
+    const reorder = vi.spyOn(playback, 'reorderQueue');
     cmp.drop({ previousIndex: 0, currentIndex: 2 } as CdkDragDrop<TrackRow[]>);
+    expect(reorder).toHaveBeenCalledWith(0, 2);
     expect(playback.queue().map((t) => t.id)).toEqual([2, 3, 1]);
   });
 
   it('playFromQueue removes the entry then plays it', async () => {
     const { cmp, playback } = setup();
     playback.queue.set([TRACK(1), TRACK(2)]);
-    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.playFromQueue(1);
     expect(playSpy).toHaveBeenCalledWith(2);
     expect(playback.queue().map((t) => t.id)).toEqual([1]);
@@ -152,7 +154,7 @@ describe('NowPlayingPanelComponent', () => {
   it('playFromQueue is a no-op when the index is out of range', async () => {
     const { cmp, playback } = setup();
     playback.queue.set([]);
-    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const playSpy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.playFromQueue(0);
     expect(playSpy).not.toHaveBeenCalled();
   });

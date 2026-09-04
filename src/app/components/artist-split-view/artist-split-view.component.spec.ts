@@ -120,7 +120,7 @@ describe('ArtistSplitViewComponent', () => {
 
   it('play() forwards to PlaybackService', async () => {
     const { cmp, playback } = setup();
-    const spy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const spy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.play(TRACK(9));
     expect(spy).toHaveBeenCalledWith(9);
   });
