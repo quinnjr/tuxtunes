@@ -58,9 +58,15 @@
                   (contextmenu)="onTrackContextMenu(t, $event); $event.stopPropagation()"
                   class="flex cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-bg-elevated"
                   [class.text-text-muted]="t.missing"
+                  [class.text-accent]="isCurrent(t)"
+                  [attr.aria-current]="isCurrent(t) ? 'true' : null"
                 >
                   <span class="tnum w-6 shrink-0 text-right text-text-muted">
-                    {{ t.trackNumber ?? '' }}
+                    @if (isCurrent(t)) {
+                      <span aria-hidden="true" class="text-accent">♫</span>
+                    } @else {
+                      {{ t.trackNumber ?? '' }}
+                    }
                   </span>
                   <span class="min-w-0 flex-1 truncate">
                     {{ t.title }}

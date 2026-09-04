@@ -220,6 +220,26 @@ describe('PlaylistAlbumPickerComponent', () => {
     expect(rows[2]?.startsWith('Untagged')).toBe(true);
   });
 
+  it('highlights the playing track like the all-songs list', () => {
+    const { cmp, fixture, el, playback } = setup([
+      TRACK(1, { trackNumber: 1 }),
+      TRACK(2, { trackNumber: 2 }),
+    ]);
+    cmp.toggle(cmp.albums()[0]);
+    playback.currentTrackId.set(2);
+    fixture.detectChanges();
+    const rows = el.querySelectorAll('[data-tracks-for] li');
+    expect(rows[0].classList.contains('text-accent')).toBe(false);
+    expect(rows[0].getAttribute('aria-current')).toBeNull();
+    expect(rows[1].classList.contains('text-accent')).toBe(true);
+    expect(rows[1].getAttribute('aria-current')).toBe('true');
+    expect(rows[1].textContent).toContain('♫');
+    expect(rows[1].textContent).not.toMatch(/\b2\b/);
+    playback.currentTrackId.set(null);
+    fixture.detectChanges();
+    expect(el.querySelectorAll('[data-tracks-for] li.text-accent')).toHaveLength(0);
+  });
+
   it('renders a duplicated track twice without a keying error', () => {
     const { cmp, fixture, el } = setup([TRACK(1), TRACK(1)]);
     cmp.toggle(cmp.albums()[0]);

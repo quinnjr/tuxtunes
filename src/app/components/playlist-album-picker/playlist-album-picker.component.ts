@@ -177,6 +177,11 @@ export class PlaylistAlbumPickerComponent {
     return convertFileSrc(artworkPath);
   }
 
+  /** The row the player is on, styled like the all-songs list. */
+  protected isCurrent(t: TrackRow): boolean {
+    return this.playback.currentTrackId() === t.id;
+  }
+
   protected formatDuration(ms: number): string {
     return formatMmSs(ms);
   }
