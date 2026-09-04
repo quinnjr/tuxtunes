@@ -14,6 +14,7 @@ import { StatusBarComponent } from './components/status-bar/status-bar.component
 import { TrackInfoComponent } from './components/track-info/track-info.component';
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
 import { LibraryService } from './services/library.service';
+import { PlaybackService } from './services/playback.service';
 import { UiService } from './services/ui.service';
 import { WindowService } from './services/window.service';
 
@@ -41,6 +42,7 @@ import { WindowService } from './services/window.service';
 })
 export class App implements OnInit {
   private readonly library = inject(LibraryService);
+  private readonly playback = inject(PlaybackService);
   protected readonly ui = inject(UiService);
   protected readonly win = inject(WindowService);
 
@@ -68,6 +70,48 @@ export class App implements OnInit {
     void this.win.toggleFullscreen();
   }
 
+  /**
+   * Keyboard media keys (play/pause, stop, next, previous) while the
+   * window has focus. Desktops that grab these keys globally route
+   * them through MPRIS instead and the webview never sees them; this
+   * covers the rest (bare window managers, X11 without a settings
+   * daemon, Windows). WebKit reports the play key as either
+   * `MediaPlayPause` or a separate `MediaPlay` / `MediaPause` pair
+   * depending on the keyboard, so all three are handled.
+   */
+  @HostListener('document:keydown', ['$event'])
+  onMediaKey(event: KeyboardEvent): void {
+    const action = mediaKeyAction(event.key);
+    if (action === null) return;
+    event.preventDefault();
+    switch (action) {
+      case 'toggle': {
+        void this.playback.togglePlay();
+        break;
+      }
+      case 'play': {
+        void this.playback.resume();
+        break;
+      }
+      case 'pause': {
+        void this.playback.pause();
+        break;
+      }
+      case 'stop': {
+        void this.playback.stop();
+        break;
+      }
+      case 'next': {
+        void this.playback.next();
+        break;
+      }
+      case 'previous': {
+        void this.playback.previous();
+        break;
+      }
+    }
+  }
+
   @HostListener('document:contextmenu', ['$event'])
   onDocumentContextMenu(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
@@ -83,5 +127,34 @@ export class App implements OnInit {
       return;
     }
     event.preventDefault();
+  }
+}
+
+export type MediaKeyAction = 'toggle' | 'play' | 'pause' | 'stop' | 'next' | 'previous';
+
+/** Map a DOM `KeyboardEvent.key` media-key name to a transport action. */
+export function mediaKeyAction(key: string): MediaKeyAction | null {
+  switch (key) {
+    case 'MediaPlayPause': {
+      return 'toggle';
+    }
+    case 'MediaPlay': {
+      return 'play';
+    }
+    case 'MediaPause': {
+      return 'pause';
+    }
+    case 'MediaStop': {
+      return 'stop';
+    }
+    case 'MediaTrackNext': {
+      return 'next';
+    }
+    case 'MediaTrackPrevious': {
+      return 'previous';
+    }
+    default: {
+      return null;
+    }
   }
 }

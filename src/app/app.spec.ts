@@ -1,8 +1,9 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { App } from './app';
+import { App, mediaKeyAction } from './app';
 import { LibraryService } from './services/library.service';
+import { PlaybackService } from './services/playback.service';
 import { UiService } from './services/ui.service';
 import { WindowService } from './services/window.service';
 import { appProviders, tauriStub } from './test-helpers';
@@ -19,6 +20,62 @@ describe('App', () => {
     const spy = vi.spyOn(library, 'refreshStats').mockResolvedValue();
     fixture.detectChanges();
     expect(spy).toHaveBeenCalled();
+  });
+
+  describe('media keys', () => {
+    function setup() {
+      const stub = tauriStub();
+      TestBed.configureTestingModule({
+        imports: [App],
+        providers: appProviders(stub),
+      });
+      const fixture = TestBed.createComponent(App);
+      fixture.detectChanges();
+      const playback = TestBed.inject(PlaybackService);
+      const spies = {
+        togglePlay: vi.spyOn(playback, 'togglePlay').mockResolvedValue(),
+        resume: vi.spyOn(playback, 'resume').mockResolvedValue(),
+        pause: vi.spyOn(playback, 'pause').mockResolvedValue(),
+        stop: vi.spyOn(playback, 'stop').mockResolvedValue(),
+        next: vi.spyOn(playback, 'next').mockResolvedValue(null),
+        previous: vi.spyOn(playback, 'previous').mockResolvedValue(),
+      };
+      const cmp = fixture.componentInstance as unknown as {
+        onMediaKey(e: KeyboardEvent): void;
+      };
+      return { cmp, spies };
+    }
+
+    it.each([
+      ['MediaPlayPause', 'togglePlay'],
+      ['MediaPlay', 'resume'],
+      ['MediaPause', 'pause'],
+      ['MediaStop', 'stop'],
+      ['MediaTrackNext', 'next'],
+      ['MediaTrackPrevious', 'previous'],
+    ] as const)('%s drives playback.%s', (key, method) => {
+      const { cmp, spies } = setup();
+      const event = new KeyboardEvent('keydown', { key, cancelable: true });
+      cmp.onMediaKey(event);
+      expect(spies[method]).toHaveBeenCalledOnce();
+      expect(event.defaultPrevented).toBe(true);
+      for (const [name, spy] of Object.entries(spies)) {
+        if (name !== method) expect(spy).not.toHaveBeenCalled();
+      }
+    });
+
+    it('ignores ordinary keys', () => {
+      const { cmp, spies } = setup();
+      const event = new KeyboardEvent('keydown', { key: ' ', cancelable: true });
+      cmp.onMediaKey(event);
+      for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it('mediaKeyAction returns null for non-media keys', () => {
+      expect(mediaKeyAction('Enter')).toBeNull();
+      expect(mediaKeyAction('MediaTrackNext')).toBe('next');
+    });
   });
 
   describe('F11', () => {

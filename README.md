@@ -74,6 +74,22 @@ library that keeps working after iTunes is gone.
 
 - **MPRIS2** — play/pause/next/previous and metadata from your DE, media keys, and
   panel applets.
+- **Keyboard media keys** — play/pause, stop, next, and previous work directly while the
+  window is focused. GNOME and KDE route them to MPRIS globally out of the box. On
+  compositors without a media-key daemon (XFCE on Wayland runs labwc, sway, Hyprland,
+  …), bind the keys to the MPRIS interface yourself — no `playerctl` needed:
+
+  ```xml
+  <!-- ~/.config/xfce4/labwc/rc.xml (or ~/.config/labwc/rc.xml), inside <keyboard> -->
+  <keybind key="XF86AudioPlay"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player PlayPause"/></keybind>
+  <keybind key="XF86AudioStop"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Stop"/></keybind>
+  <keybind key="XF86AudioNext"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Next"/></keybind>
+  <keybind key="XF86AudioPrev"><action name="Execute" command="busctl --user call org.mpris.MediaPlayer2.tuxtunes /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Previous"/></keybind>
+  ```
+
+  Then `labwc --reconfigure`. Substitute `playerctl play-pause` etc. if you prefer a
+  binding that targets whichever player is active.
+
 - System tray, desktop notifications on track change, light/dark/system theming that
   follows `prefers-color-scheme`.
 - Multiple library views: track list, album grid, artist split view, and a
