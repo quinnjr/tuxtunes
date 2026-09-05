@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { App } from './app';
+import { App, VIEW_KEY } from './app';
 import { LibraryService } from './services/library.service';
 import { PlaybackService } from './services/playback.service';
 import { UiService } from './services/ui.service';
@@ -217,5 +217,57 @@ describe('App', () => {
     await fixture.whenStable();
 
     expect(ui.lastError()).toContain('stats unavailable');
+  });
+});
+
+describe('App view persistence', () => {
+  function setup() {
+    TestBed.configureTestingModule({ imports: [App], providers: appProviders(tauriStub()) });
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    return { fixture, ui: TestBed.inject(UiService), library: TestBed.inject(LibraryService) };
+  }
+
+  it('saves the open view to localStorage as it changes', () => {
+    localStorage.clear();
+    const { fixture, ui, library } = setup();
+    ui.libraryView.set('albums');
+    ui.columnBrowserOpen.set(true);
+    library.activePlaylistId.set(7);
+    fixture.detectChanges();
+    expect(JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}')).toEqual({
+      libraryView: 'albums',
+      playlistView: 'albums',
+      columnBrowserOpen: true,
+      activeDeviceId: null,
+      activePlaylistId: 7,
+    });
+  });
+
+  it('restores the saved view on startup', () => {
+    localStorage.setItem(
+      VIEW_KEY,
+      JSON.stringify({
+        libraryView: 'device',
+        playlistView: 'songs',
+        columnBrowserOpen: false,
+        activeDeviceId: 3,
+        activePlaylistId: 9,
+      }),
+    );
+    const { ui, library } = setup();
+    expect(ui.libraryView()).toBe('device');
+    expect(ui.playlistView()).toBe('songs');
+    expect(ui.activeDeviceId()).toBe(3);
+    expect(library.activePlaylistId()).toBe(9);
+  });
+
+  it('falls back to defaults when the saved value is malformed', () => {
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ libraryView: 'bogus' }));
+    const { ui } = setup();
+    expect(ui.libraryView()).toBe('tracks');
+    localStorage.setItem(VIEW_KEY, '{not json');
+    TestBed.resetTestingModule();
+    expect(setup().ui.libraryView()).toBe('tracks');
   });
 });
