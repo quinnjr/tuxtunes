@@ -3,6 +3,7 @@ import {
   Component,
   DestroyRef,
   HostListener,
+  effect,
   OnInit,
   inject,
   ChangeDetectionStrategy,
@@ -21,9 +22,9 @@ import { SmartPlaylistEditorComponent } from './components/smart-playlist-editor
 import { StatusBarComponent } from './components/status-bar/status-bar.component';
 import { TrackInfoComponent } from './components/track-info/track-info.component';
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
-import { LibraryService } from './services/library.service';
+import { LibraryService, TrackFilters } from './services/library.service';
 import { PlaybackService } from './services/playback.service';
-import { UiService } from './services/ui.service';
+import { LibraryView, PlaylistView, UiService } from './services/ui.service';
 import { WindowService } from './services/window.service';
 
 @Component({
@@ -62,9 +63,44 @@ export class App implements OnInit {
     this.destroyRef.onDestroy(() =>
       this.document.removeEventListener('keydown', this.onMediaKey, { capture: true }),
     );
+    // Restore before the children mount: the track list fetches on
+    // mount and reads activePlaylistId to decide what to load.
+    this.restoreView();
+    effect(() => this.saveView());
   }
   protected readonly ui = inject(UiService);
   protected readonly win = inject(WindowService);
+
+  private restoreView(): void {
+    const saved = readSavedView();
+    if (saved === null) return;
+    this.ui.libraryView.set(saved.libraryView);
+    this.ui.playlistView.set(saved.playlistView);
+    this.ui.columnBrowserOpen.set(saved.columnBrowserOpen);
+    this.ui.activeDeviceId.set(saved.activeDeviceId);
+    this.library.activePlaylistId.set(saved.activePlaylistId);
+    this.ui.expandedFolders.set(new Set(saved.expandedFolders));
+    this.ui.nowPlayingOpen.set(saved.nowPlayingOpen);
+    this.library.filters.update((f) => ({ ...f, ...saved.columns }));
+  }
+
+  private saveView(): void {
+    const view: SavedView = {
+      libraryView: this.ui.libraryView(),
+      playlistView: this.ui.playlistView(),
+      columnBrowserOpen: this.ui.columnBrowserOpen(),
+      activeDeviceId: this.ui.activeDeviceId(),
+      activePlaylistId: this.library.activePlaylistId(),
+      expandedFolders: [...this.ui.expandedFolders()],
+      nowPlayingOpen: this.ui.nowPlayingOpen(),
+      columns: pickColumns(this.library.filters()),
+    };
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+    } catch {
+      /* storage disabled or full: the view just isn't remembered */
+    }
+  }
 
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshStats());
@@ -133,4 +169,77 @@ export const MEDIA_KEYS: Record<string, (playback: PlaybackService) => Promise<u
   MediaStop: (p) => p.stop(),
   MediaTrackNext: (p) => p.next(),
   MediaTrackPrevious: (p) => p.previous(),
+};
+
+/** localStorage key for the last open view, restored on the next launch. */
+export const VIEW_KEY = 'tuxtunes.view';
+
+interface SavedView {
+  libraryView: LibraryView;
+  playlistView: PlaylistView;
+  columnBrowserOpen: boolean;
+  activeDeviceId: number | null;
+  activePlaylistId: number | null;
+  expandedFolders: number[];
+  nowPlayingOpen: boolean;
+  /** Column-browser selections; the search box is not remembered. */
+  columns: Pick<TrackFilters, 'genres' | 'artists' | 'albums'>;
+}
+
+const pickColumns = ({ genres, artists, albums }: TrackFilters): SavedView['columns'] => ({
+  genres,
+  artists,
+  albums,
+});
+
+const isStringArray = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.every((s) => typeof s === 'string');
+
+const LIBRARY_VIEWS: ReadonlySet<string> = new Set<LibraryView>([
+  'tracks',
+  'albums',
+  'artists',
+  'genres',
+  'settings',
+  'device',
+]);
+
+const isId = (v: unknown): v is number | null => v === null || typeof v === 'number';
+
+/**
+ * Parse the saved view, or null when there is none or it is not the
+ * shape we wrote (an older build, a hand-edited value): defaults win
+ * over a half-restored view. A playlist or device deleted since the
+ * last run is fine — the views render empty for an unknown id.
+ */
+const readSavedView = (): SavedView | null => {
+  let v: Partial<SavedView> | null;
+  try {
+    const raw = localStorage.getItem(VIEW_KEY);
+    if (raw === null) return null;
+    v = JSON.parse(raw) as Partial<SavedView> | null;
+  } catch {
+    return null;
+  }
+  if (
+    typeof v !== 'object' ||
+    v === null ||
+    typeof v.libraryView !== 'string' ||
+    !LIBRARY_VIEWS.has(v.libraryView) ||
+    (v.playlistView !== 'albums' && v.playlistView !== 'songs') ||
+    typeof v.columnBrowserOpen !== 'boolean' ||
+    !isId(v.activeDeviceId) ||
+    !isId(v.activePlaylistId) ||
+    !Array.isArray(v.expandedFolders) ||
+    !v.expandedFolders.every((id) => typeof id === 'number') ||
+    typeof v.nowPlayingOpen !== 'boolean' ||
+    typeof v.columns !== 'object' ||
+    v.columns === null ||
+    !isStringArray(v.columns.genres) ||
+    !isStringArray(v.columns.artists) ||
+    !isStringArray(v.columns.albums)
+  ) {
+    return null;
+  }
+  return v as SavedView;
 };
