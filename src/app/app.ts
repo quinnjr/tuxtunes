@@ -79,6 +79,7 @@ export class App implements OnInit {
     this.ui.columnBrowserOpen.set(saved.columnBrowserOpen);
     this.ui.activeDeviceId.set(saved.activeDeviceId);
     this.library.activePlaylistId.set(saved.activePlaylistId);
+    this.ui.expandedFolders.set(new Set(saved.expandedFolders));
   }
 
   private saveView(): void {
@@ -88,6 +89,7 @@ export class App implements OnInit {
       columnBrowserOpen: this.ui.columnBrowserOpen(),
       activeDeviceId: this.ui.activeDeviceId(),
       activePlaylistId: this.library.activePlaylistId(),
+      expandedFolders: [...this.ui.expandedFolders()],
     };
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -174,6 +176,7 @@ interface SavedView {
   columnBrowserOpen: boolean;
   activeDeviceId: number | null;
   activePlaylistId: number | null;
+  expandedFolders: number[];
 }
 
 const LIBRARY_VIEWS: ReadonlySet<string> = new Set<LibraryView>([
@@ -210,7 +213,9 @@ const readSavedView = (): SavedView | null => {
     (v.playlistView !== 'albums' && v.playlistView !== 'songs') ||
     typeof v.columnBrowserOpen !== 'boolean' ||
     !isId(v.activeDeviceId) ||
-    !isId(v.activePlaylistId)
+    !isId(v.activePlaylistId) ||
+    !Array.isArray(v.expandedFolders) ||
+    !v.expandedFolders.every((id) => typeof id === 'number')
   ) {
     return null;
   }

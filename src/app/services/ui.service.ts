@@ -47,6 +47,9 @@ export class UiService {
    */
   readonly activeDeviceId = signal<number | null>(null);
 
+  /** Sidebar folder ids the user has expanded. Folders start collapsed. */
+  readonly expandedFolders = signal<Set<number>>(new Set<number>());
+
   /** Whether the Now Playing slide-out is visible. */
   readonly nowPlayingOpen = signal(false);
 

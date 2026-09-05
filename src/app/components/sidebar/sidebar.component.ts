@@ -5,7 +5,6 @@ import {
   computed,
   effect,
   inject,
-  signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
@@ -110,9 +109,6 @@ export class SidebarComponent implements OnInit {
   #computeTree(): PlaylistNode[] {
     return buildPlaylistTree(this.library.playlists());
   }
-
-  /** Folder ids the user has expanded. Folders start collapsed. */
-  protected readonly expanded = signal<Set<number>>(new Set<number>());
 
   constructor() {
     // A finished sync may have added/renamed/removed playlists.
@@ -287,11 +283,11 @@ export class SidebarComponent implements OnInit {
   }
 
   protected isExpanded(p: Playlist): boolean {
-    return this.expanded().has(p.id);
+    return this.ui.expandedFolders().has(p.id);
   }
 
   protected toggleFolder(p: Playlist): void {
-    this.expanded.update((cur) => {
+    this.ui.expandedFolders.update((cur) => {
       const next = new Set(cur);
       if (next.has(p.id)) next.delete(p.id);
       else next.add(p.id);
