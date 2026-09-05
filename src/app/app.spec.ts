@@ -235,6 +235,8 @@ describe('App view persistence', () => {
     ui.columnBrowserOpen.set(true);
     library.activePlaylistId.set(7);
     ui.expandedFolders.set(new Set([2, 5]));
+    ui.nowPlayingOpen.set(true);
+    library.filters.update((f) => ({ ...f, genres: ['Jazz'], search: 'miles' }));
     fixture.detectChanges();
     expect(JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}')).toEqual({
       libraryView: 'albums',
@@ -243,6 +245,8 @@ describe('App view persistence', () => {
       activeDeviceId: null,
       activePlaylistId: 7,
       expandedFolders: [2, 5],
+      nowPlayingOpen: true,
+      columns: { genres: ['Jazz'], artists: [], albums: [] },
     });
   });
 
@@ -256,6 +260,8 @@ describe('App view persistence', () => {
         activeDeviceId: 3,
         activePlaylistId: 9,
         expandedFolders: [4],
+        nowPlayingOpen: true,
+        columns: { genres: [], artists: ['Miles Davis'], albums: [] },
       }),
     );
     const { ui, library } = setup();
@@ -264,6 +270,9 @@ describe('App view persistence', () => {
     expect(ui.activeDeviceId()).toBe(3);
     expect(library.activePlaylistId()).toBe(9);
     expect(ui.expandedFolders()).toEqual(new Set([4]));
+    expect(ui.nowPlayingOpen()).toBe(true);
+    expect(library.filters().artists).toEqual(['Miles Davis']);
+    expect(library.filters().search).toBeNull();
   });
 
   it('falls back to defaults when the saved value is malformed', () => {

@@ -22,7 +22,7 @@ import { SmartPlaylistEditorComponent } from './components/smart-playlist-editor
 import { StatusBarComponent } from './components/status-bar/status-bar.component';
 import { TrackInfoComponent } from './components/track-info/track-info.component';
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
-import { LibraryService } from './services/library.service';
+import { LibraryService, TrackFilters } from './services/library.service';
 import { PlaybackService } from './services/playback.service';
 import { LibraryView, PlaylistView, UiService } from './services/ui.service';
 import { WindowService } from './services/window.service';
@@ -80,6 +80,8 @@ export class App implements OnInit {
     this.ui.activeDeviceId.set(saved.activeDeviceId);
     this.library.activePlaylistId.set(saved.activePlaylistId);
     this.ui.expandedFolders.set(new Set(saved.expandedFolders));
+    this.ui.nowPlayingOpen.set(saved.nowPlayingOpen);
+    this.library.filters.update((f) => ({ ...f, ...saved.columns }));
   }
 
   private saveView(): void {
@@ -90,6 +92,8 @@ export class App implements OnInit {
       activeDeviceId: this.ui.activeDeviceId(),
       activePlaylistId: this.library.activePlaylistId(),
       expandedFolders: [...this.ui.expandedFolders()],
+      nowPlayingOpen: this.ui.nowPlayingOpen(),
+      columns: pickColumns(this.library.filters()),
     };
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -177,7 +181,19 @@ interface SavedView {
   activeDeviceId: number | null;
   activePlaylistId: number | null;
   expandedFolders: number[];
+  nowPlayingOpen: boolean;
+  /** Column-browser selections; the search box is not remembered. */
+  columns: Pick<TrackFilters, 'genres' | 'artists' | 'albums'>;
 }
+
+const pickColumns = ({ genres, artists, albums }: TrackFilters): SavedView['columns'] => ({
+  genres,
+  artists,
+  albums,
+});
+
+const isStringArray = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.every((s) => typeof s === 'string');
 
 const LIBRARY_VIEWS: ReadonlySet<string> = new Set<LibraryView>([
   'tracks',
@@ -215,7 +231,13 @@ const readSavedView = (): SavedView | null => {
     !isId(v.activeDeviceId) ||
     !isId(v.activePlaylistId) ||
     !Array.isArray(v.expandedFolders) ||
-    !v.expandedFolders.every((id) => typeof id === 'number')
+    !v.expandedFolders.every((id) => typeof id === 'number') ||
+    typeof v.nowPlayingOpen !== 'boolean' ||
+    typeof v.columns !== 'object' ||
+    v.columns === null ||
+    !isStringArray(v.columns.genres) ||
+    !isStringArray(v.columns.artists) ||
+    !isStringArray(v.columns.albums)
   ) {
     return null;
   }
