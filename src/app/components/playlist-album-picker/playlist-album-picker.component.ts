@@ -22,7 +22,7 @@ export interface PlaylistAlbum {
   /** In disc/track order; playlist order breaks ties. */
   tracks: TrackRow[];
   totalDurationMs: number;
-  /** Mean of the rated tracks (0–100); 0 when none is rated. */
+  /** The album's own rating (0–100) as its tracks carry it; 0 = unrated. */
   rating: number;
   /** Most recent `dateAdded` among the tracks, if any is known. */
   dateAdded: number | null;
@@ -77,14 +77,11 @@ export function groupByAlbum(rows: readonly TrackRow[]): PlaylistAlbum[] {
     if (t.dateAdded !== null && (g.dateAdded === null || t.dateAdded > g.dateAdded)) {
       g.dateAdded = t.dateAdded;
     }
+    // Every track of an album carries the same value; take the first
+    // non-zero one in case a stray row lacks it.
+    if (g.rating === 0 && t.albumRating > 0) g.rating = t.albumRating;
   }
-  for (const g of groups.values()) {
-    g.tracks = sortByDiscAndTrack(g.tracks);
-    const rated = g.tracks.filter((t) => t.rating > 0);
-    if (rated.length > 0) {
-      g.rating = Math.round(rated.reduce((sum, t) => sum + t.rating, 0) / rated.length);
-    }
-  }
+  for (const g of groups.values()) g.tracks = sortByDiscAndTrack(g.tracks);
   return [...groups.values()];
 }
 

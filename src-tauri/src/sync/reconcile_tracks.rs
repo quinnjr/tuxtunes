@@ -65,6 +65,13 @@ pub async fn reconcile(
     let mut ingest_candidates = Vec::new();
     let mut aliases: HashMap<u64, u64> = HashMap::new();
     let total = lib.tracks().len() as u64;
+    // iTunes keeps album ratings on album records; tracks point at them
+    // by persistent id. Resolve once so each upsert carries its album's.
+    let album_ratings: HashMap<u64, i64> = lib
+        .albums()
+        .iter()
+        .map(|a| (a.persistent_id(), i64::from(a.rating())))
+        .collect();
     // Cap how many individual warnings we surface — both as `sync:warning`
     // events and as log lines — so a library with no path mappings (or one
     // riddled with duplicates) can't flood the UI's IPC channel or the log
@@ -215,6 +222,7 @@ pub async fn reconcile(
             obs,
             source_id,
             t,
+            &album_ratings,
             &raw_path,
             mapped,
             rules,
@@ -301,6 +309,7 @@ pub async fn reconcile(
             obs,
             source_id,
             t,
+            &album_ratings,
             &raw_path,
             target,
             rules,
@@ -387,6 +396,7 @@ async fn apply_entry(
     obs: &dyn SyncObserver,
     source_id: i64,
     t: &itl_rs::Track,
+    album_ratings: &HashMap<u64, i64>,
     raw_path: &str,
     mapped: String,
     rules: &ConflictRules,
@@ -439,6 +449,10 @@ async fn apply_entry(
         year: t.year().map(i64::from),
         bpm: t.bpm().map(i64::from),
         rating: i64::from(t.rating()),
+        album_rating: album_ratings
+            .get(&t.album_persistent_id())
+            .copied()
+            .unwrap_or(0),
         play_count: i64::from(t.play_count()),
         date_added_unix: t.date_added_unix(),
         file_path: &mapped,

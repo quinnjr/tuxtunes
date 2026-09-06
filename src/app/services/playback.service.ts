@@ -33,6 +33,8 @@ export interface TrackRow {
   artworkPath: string | null;
   /** 0–100 in iTunes units (20 per star); 0 = unrated. */
   rating: number;
+  /** The album's own rating, kept separately from the track's; 0 = unrated. */
+  albumRating: number;
   /** Unix seconds when the row entered the library, if known. */
   dateAdded: number | null;
 }
@@ -57,6 +59,7 @@ export interface TrackRowRaw {
   import_status?: string;
   artwork_path?: string | null;
   rating?: number;
+  album_rating?: number;
   date_added_unix?: number | null;
 }
 
@@ -81,6 +84,7 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
     missing: raw.import_status === 'missing_source',
     artworkPath: raw.artwork_path ?? null,
     rating: raw.rating ?? 0,
+    albumRating: raw.album_rating ?? 0,
     dateAdded: raw.date_added_unix ?? null,
   };
 }

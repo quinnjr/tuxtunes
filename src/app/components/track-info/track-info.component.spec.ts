@@ -26,6 +26,7 @@ const ROW: TrackRow = {
   missing: false,
   artworkPath: null,
   rating: 0,
+  albumRating: 0,
   dateAdded: null,
 };
 

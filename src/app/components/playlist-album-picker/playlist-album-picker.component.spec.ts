@@ -40,6 +40,7 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   missing: false,
   artworkPath: null,
   rating: 0,
+  albumRating: 0,
   dateAdded: null,
   ...overrides,
 });
@@ -176,18 +177,18 @@ describe('groupByAlbum', () => {
 });
 
 describe('groupByAlbum album-level values', () => {
-  it('averages the rated tracks and takes the latest date added', () => {
+  it('takes the album rating its tracks carry, never the track ratings, and the latest date added', () => {
     const [g] = groupByAlbum([
-      TRACK(1, { rating: 80, dateAdded: 100 }),
-      TRACK(2, { rating: 0, dateAdded: 300 }),
-      TRACK(3, { rating: 100, dateAdded: null }),
+      TRACK(1, { rating: 80, albumRating: 0, dateAdded: 100 }),
+      TRACK(2, { rating: 100, albumRating: 60, dateAdded: 300 }),
+      TRACK(3, { rating: 100, albumRating: 60, dateAdded: null }),
     ]);
-    expect(g.rating).toBe(90);
+    expect(g.rating).toBe(60);
     expect(g.dateAdded).toBe(300);
   });
 
   it('leaves an album unrated and undated when no track carries either', () => {
-    const [g] = groupByAlbum([TRACK(1), TRACK(2)]);
+    const [g] = groupByAlbum([TRACK(1, { rating: 100 }), TRACK(2, { rating: 80 })]);
     expect(g.rating).toBe(0);
     expect(g.dateAdded).toBeNull();
   });
@@ -201,7 +202,7 @@ describe('sortAlbums', () => {
         artist: 'b',
         albumArtist: 'b',
         year: 2001,
-        rating: 40,
+        albumRating: 40,
         dateAdded: 5,
       }),
       TRACK(2, {
@@ -209,7 +210,7 @@ describe('sortAlbums', () => {
         artist: 'C',
         albumArtist: 'C',
         year: null,
-        rating: 0,
+        albumRating: 0,
         dateAdded: 9,
       }),
       TRACK(3, {
@@ -217,7 +218,7 @@ describe('sortAlbums', () => {
         artist: 'a',
         albumArtist: 'a',
         year: 1999,
-        rating: 100,
+        albumRating: 100,
         dateAdded: null,
       }),
       TRACK(4, {
@@ -225,7 +226,7 @@ describe('sortAlbums', () => {
         artist: 'a',
         albumArtist: 'a',
         year: 2001,
-        rating: 60,
+        albumRating: 60,
         dateAdded: 7,
       }),
       TRACK(5, {
@@ -233,7 +234,7 @@ describe('sortAlbums', () => {
         artist: 'a',
         albumArtist: 'a',
         year: 2001,
-        rating: 60,
+        albumRating: 60,
         dateAdded: 7,
       }),
     ]);
@@ -358,9 +359,9 @@ describe('PlaylistAlbumPickerComponent', () => {
 
   it('shows the album rating on the card only when rated', () => {
     const { el } = setup([
-      TRACK(1, { album: 'Rated', rating: 80 }),
-      TRACK(2, { album: 'Rated', rating: 100 }),
-      TRACK(3, { album: 'Unrated' }),
+      TRACK(1, { album: 'Rated', albumRating: 90, rating: 20 }),
+      TRACK(2, { album: 'Rated', albumRating: 90 }),
+      TRACK(3, { album: 'Unrated', rating: 100 }),
     ]);
     const cards = [...el.querySelectorAll('[data-album]')];
     expect(cards[0].querySelector('[data-rating]')?.textContent?.trim()).toBe('· ★ 4.5');
