@@ -31,6 +31,10 @@ export interface TrackRow {
   missing: boolean;
   /** Cached cover image path, once resolved for the album. */
   artworkPath: string | null;
+  /** 0–100 in iTunes units (20 per star); 0 = unrated. */
+  rating: number;
+  /** Unix seconds when the row entered the library, if known. */
+  dateAdded: number | null;
 }
 
 export interface TrackRowRaw {
@@ -52,6 +56,8 @@ export interface TrackRowRaw {
   skip_count: number;
   import_status?: string;
   artwork_path?: string | null;
+  rating?: number;
+  date_added_unix?: number | null;
 }
 
 export function mapTrack(raw: TrackRowRaw): TrackRow {
@@ -74,6 +80,8 @@ export function mapTrack(raw: TrackRowRaw): TrackRow {
     skipCount: raw.skip_count,
     missing: raw.import_status === 'missing_source',
     artworkPath: raw.artwork_path ?? null,
+    rating: raw.rating ?? 0,
+    dateAdded: raw.date_added_unix ?? null,
   };
 }
 

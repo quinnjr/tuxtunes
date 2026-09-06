@@ -38,6 +38,14 @@ pub struct TrackRow {
     /// Cached cover image, if one has been resolved for the album.
     #[serde(default)]
     pub artwork_path: Option<String>,
+    /// 0–100 in iTunes units (20 per star); 0 = unrated.
+    #[serde(default)]
+    pub rating: i64,
+    /// Unix seconds. The column holds either SQLite datetime text
+    /// (`date_added` default / older imports) or an integer (sync
+    /// inserts), so the SELECT normalises both — see `TRACK_ROW_COLUMNS`.
+    #[serde(default)]
+    pub date_added_unix: Option<i64>,
 }
 
 fn default_import_status() -> String {
@@ -49,7 +57,9 @@ fn default_import_status() -> String {
 /// `db::playlists`, `db::smart`) so the column list lives in one place.
 pub const TRACK_ROW_COLUMNS: &str = "id, title, artist, album, album_artist, genre, year, \
      track_number, disc_number, duration_ms, file_path, file_hash, sample_rate, bit_depth, \
-     kind, play_count, skip_count, import_status, artwork_path";
+     kind, play_count, skip_count, import_status, artwork_path, rating, \
+     CASE WHEN typeof(date_added) IN ('integer', 'real') THEN CAST(date_added AS INTEGER) \
+          ELSE CAST(strftime('%s', date_added) AS INTEGER) END AS date_added_unix";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TracksError {
@@ -979,6 +989,8 @@ mod tests {
             skip_count: 2,
             import_status: "ok".to_string(),
             artwork_path: None,
+            rating: 80,
+            date_added_unix: Some(1_700_000_000),
         };
         let json = serde_json::to_string(&row).unwrap();
         let back: TrackRow = serde_json::from_str(&json).unwrap();

@@ -5,7 +5,7 @@ import { ContextMenuItem, ContextMenuService } from '../../services/context-menu
 import { LibraryService } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
 import { TauriService } from '../../services/tauri.service';
-import { UiService } from '../../services/ui.service';
+import { PlaylistAlbumSort, UiService } from '../../services/ui.service';
 import { formatTotalDuration } from '../../utils/format';
 import { formatMmSs } from '../../utils/time';
 
@@ -22,6 +22,10 @@ export interface PlaylistAlbum {
   /** In disc/track order; playlist order breaks ties. */
   tracks: TrackRow[];
   totalDurationMs: number;
+  /** Mean of the rated tracks (0–100); 0 when none is rated. */
+  rating: number;
+  /** Most recent `dateAdded` among the tracks, if any is known. */
+  dateAdded: number | null;
 }
 
 export const UNKNOWN_ALBUM = 'Unknown Album';
@@ -61,6 +65,8 @@ export function groupByAlbum(rows: readonly TrackRow[]): PlaylistAlbum[] {
         sampleTrackId: t.id,
         tracks: [],
         totalDurationMs: 0,
+        rating: 0,
+        dateAdded: null,
       };
       groups.set(key, g);
     }
@@ -68,9 +74,76 @@ export function groupByAlbum(rows: readonly TrackRow[]): PlaylistAlbum[] {
     g.totalDurationMs += t.durationMs;
     if (g.artworkPath === null && t.artworkPath !== null) g.artworkPath = t.artworkPath;
     if (g.year === null && t.year !== null) g.year = t.year;
+    if (t.dateAdded !== null && (g.dateAdded === null || t.dateAdded > g.dateAdded)) {
+      g.dateAdded = t.dateAdded;
+    }
   }
-  for (const g of groups.values()) g.tracks = sortByDiscAndTrack(g.tracks);
+  for (const g of groups.values()) {
+    g.tracks = sortByDiscAndTrack(g.tracks);
+    const rated = g.tracks.filter((t) => t.rating > 0);
+    if (rated.length > 0) {
+      g.rating = Math.round(rated.reduce((sum, t) => sum + t.rating, 0) / rated.length);
+    }
+  }
   return [...groups.values()];
+}
+
+/**
+ * Order the cards. Ties keep playlist order (the input order), so a
+ * sort by year still reads left-to-right the way the playlist does
+ * within a year. Albums lacking the value (no year, unrated, unknown
+ * date) go last whichever direction is chosen.
+ */
+export function sortAlbums(
+  albums: readonly PlaylistAlbum[],
+  sort: PlaylistAlbumSort,
+): PlaylistAlbum[] {
+  if (sort.key === 'playlist') return sort.descending ? [...albums].reverse() : [...albums];
+  const dir = sort.descending ? -1 : 1;
+  const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+  const key = (a: PlaylistAlbum): string | number | null => {
+    switch (sort.key) {
+      case 'name': {
+        return a.album;
+      }
+      case 'artist': {
+        return a.artist;
+      }
+      case 'year': {
+        return a.year;
+      }
+      case 'rating': {
+        return a.rating === 0 ? null : a.rating;
+      }
+      case 'dateAdded': {
+        return a.dateAdded;
+      }
+      default: {
+        return null;
+      }
+    }
+  };
+  return albums
+    .map((a, i) => ({ a, i, k: key(a) }))
+    .sort((x, y) => {
+      if (x.k === null || y.k === null) {
+        if (x.k === y.k) return x.i - y.i;
+        return x.k === null ? 1 : -1;
+      }
+      const c =
+        typeof x.k === 'string' && typeof y.k === 'string'
+          ? collator.compare(x.k, y.k)
+          : (x.k as number) - (y.k as number);
+      return c === 0 ? x.i - y.i : dir * c;
+    })
+    .map((x) => x.a);
+}
+
+/** "★ 4.5" for a 0–100 rating; empty for unrated. */
+export function formatRating(rating: number): string {
+  if (rating <= 0) return '';
+  const stars = Math.round(rating / 2) / 10;
+  return `★ ${stars}`;
 }
 
 function sortByDiscAndTrack(tracks: TrackRow[]): TrackRow[] {
@@ -117,7 +190,11 @@ export class PlaylistAlbumPickerComponent {
   private static readonly ARTWORK_CONCURRENCY = 4;
 
   #computeAlbums(): PlaylistAlbum[] {
-    return groupByAlbum(this.library.tracks());
+    return sortAlbums(groupByAlbum(this.library.tracks()), this.ui.playlistAlbumSort());
+  }
+
+  protected rating(a: PlaylistAlbum): string {
+    return formatRating(a.rating);
   }
 
   protected trackByAlbum(_index: number, a: PlaylistAlbum): string {

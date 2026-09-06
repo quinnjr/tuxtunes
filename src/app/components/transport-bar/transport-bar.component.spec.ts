@@ -40,6 +40,8 @@ const TRACK: TrackRow = {
   skipCount: 0,
   missing: false,
   artworkPath: null,
+  rating: 0,
+  dateAdded: null,
 };
 
 function setup() {

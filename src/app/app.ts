@@ -24,7 +24,13 @@ import { TrackInfoComponent } from './components/track-info/track-info.component
 import { TransportBarComponent } from './components/transport-bar/transport-bar.component';
 import { LibraryService, TrackFilters } from './services/library.service';
 import { PlaybackService } from './services/playback.service';
-import { LibraryView, PlaylistView, UiService } from './services/ui.service';
+import {
+  LibraryView,
+  PLAYLIST_ALBUM_SORT_KEYS,
+  PlaylistAlbumSort,
+  PlaylistView,
+  UiService,
+} from './services/ui.service';
 import { WindowService } from './services/window.service';
 
 @Component({
@@ -82,6 +88,8 @@ export class App implements OnInit {
     this.ui.expandedFolders.set(new Set(saved.expandedFolders));
     this.ui.nowPlayingOpen.set(saved.nowPlayingOpen);
     this.library.filters.update((f) => ({ ...f, ...saved.columns }));
+    if (saved.playlistAlbumSort !== undefined)
+      this.ui.playlistAlbumSort.set(saved.playlistAlbumSort);
   }
 
   private saveView(): void {
@@ -94,6 +102,7 @@ export class App implements OnInit {
       expandedFolders: [...this.ui.expandedFolders()],
       nowPlayingOpen: this.ui.nowPlayingOpen(),
       columns: pickColumns(this.library.filters()),
+      playlistAlbumSort: this.ui.playlistAlbumSort(),
     };
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -184,7 +193,16 @@ interface SavedView {
   nowPlayingOpen: boolean;
   /** Column-browser selections; the search box is not remembered. */
   columns: Pick<TrackFilters, 'genres' | 'artists' | 'albums'>;
+  /** Added later; absent in views saved by earlier builds. */
+  playlistAlbumSort?: PlaylistAlbumSort;
 }
+
+const isAlbumSort = (v: unknown): v is PlaylistAlbumSort =>
+  typeof v === 'object' &&
+  v !== null &&
+  typeof (v as PlaylistAlbumSort).key === 'string' &&
+  (PLAYLIST_ALBUM_SORT_KEYS as readonly string[]).includes((v as PlaylistAlbumSort).key) &&
+  typeof (v as PlaylistAlbumSort).descending === 'boolean';
 
 const pickColumns = ({ genres, artists, albums }: TrackFilters): SavedView['columns'] => ({
   genres,
@@ -237,7 +255,8 @@ const readSavedView = (): SavedView | null => {
     v.columns === null ||
     !isStringArray(v.columns.genres) ||
     !isStringArray(v.columns.artists) ||
-    !isStringArray(v.columns.albums)
+    !isStringArray(v.columns.albums) ||
+    (v.playlistAlbumSort !== undefined && !isAlbumSort(v.playlistAlbumSort))
   ) {
     return null;
   }
