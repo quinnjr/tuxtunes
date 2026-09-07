@@ -26,6 +26,16 @@ interface Column {
   format(t: TrackRow): string;
 }
 
+/**
+ * "Could not delete Song A and 3 more." — names one so the user can go
+ * looking, counts the rest so a batch failure does not fill the screen.
+ */
+function describeFailures(failed: string[], verb: string): string {
+  const [first] = failed;
+  const rest = failed.length - 1;
+  return `Could not ${verb} ${first}${rest > 0 ? ` and ${rest} more` : ''}.`;
+}
+
 const ALL_COLUMNS: Column[] = [
   { id: 'title', label: 'Title', format: (t) => t.title },
   { id: 'artist', label: 'Artist', widthClass: 'w-48', format: (t) => t.artist ?? '' },
@@ -177,7 +187,11 @@ export class TrackListViewComponent implements OnInit {
       const tracks = this.library.tracks();
       const [a, b] = [this.anchorIndex, index].sort((x, y) => x - y);
       const next = new Set(this.selection());
-      for (let i = a; i <= b; i += 1) next.add(tracks[i].id);
+      // Clamped: the anchor is an index into a list that may have grown
+      // or shrunk since it was set (rows added, deleted, refreshed).
+      for (let i = Math.max(a, 0); i <= Math.min(b, tracks.length - 1); i += 1) {
+        next.add(tracks[i].id);
+      }
       this.selection.set(next);
       return;
     }
@@ -253,7 +267,7 @@ export class TrackListViewComponent implements OnInit {
       return;
     }
     if (shift) {
-      await this.removeTargets(targets, 'remove_track');
+      await this.removeTargets(targets, 'remove_tracks');
       return;
     }
     this.confirmTrash(targets);
@@ -289,7 +303,7 @@ export class TrackListViewComponent implements OnInit {
         `your whole library, not just this view, and go to the system trash.`,
       confirmLabel: n === 1 ? 'Move to Trash' : `Move ${n} to Trash`,
       destructive: true,
-      onConfirm: () => this.removeTargets(targets, 'trash_track'),
+      onConfirm: () => this.removeTargets(targets, 'trash_tracks'),
     });
   }
 
@@ -355,7 +369,7 @@ export class TrackListViewComponent implements OnInit {
       {
         label: single ? 'Remove from Library' : `Remove ${targets.length} from Library`,
         destructive: true,
-        action: () => this.removeTargets(targets, 'remove_track'),
+        action: () => this.removeTargets(targets, 'remove_tracks'),
       },
       {
         label: single ? 'Move to Trash' : `Move ${targets.length} to Trash`,
@@ -376,11 +390,7 @@ export class TrackListViewComponent implements OnInit {
     const summary = await this.ui.guard(this.library.writeTagsToFiles(targets.map((t) => t.id)));
     if (summary === null) return;
     if (summary.failed.length > 0) {
-      const [first] = summary.failed;
-      const rest = summary.failed.length - 1;
-      this.ui.lastError.set(
-        `Could not write tags for ${first}${rest > 0 ? ` and ${rest} more` : ''}.`,
-      );
+      this.ui.lastError.set(describeFailures(summary.failed, 'write tags for'));
     }
   }
 
@@ -450,14 +460,45 @@ export class TrackListViewComponent implements OnInit {
    */
   private async removeTargets(
     targets: TrackRow[],
-    command: 'remove_track' | 'trash_track',
+    command: 'remove_tracks' | 'trash_tracks',
   ): Promise<void> {
-    for (const target of targets) {
-      await this.ui.guard(this.tauri.invoke(command, { trackId: target.id }));
+    const summary = await this.ui.guard(
+      this.library.removeTracks(
+        command,
+        targets.map((t) => t.id),
+      ),
+    );
+    if (summary === null) return;
+
+    const removed = new Set(summary.removed);
+    this.clearSelection();
+
+    // Only what actually went, and only after it went: a delete that
+    // failed (a read-only mount) must not cost the user their playback
+    // position or their queue.
+    if (command === 'trash_tracks' && removed.size > 0) {
+      // The files are off the disk now. Anything still pointing at one
+      // — the transport, the queue, the engine's pre-queued track —
+      // would be playing something that is not there.
+      if (removed.has(this.playback.currentTrackId() ?? -1)) {
+        await this.playback.stop();
+      }
+      this.playback.updateQueue((q) => q.filter((t) => !removed.has(t.id)));
     }
-    this.selection.set(new Set());
-    await this.ui.guard(this.library.refreshTracks());
-    await this.ui.guard(this.library.refreshStats());
+
+    await Promise.all([
+      this.ui.guard(this.library.refreshTracks()),
+      this.ui.guard(this.library.refreshStats()),
+    ]);
+    if (command === 'trash_tracks' && removed.size > 0) {
+      // After the reload, so the replacement candidate comes from the
+      // list as it is now rather than the one with the deleted rows.
+      await this.playback.resetPrefetch();
+    }
+
+    if (summary.failed.length > 0) {
+      this.ui.lastError.set(describeFailures(summary.failed, 'delete'));
+    }
   }
 
   /**

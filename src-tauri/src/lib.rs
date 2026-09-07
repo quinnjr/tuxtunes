@@ -47,6 +47,8 @@ pub fn run() {
             commands::library::update_track_metadata,
             commands::library::write_tags_to_files,
             commands::library::remove_track,
+            commands::library::remove_tracks,
+            commands::library::trash_tracks,
             commands::library::trash_track,
             commands::library::show_in_files,
             commands::playback::play_track,

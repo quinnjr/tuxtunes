@@ -8,7 +8,6 @@ import {
 } from '@angular/core';
 import { type UnlistenFn } from '@tauri-apps/api/event';
 import { LibraryService } from '../../services/library.service';
-import { PreferencesService } from '../../services/preferences.service';
 import { SyncService } from '../../services/sync.service';
 import { TauriService } from '../../services/tauri.service';
 import { UiService } from '../../services/ui.service';
@@ -25,7 +24,6 @@ type SettingsTab = 'playback' | 'sync' | 'maintenance' | 'about';
 })
 export class SettingsRouteComponent implements OnInit, OnDestroy {
   protected readonly sync = inject(SyncService);
-  protected readonly prefs = inject(PreferencesService);
   private readonly library = inject(LibraryService);
   private readonly tauri = inject(TauriService);
   private readonly ui = inject(UiService);
@@ -38,9 +36,6 @@ export class SettingsRouteComponent implements OnInit, OnDestroy {
     { id: 'about', label: 'About' },
   ] as const;
 
-  /** Set when starting the consolidate pass failed outright. */
-  protected readonly consolidateError = signal<string | null>(null);
-
   /** Inline status for the verify-library long-running task. */
   protected readonly verifyState = signal<'idle' | 'running' | 'done' | 'error'>('idle');
   /** Set alongside a 'error' verifyState; the message shown near the verify button. */
@@ -49,8 +44,8 @@ export class SettingsRouteComponent implements OnInit, OnDestroy {
   private readonly unlisteners: UnlistenFn[] = [];
 
   constructor() {
-    void this.subscribeFsEvents().catch((error: unknown) =>
-      console.error('failed to subscribe to fs events', error),
+    void this.subscribeVerifyEvents().catch((error: unknown) =>
+      console.error('failed to subscribe to fs:verify-failed', error),
     );
   }
 
@@ -63,13 +58,8 @@ export class SettingsRouteComponent implements OnInit, OnDestroy {
     this.unlisteners.length = 0;
   }
 
-  private async subscribeFsEvents(): Promise<void> {
+  private async subscribeVerifyEvents(): Promise<void> {
     this.unlisteners.push(
-      // The moved/copied paths are only in the DB, so reload once the
-      // pass reports in.
-      await this.tauri.listen<unknown>('fs:consolidate-complete', () => {
-        void this.library.refreshTracks();
-      }),
       // The verify command spawns a background task; if that task fails
       // it reports back via this event since the command boundary itself
       // already returned successfully.
@@ -78,27 +68,6 @@ export class SettingsRouteComponent implements OnInit, OnDestroy {
         this.verifyError.set(payload.message);
       }),
     );
-  }
-
-  /**
-   * Reorganize every track into the library folder. The pass runs on
-   * the backend's ingest queue and reports through PreferencesService;
-   * refresh the list once it finishes so the moved paths show up.
-   */
-  protected async consolidate(): Promise<void> {
-    this.consolidateError.set(null);
-    try {
-      await this.prefs.consolidateLibrary();
-    } catch (error) {
-      this.consolidateError.set(toErrorMessage(error));
-    }
-  }
-
-  /** `current of total` for the progress line, or null when idle. */
-  protected consolidateStatus(): string | null {
-    const p = this.prefs.consolidateProgress();
-    if (!p) return null;
-    return p.total > 0 ? `Reorganizing ${p.current} of ${p.total}…` : 'Starting…';
   }
 
   protected setTab(t: SettingsTab): void {
