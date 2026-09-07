@@ -51,12 +51,35 @@ export class MenuBarComponent {
 
   protected async addFile(): Promise<void> {
     this.close();
-    await this.ui.guard(this.library.addTracksFromPicker());
+    const summary = await this.ui.guard(this.library.addTracksFromPicker());
+    // null: the guard reported a failure, or the dialog was cancelled.
+    if (summary === null || summary === undefined) return;
+    this.reportSkipped(summary.failed, summary.added.length + summary.existing);
   }
 
   protected async addFolder(): Promise<void> {
     this.close();
-    await this.ui.guard(this.library.addFolderFromPicker());
+    const summary = await this.ui.guard(this.library.addFolderFromPicker());
+    if (summary === null || summary === undefined) return;
+    this.reportSkipped(summary.failed, summary.added + summary.skipped);
+  }
+
+  /**
+   * Say which files were skipped. Without this a selection of
+   * unreadable files closes the dialog and does nothing at all, which
+   * reads as a broken app.
+   */
+  private reportSkipped(failed: string[], handled: number): void {
+    if (failed.length === 0) return;
+    const [first] = failed;
+    const name = first.split('/').pop() ?? first;
+    const rest = failed.length - 1;
+    const tail = rest > 0 ? ` and ${rest} more` : '';
+    this.ui.lastError.set(
+      handled === 0
+        ? `Could not read ${name}${tail}.`
+        : `Added ${handled}; could not read ${name}${tail}.`,
+    );
   }
 
   protected newSmartPlaylist(): void {

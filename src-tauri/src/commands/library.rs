@@ -198,15 +198,30 @@ fn queue_copy(state: &AppState, track_id: i64, source: std::path::PathBuf) {
     }
 }
 
+/// Outcome of [`pick_and_add_track`]; serialized for the UI.
+///
+/// Shaped like [`ingest::AddFolderSummary`] so both add paths can say
+/// what actually happened: a bare list of rows cannot express "picked
+/// 20, added 17, 2 were already here, 1 could not be read", which left
+/// a selection of unreadable files looking like the app had done
+/// nothing at all.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct AddTracksSummary {
+    /// Rows for files that were not in the library before.
+    pub added: Vec<TrackRow>,
+    /// Files that were already here; their rows are untouched.
+    pub existing: u64,
+    /// Names of files that could not be read, so the UI can say which.
+    pub failed: Vec<String>,
+}
+
 /// Pick one or more audio files and add each to the library. Returns
-/// the added rows (newest first, as the picker listed them), or `None`
-/// if the dialog was cancelled. A file lofty cannot read is skipped
-/// with a log line rather than failing the whole selection.
+/// `None` if the dialog was cancelled.
 #[tauri::command]
 pub async fn pick_and_add_track(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<Vec<TrackRow>>, String> {
+) -> Result<Option<AddTracksSummary>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let picked = app
@@ -224,46 +239,97 @@ pub async fn pick_and_add_track(
         return Ok(None);
     };
 
-    let mut rows = Vec::with_capacity(paths.len());
+    let mut resolved = Vec::with_capacity(paths.len());
     for path_resp in paths {
-        let path_buf = path_resp.into_path().map_err(|e| e.to_string())?;
-        match add_one_picked_file(&state, path_buf).await {
-            Ok(row) => rows.push(row),
-            // One unreadable file must not cost the user the rest of a
-            // multi-file selection.
-            Err(e) => log::warn!("pick_and_add_track: skipping a file: {e}"),
+        match path_resp.into_path() {
+            Ok(p) => resolved.push(p),
+            // A pick the portal cannot turn into a path (a remote URL)
+            // is one bad file, not a reason to drop the selection —
+            // and rows added before it are already committed.
+            Err(e) => {
+                log::warn!("pick_and_add_track: unusable pick: {e}");
+                resolved.push(std::path::PathBuf::new());
+            }
         }
     }
-    Ok(Some(rows))
+    Ok(Some(add_picked_files(&state, resolved).await))
 }
 
-/// Add one picked file, or return the row it already has.
+/// Body of [`pick_and_add_track`] once the paths are known, free of the
+/// file dialog so it can be exercised against a temp database. An empty
+/// path stands for a pick that could not be resolved.
+pub async fn add_picked_files(
+    state: &AppState,
+    paths: Vec<std::path::PathBuf>,
+) -> AddTracksSummary {
+    let mut summary = AddTracksSummary::default();
+    for path in paths {
+        let name = file_label(&path);
+        if path.as_os_str().is_empty() {
+            summary.failed.push(name);
+            continue;
+        }
+        match add_one_picked_file(state, path).await {
+            Ok(AddOutcome::Added(row)) => summary.added.push(*row),
+            Ok(AddOutcome::Existing) => summary.existing += 1,
+            Err(ingest::IngestError::Probe { path, source }) => {
+                log::warn!("pick_and_add_track: skipping {path}: {source}");
+                summary.failed.push(name);
+            }
+            // Matching add_folder's policy: a database error is not
+            // per-file, so grinding through the rest would only produce
+            // one doomed probe per file. Stop, and report what landed.
+            Err(e) => {
+                log::warn!(
+                    "pick_and_add_track: stopping after {} files: {e}",
+                    summary.added.len()
+                );
+                summary.failed.push(name);
+                break;
+            }
+        }
+    }
+    summary
+}
+
+/// What adding one picked file did. `Added` boxes its row because a
+/// `TrackRow` dwarfs the unit variant.
+enum AddOutcome {
+    Added(Box<TrackRow>),
+    Existing,
+}
+
+fn file_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Add one picked file. A file the library already has — under either
+/// its current path or the one it was copied from — is left alone:
+/// copy-on-add vacates the source path that `file_path`'s UNIQUE
+/// constraint used to guard, so without this the second pick would add
+/// and copy it all over again.
 async fn add_one_picked_file(
-    state: &tauri::State<'_, AppState>,
+    state: &AppState,
     path_buf: std::path::PathBuf,
-) -> Result<TrackRow, String> {
-    // Re-picking a file that is already in the library returns the row
-    // it already has. Without this the add would succeed and copy a
-    // second time, because copy-on-add vacates the source path that
-    // `file_path`'s UNIQUE constraint used to guard.
-    if let Some(existing) = ingest::track_id_for_path(&state.db.engine, &path_buf)
-        .await
-        .map_err(|e| e.to_string())?
+) -> Result<AddOutcome, ingest::IngestError> {
+    if ingest::track_id_for_path(&state.db.engine, &path_buf)
+        .await?
+        .is_some()
     {
-        return tracks::get(&state.db.engine, existing)
-            .await
-            .map_err(|e| e.to_string());
+        return Ok(AddOutcome::Existing);
     }
 
-    let id = ingest::probe_and_add(&state.db.engine, &path_buf)
-        .await
-        .map_err(|e| e.to_string())?;
+    let id = ingest::probe_and_add(&state.db.engine, &path_buf).await?;
 
     queue_copy(state, id, path_buf);
 
     tracks::get(&state.db.engine, id)
         .await
-        .map_err(|e| e.to_string())
+        .map(|row| AddOutcome::Added(Box::new(row)))
+        .map_err(|e| ingest::IngestError::Db(anyhow::Error::from(e)))
 }
 
 /// Pick a folder and add every audio file under it (recursively) that
@@ -374,23 +440,104 @@ pub async fn update_track_metadata(
 
 #[tauri::command]
 pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
+    remove_track_from(&state.db.engine, track_id).await
+}
+
+/// Body of [`remove_track`], free of `tauri::State` so the bulk command
+/// and tests can drive it directly.
+pub async fn remove_track_from(
+    engine: &prax_sqlite::raw::SqliteRawEngine,
+    track_id: i64,
+) -> Result<(), String> {
     let sql = "DELETE FROM tracks WHERE id = ?";
-    state
-        .db
-        .engine
+    engine
         .raw_sql_execute(sql, &[FilterValue::Int(track_id)])
         .await
         .map_err(|e| e.to_string())?;
     // Leave no dangling playlist entry behind — SQLite reuses rowids,
     // so a stale id could later resolve to an unrelated track.
-    crate::db::playlists::prune_track(&state.db.engine, track_id)
+    crate::db::playlists::prune_track(engine, track_id)
         .await
         .map_err(|e| e.to_string())?;
     // Same hazard on the device manifest: a reused rowid would make an
     // unrelated track look already-synced at the old track's path.
-    crate::db::device_objects::detach_track(&state.db.engine, track_id)
+    crate::db::device_objects::detach_track(engine, track_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// What a bulk removal actually did.
+///
+/// The caller acts on `removed` — stopping playback, pruning the queue,
+/// forgetting cached state — so it has to be the ids that really went,
+/// not the ids that were asked for. Deleting is not all-or-nothing: a
+/// file on a read-only mount fails while its neighbours succeed.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct RemoveSummary {
+    pub removed: Vec<i64>,
+    /// Titles of tracks that could not be removed, for the UI to name.
+    pub failed: Vec<String>,
+}
+
+/// Remove several tracks from the library, leaving their files alone.
+#[tauri::command]
+pub async fn remove_tracks(
+    state: tauri::State<'_, AppState>,
+    track_ids: Vec<i64>,
+) -> Result<RemoveSummary, String> {
+    let mut summary = RemoveSummary::default();
+    for id in track_ids {
+        match remove_track_from(&state.db.engine, id).await {
+            Ok(()) => summary.removed.push(id),
+            Err(e) => {
+                log::warn!("remove_tracks: track {id}: {e}");
+                summary.failed.push(track_label(&state, id).await);
+            }
+        }
+    }
+    Ok(summary)
+}
+
+/// Send several tracks' files to the trash and drop their rows. A file
+/// that cannot be trashed keeps its row: the library should not claim
+/// to have deleted something that is still on disk.
+#[tauri::command]
+pub async fn trash_tracks(
+    state: tauri::State<'_, AppState>,
+    track_ids: Vec<i64>,
+) -> Result<RemoveSummary, String> {
+    let mut summary = RemoveSummary::default();
+    for id in track_ids {
+        match trash_one(&state, id).await {
+            Ok(()) => summary.removed.push(id),
+            Err(e) => {
+                log::warn!("trash_tracks: track {id}: {e}");
+                summary.failed.push(track_label(&state, id).await);
+            }
+        }
+    }
+    Ok(summary)
+}
+
+async fn trash_one(state: &AppState, track_id: i64) -> Result<(), String> {
+    let row = tracks::get(&state.db.engine, track_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Best-effort: send to trash. Already-missing files shouldn't block
+    // the DB cleanup.
+    if std::path::Path::new(&row.file_path).exists() {
+        trash::delete(&row.file_path).map_err(|e| e.to_string())?;
+    }
+    remove_track_from(&state.db.engine, track_id).await
+}
+
+/// A name for a track the UI can show in an error. Falls back to the
+/// id when the row is unreadable — which is often why it failed.
+async fn track_label(state: &AppState, track_id: i64) -> String {
+    match tracks::get(&state.db.engine, track_id).await {
+        Ok(row) => row.title,
+        Err(_) => format!("track {track_id}"),
+    }
 }
 
 /// Reveal the track's containing folder in the user's file manager
@@ -421,15 +568,7 @@ pub async fn show_in_files(state: tauri::State<'_, AppState>, track_id: i64) -> 
 
 #[tauri::command]
 pub async fn trash_track(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
-    let row = crate::db::tracks::get(&state.db.engine, track_id)
-        .await
-        .map_err(|e| e.to_string())?;
-    // Best-effort: send to trash. Already-missing files shouldn't block
-    // the DB cleanup.
-    if std::path::Path::new(&row.file_path).exists() {
-        trash::delete(&row.file_path).map_err(|e| e.to_string())?;
-    }
-    remove_track(state, track_id).await
+    trash_one(&state, track_id).await
 }
 
 #[cfg(test)]

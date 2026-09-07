@@ -755,12 +755,118 @@ async fn add_sync_source_command_inserts_and_returns_id() {
     assert_eq!(sources[0].name, "Test");
 }
 
+/// Build a tiny synthetic WAV that lofty will happily parse.
+fn write_minimal_wav(path: &std::path::Path) {
+    let bytes: &[u8] = &[
+        b'R', b'I', b'F', b'F', 0x26, 0, 0, 0, b'W', b'A', b'V', b'E', b'f', b'm', b't', b' ',
+        0x10, 0, 0, 0, 0x01, 0, 0x01, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 0x01, 0, 0x08, 0,
+        b'd', b'a', b't', b'a', 0x02, 0, 0, 0, 0x80, 0x80,
+    ];
+    std::fs::write(path, bytes).unwrap();
+}
+
+// The picker dialog cannot open under the mock runtime, so these drive
+// `add_picked_files` — the command body once the paths are known.
+
 #[tokio::test(flavor = "multi_thread")]
-async fn pick_and_add_track_returns_none_when_dialog_cancels() {
-    // Note: The blocking_pick_file dialog can't actually open in mock
-    // mode and may panic or block. We don't invoke the command here —
-    // the rest of library.rs is exercised elsewhere and the dialog
-    // path is integration-test territory only.
+async fn add_picked_files_reports_added_existing_and_unreadable_separately() {
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    let good = tmp.path().join("good.wav");
+    write_minimal_wav(&good);
+    let broken = tmp.path().join("broken.flac");
+    std::fs::write(&broken, b"not audio").unwrap();
+
+    let first =
+        commands::library::add_picked_files(&state, vec![good.clone(), broken.clone()]).await;
+    assert_eq!(first.added.len(), 1, "{first:?}");
+    assert_eq!(first.existing, 0);
+    assert_eq!(first.failed, vec!["broken.flac".to_string()]);
+
+    // Re-picking the same file must not add or copy it a second time.
+    let second = commands::library::add_picked_files(&state, vec![good]).await;
+    assert!(second.added.is_empty(), "{second:?}");
+    assert_eq!(second.existing, 1);
+
+    let n: i64 = state
+        .db
+        .engine
+        .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "a re-picked file was added twice");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn add_picked_files_keeps_going_past_a_pick_it_cannot_resolve() {
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    let good = tmp.path().join("good.wav");
+    write_minimal_wav(&good);
+
+    // An empty path stands for a pick the portal could not turn into
+    // one (a remote URL). It must not cost the user the rest.
+    let summary =
+        commands::library::add_picked_files(&state, vec![std::path::PathBuf::new(), good]).await;
+    assert_eq!(summary.added.len(), 1, "{summary:?}");
+    assert_eq!(summary.failed.len(), 1, "{summary:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remove_tracks_reports_the_ids_that_actually_went() {
+    let (app, tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    let good = tmp.path().join("good.wav");
+    write_minimal_wav(&good);
+    let summary = commands::library::add_picked_files(&state, vec![good]).await;
+    let id = summary.added[0].id;
+
+    let removed = commands::library::remove_tracks(app.state::<AppState>(), vec![id, 9999])
+        .await
+        .unwrap();
+    // A row that is not there is already in the desired state; only a
+    // real failure belongs in `failed`.
+    assert!(removed.removed.contains(&id), "{removed:?}");
+
+    let n: i64 = state
+        .db
+        .engine
+        .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
+        .await
+        .unwrap();
+    assert_eq!(n, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn trash_tracks_keeps_the_row_when_the_file_cannot_be_trashed() {
+    let (app, _tmp) = fixture().await;
+    let state = app.state::<AppState>();
+
+    // A row pointing at a path under a directory that does not exist:
+    // the file is already gone, so trashing is a no-op and the row goes.
+    let id: i64 = state
+        .db
+        .engine
+        .raw_sql_first(
+            "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+             VALUES ('Gone', 100, 44, '/nonexistent/gone.flac', '[]') RETURNING id",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .unwrap();
+
+    let summary = commands::library::trash_tracks(app.state::<AppState>(), vec![id])
+        .await
+        .unwrap();
+    assert_eq!(summary.removed, vec![id], "{summary:?}");
+    assert!(summary.failed.is_empty(), "{summary:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
