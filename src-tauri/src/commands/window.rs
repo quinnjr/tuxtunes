@@ -1,4 +1,4 @@
-//! Window-chrome and app-lifetime commands.
+//! Window-chrome support commands.
 //!
 //! The frontend decides whether to draw its own caption buttons and
 //! hairline border per platform. The webview user agent is a fair
@@ -12,12 +12,15 @@ pub fn host_os() -> &'static str {
     std::env::consts::OS
 }
 
-/// Quit the whole app.
+/// Quit the app, the same way the tray's Quit item and MPRIS's `Quit`
+/// method do — through the shared shutdown, so playback is stopped and
+/// what it owes the database is written before the process ends.
 ///
-/// Not the same as closing the window: the tray keeps running when the
-/// window goes, so File ▸ Exit has to end the process the way the
-/// tray's own Quit does.
+/// Closing the window quits too (nothing holds the app open once the
+/// last window is destroyed); this is the menu's way of asking for the
+/// same thing.
 #[tauri::command]
-pub fn quit_app(app: tauri::AppHandle) {
-    app.exit(0);
+pub async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
+    crate::integration::lifecycle::shutdown(&app).await;
+    Ok(())
 }

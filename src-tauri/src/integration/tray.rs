@@ -98,7 +98,7 @@ fn handle_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
             let _ = app.emit(EVT_TRAY_PREV, ());
         }
         ID_SHOW => toggle_main_window(app),
-        ID_QUIT => app.exit(0),
+        ID_QUIT => crate::integration::lifecycle::shutdown_soon(app),
         _ => {}
     }
 }

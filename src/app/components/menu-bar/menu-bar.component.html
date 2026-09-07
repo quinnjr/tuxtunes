@@ -8,23 +8,30 @@
   the bar pads past them; on Linux/Windows our caption buttons sit
   flush against the right edge, so the bar drops its right padding.
 -->
+<!--
+  Outside-click catcher. It lives OUTSIDE the nav on purpose:
+  `.mac-toolbar` sets `backdrop-filter`, which makes the nav the
+  containing block for its fixed-position descendants, so `inset-0`
+  inside it would resolve to a 32px-tall strip instead of the viewport
+  and clicks in the track list would never close the menu. Escape is
+  handled on the component host — a div with no tabindex is never on
+  the key event path.
+-->
+@if (openMenu() !== null) {
+  <div
+    data-tauri-drag-region="false"
+    class="fixed inset-0 z-30"
+    role="presentation"
+    (click)="close()"
+  ></div>
+}
+
 <nav
   data-tauri-drag-region="deep"
   class="mac-toolbar relative z-40 flex h-8 shrink-0 select-none items-center gap-1 pl-2 pr-2 text-body text-text-secondary"
   [class.pl-20]="win.nativeTrafficLights()"
   [class.pr-0]="win.customControls()"
 >
-  <!-- Outside-click / Escape catcher; only mounted while a menu is open. -->
-  @if (openMenu() !== null) {
-    <div
-      data-tauri-drag-region="false"
-      class="fixed inset-0 z-30"
-      role="presentation"
-      (click)="close()"
-      (keydown.escape)="close()"
-    ></div>
-  }
-
   <div class="relative z-40">
     <button
       type="button"
@@ -74,15 +81,20 @@
           <fa-icon [icon]="faFileImport" />
           Import iTunes library…
         </button>
-        <div class="hairline-t my-1"></div>
-        <button
-          type="button"
-          (click)="exit()"
-          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
-        >
-          <fa-icon [icon]="faExit" />
-          Exit
-        </button>
+        @if (win.available) {
+          <div class="my-1 h-px bg-border" role="separator"></div>
+          <button
+            type="button"
+            (click)="exit()"
+            class="mac-btn flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-text-primary"
+          >
+            <span class="flex items-center gap-2">
+              <fa-icon [icon]="faExit" />
+              Exit
+            </span>
+            <span class="text-caption text-text-muted">Ctrl+Q</span>
+          </button>
+        }
       </div>
     }
   </div>

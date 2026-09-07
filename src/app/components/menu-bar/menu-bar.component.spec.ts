@@ -17,6 +17,8 @@ interface MenuBarInternals {
   importItunes(): void;
   openPreferences(): void;
   exit(): Promise<void>;
+  onEscape(): void;
+  onQuitShortcut(event: Event): void;
 }
 
 function setup(extraProviders: Provider[] = []) {
@@ -184,26 +186,107 @@ describe('MenuBarComponent', () => {
     });
   });
 
-  it('exit() quits the app and closes the menu', async () => {
-    const { cmp, stub } = setup();
-    cmp.toggle('file');
+  describe('Exit', () => {
+    /** A WindowService that reports the app is running under Tauri. */
+    const inTauri = (quit = vi.fn().mockResolvedValue(undefined)) => ({
+      provide: WindowService,
+      useValue: {
+        available: true,
+        nativeTrafficLights: signal(false),
+        customControls: signal(true),
+        maximized: signal(false),
+        fullscreen: signal(false),
+        quit,
+      },
+    });
 
-    await cmp.exit();
+    /** The File menu's Exit button, or null when it is not rendered. */
+    const exitButton = (host: HTMLElement): HTMLButtonElement | null =>
+      [...host.querySelectorAll<HTMLButtonElement>('[role="menu"] button')].find((b) =>
+        (b.textContent ?? '').includes('Exit'),
+      ) ?? null;
 
-    expect(cmp.openMenu()).toBeNull();
-    // Not window.close(): the tray outlives a closed window, so the
-    // process has to be ended on the backend.
-    expect(stub.invoke).toHaveBeenCalledWith('quit_app');
+    it('is in the File menu, after a separator, with its accelerator', () => {
+      const { fixture, cmp } = setup([inTauri()]);
+      cmp.toggle('file');
+      fixture.detectChanges();
+
+      const host = fixture.nativeElement as HTMLElement;
+      const button = exitButton(host);
+      expect(button).not.toBeNull();
+      expect(button?.textContent).toContain('Ctrl+Q');
+      // A role-less div in a role="menu" is announced as a nameless row.
+      expect(button?.previousElementSibling?.getAttribute('role')).toBe('separator');
+    });
+
+    it('clicking it quits and closes the menu', () => {
+      const quit = vi.fn().mockResolvedValue(undefined);
+      const { fixture, cmp } = setup([inTauri(quit)]);
+      cmp.toggle('file');
+      fixture.detectChanges();
+
+      exitButton(fixture.nativeElement as HTMLElement)?.click();
+
+      expect(quit).toHaveBeenCalled();
+      expect(cmp.openMenu()).toBeNull();
+    });
+
+    it('is not offered in a plain browser, where it could only fail', () => {
+      const { fixture, cmp } = setup();
+      cmp.toggle('file');
+      fixture.detectChanges();
+      expect(exitButton(fixture.nativeElement as HTMLElement)).toBeNull();
+    });
+
+    it('reports a refused quit instead of leaving the menu open', async () => {
+      const quit = vi.fn().mockRejectedValue(new Error('no window'));
+      const { cmp, ui } = setup([inTauri(quit)]);
+      cmp.toggle('file');
+
+      await cmp.exit();
+
+      expect(cmp.openMenu()).toBeNull();
+      expect(ui.lastError()).toBe('no window');
+    });
+
+    it('Ctrl+Q quits, but not while the user is typing', () => {
+      const quit = vi.fn().mockResolvedValue(undefined);
+      const { cmp } = setup([inTauri(quit)]);
+
+      cmp.onQuitShortcut({
+        target: document.createElement('input'),
+        preventDefault: vi.fn(),
+      } as unknown as Event);
+      expect(quit).not.toHaveBeenCalled();
+
+      cmp.onQuitShortcut({
+        target: document.body,
+        preventDefault: vi.fn(),
+      } as unknown as Event);
+      expect(quit).toHaveBeenCalled();
+    });
   });
 
-  it('exit() reports a refused quit instead of leaving the menu open', async () => {
-    const { cmp, ui, win } = setup();
-    vi.spyOn(win, 'quit').mockRejectedValue(new Error('no window'));
+  it('Escape closes an open menu', () => {
+    const { cmp } = setup();
     cmp.toggle('file');
-
-    await cmp.exit();
-
+    // The click catcher has no tabindex and is not an ancestor of the
+    // menu, so this has to be handled on the host to work at all.
+    cmp.onEscape();
     expect(cmp.openMenu()).toBeNull();
-    expect(ui.lastError()).toBe('no window');
+  });
+
+  it('keeps the click catcher outside the backdrop-filtered nav', () => {
+    const { fixture, cmp } = setup();
+    cmp.toggle('file');
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    const catcher = host.querySelector('[role="presentation"]');
+    expect(catcher).not.toBeNull();
+    // .mac-toolbar sets backdrop-filter, which would make the nav the
+    // containing block for a fixed-position child: inset-0 would then
+    // cover the toolbar strip instead of the viewport.
+    expect(catcher?.closest('nav')).toBeNull();
   });
 });

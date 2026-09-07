@@ -1,4 +1,4 @@
-import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, HostListener, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import {
   faFileImport,
@@ -49,6 +49,31 @@ export class MenuBarComponent {
 
   protected close(): void {
     this.openMenu.set(null);
+  }
+
+  /**
+   * Escape closes an open menu. Bound on document, not on the
+   * click-catcher: that div has no tabindex and is not an ancestor of
+   * the menu, so a keydown never reaches it — the same reason
+   * ContextMenuComponent binds this on the host.
+   */
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    this.close();
+  }
+
+  /**
+   * Ctrl+Q quits, the accelerator every Linux desktop uses. Suppressed
+   * while typing so it cannot fire from the search box.
+   */
+  @HostListener('document:keydown.control.q', ['$event'])
+  onQuitShortcut(event: Event): void {
+    const el = event.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+      return;
+    }
+    event.preventDefault();
+    void this.exit();
   }
 
   protected async addFile(): Promise<void> {

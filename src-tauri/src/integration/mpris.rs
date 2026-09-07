@@ -424,7 +424,7 @@ pub async fn install_with_bus_name<R: Runtime>(
 
     let quit_app = app.clone();
     let quit: WindowFn = Arc::new(move || {
-        quit_app.exit(0);
+        crate::integration::lifecycle::shutdown_soon(&quit_app);
     });
 
     let media_player = MediaPlayer2 { raise, quit };

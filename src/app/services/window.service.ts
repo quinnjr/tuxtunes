@@ -128,11 +128,14 @@ export class WindowService {
   }
 
   /**
-   * End the app, not just the window. The tray outlives a closed
-   * window, so quitting has to go through the backend — the same
-   * `app.exit(0)` the tray's own Quit item uses.
+   * End the app. Goes through the backend rather than closing the
+   * window so playback is stopped and what it owes the database is
+   * written first — the same shutdown the tray's Quit item runs.
+   *
+   * Inert outside the Tauri webview, like every other control here.
    */
   async quit(): Promise<void> {
+    if (!this.available) return;
     await this.tauri.invoke<void>('quit_app');
   }
 
