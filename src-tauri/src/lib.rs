@@ -94,6 +94,7 @@ pub fn run() {
             commands::preferences::get_keep_organized,
             commands::preferences::set_keep_organized,
             commands::preferences::reorganize_track,
+            commands::preferences::consolidate_library,
         ])
         .setup(move |app| {
             let dir = data_dir(app);

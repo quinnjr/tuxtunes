@@ -13,6 +13,8 @@ pub const INGEST_COMPLETE: &str = "fs:ingest-complete";
 pub const INGEST_FAILED: &str = "fs:ingest-failed";
 pub const ORGANIZE_APPLIED: &str = "fs:organize-applied";
 pub const ORGANIZE_FAILED: &str = "fs:organize-failed";
+pub const CONSOLIDATE_PROGRESS: &str = "fs:consolidate-progress";
+pub const CONSOLIDATE_COMPLETE: &str = "fs:consolidate-complete";
 pub const VERIFY_PROGRESS: &str = "fs:verify-progress";
 pub const VERIFY_COMPLETE: &str = "fs:verify-complete";
 pub const VERIFY_FAILED: &str = "fs:verify-failed";
@@ -55,6 +57,24 @@ pub struct OrganizeFailed {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ConsolidateProgress {
+    pub current: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConsolidateComplete {
+    pub total: u64,
+    /// Files moved within the library root to match the scheme.
+    pub moved: u64,
+    /// Files copied in from outside the library root.
+    pub copied: u64,
+    /// Files already at the path the scheme asks for.
+    pub in_place: u64,
+    pub failed: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct VerifyProgress {
     pub current: u64,
     pub total: u64,
@@ -85,6 +105,8 @@ mod tests {
         assert_eq!(INGEST_FAILED, "fs:ingest-failed");
         assert_eq!(ORGANIZE_APPLIED, "fs:organize-applied");
         assert_eq!(ORGANIZE_FAILED, "fs:organize-failed");
+        assert_eq!(CONSOLIDATE_PROGRESS, "fs:consolidate-progress");
+        assert_eq!(CONSOLIDATE_COMPLETE, "fs:consolidate-complete");
         assert_eq!(VERIFY_PROGRESS, "fs:verify-progress");
         assert_eq!(VERIFY_COMPLETE, "fs:verify-complete");
         assert_eq!(VERIFY_FAILED, "fs:verify-failed");
