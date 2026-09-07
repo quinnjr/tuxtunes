@@ -3,6 +3,7 @@
 //! Each submodule is gated behind a setup entry point that lib.rs
 //! calls during setup so failures don't block app launch.
 
+pub mod lifecycle;
 pub mod mpris;
 pub mod notify;
 pub mod tray;

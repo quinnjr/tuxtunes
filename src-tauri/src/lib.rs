@@ -63,6 +63,7 @@ pub fn run() {
             commands::audio::set_audio_device,
             commands::audio::get_audio_prefs,
             commands::window::host_os,
+            commands::window::quit_app,
             commands::sync::list_sync_sources,
             commands::sync::add_sync_source,
             commands::sync::run_sync_now,

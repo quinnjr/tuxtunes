@@ -11,3 +11,16 @@
 pub fn host_os() -> &'static str {
     std::env::consts::OS
 }
+
+/// Quit the app, the same way the tray's Quit item and MPRIS's `Quit`
+/// method do — through the shared shutdown, so playback is stopped and
+/// what it owes the database is written before the process ends.
+///
+/// Closing the window quits too (nothing holds the app open once the
+/// last window is destroyed); this is the menu's way of asking for the
+/// same thing.
+#[tauri::command]
+pub async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
+    crate::integration::lifecycle::shutdown(&app).await;
+    Ok(())
+}

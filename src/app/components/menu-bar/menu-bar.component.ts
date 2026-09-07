@@ -1,10 +1,11 @@
-import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, HostListener, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import {
   faFileImport,
   faFolderPlus,
   faGear,
   faPlus,
+  faRightFromBracket,
   faWandMagicSparkles,
 } from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
@@ -37,6 +38,7 @@ export class MenuBarComponent {
   protected readonly faWand = faWandMagicSparkles;
   protected readonly faFileImport = faFileImport;
   protected readonly faGear = faGear;
+  protected readonly faExit = faRightFromBracket;
 
   /** Which top-level menu is open, if any. Null closes every dropdown. */
   protected readonly openMenu = signal<MenuId | null>(null);
@@ -47,6 +49,31 @@ export class MenuBarComponent {
 
   protected close(): void {
     this.openMenu.set(null);
+  }
+
+  /**
+   * Escape closes an open menu. Bound on document, not on the
+   * click-catcher: that div has no tabindex and is not an ancestor of
+   * the menu, so a keydown never reaches it — the same reason
+   * ContextMenuComponent binds this on the host.
+   */
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    this.close();
+  }
+
+  /**
+   * Ctrl+Q quits, the accelerator every Linux desktop uses. Suppressed
+   * while typing so it cannot fire from the search box.
+   */
+  @HostListener('document:keydown.control.q', ['$event'])
+  onQuitShortcut(event: Event): void {
+    const el = event.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+      return;
+    }
+    event.preventDefault();
+    void this.exit();
   }
 
   protected async addFile(): Promise<void> {
@@ -80,6 +107,11 @@ export class MenuBarComponent {
         ? `Could not read ${name}${tail}.`
         : `Added ${handled}; could not read ${name}${tail}.`,
     );
+  }
+
+  protected async exit(): Promise<void> {
+    this.close();
+    await this.ui.guard(this.win.quit());
   }
 
   protected newSmartPlaylist(): void {
