@@ -120,14 +120,31 @@ fn toggle_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let visible = window.is_visible().unwrap_or(false);
-    let res = if visible {
-        window.hide()
+    if window.is_visible().unwrap_or(false) {
+        if let Err(e) = window.hide() {
+            log::warn!("toggle main window: {e}");
+        }
     } else {
-        window.show().and_then(|()| window.set_focus())
+        reveal_main_window(app);
+    }
+}
+
+/// Put the main window in front of the user, wherever it was: hidden to
+/// the tray, minimized, or simply behind something else.
+///
+/// `unminimize` first because `show` on a minimized window leaves it
+/// minimized on most Linux window managers — it would come back with no
+/// visible change, which reads as the app having ignored the request.
+pub fn reveal_main_window<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
     };
+    let res = window
+        .unminimize()
+        .and_then(|()| window.show())
+        .and_then(|()| window.set_focus());
     if let Err(e) = res {
-        log::warn!("toggle main window: {e}");
+        log::warn!("reveal main window: {e}");
     }
 }
 
