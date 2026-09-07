@@ -69,6 +69,13 @@ interface PlaylistRaw {
   sync_source_id: number | null;
 }
 
+/** Payload of the backend's `fs:ingest-complete` event. */
+interface IngestCompleteRaw {
+  track_id: number;
+  managed_path: string;
+  artwork_path: string | null;
+}
+
 export interface AddFolderSummary {
   added: number;
   skipped: number;
@@ -144,6 +151,7 @@ export class LibraryService implements OnDestroy {
   private readonly tauri = inject(TauriService);
 
   #unlistenExternal: (() => void) | null = null;
+  #unlistenIngest: (() => void) | null = null;
 
   constructor() {
     // The backend polls the database for commits made by other
@@ -162,11 +170,40 @@ export class LibraryService implements OnDestroy {
       .then((off) => {
         this.#unlistenExternal = off;
       });
+
+    // Newly added files are copied into the managed library folder in
+    // the background, which rewrites their file_path. Patch the loaded
+    // rows in place rather than refreshing — a folder import emits one
+    // event per track.
+    void this.tauri
+      .listen<IngestCompleteRaw>('fs:ingest-complete', (e) => {
+        this.#applyIngestResult(e);
+      })
+      .then((off) => {
+        this.#unlistenIngest = off;
+      });
   }
 
   ngOnDestroy(): void {
     this.#unlistenExternal?.();
     this.#unlistenExternal = null;
+    this.#unlistenIngest?.();
+    this.#unlistenIngest = null;
+  }
+
+  /** Point a loaded row at the file's new home under the library root. */
+  #applyIngestResult(e: IngestCompleteRaw): void {
+    this.tracks.update((rows) => {
+      const i = rows.findIndex((r) => r.id === e.track_id);
+      if (i === -1) return rows;
+      const next = [...rows];
+      next[i] = {
+        ...next[i],
+        filePath: e.managed_path,
+        artworkPath: e.artwork_path ?? next[i].artworkPath,
+      };
+      return next;
+    });
   }
 
   readonly stats = signal<LibraryStats | null>(null);

@@ -212,6 +212,14 @@ pub async fn pick_and_add_track(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Copy the file into the managed library root. The worker rewrites
+    // `file_path` when it lands, so the row we return here still points
+    // at the source; the UI picks up the managed path from
+    // `fs:ingest-complete`.
+    if let Err(e) = state.fs.copy_for_track(id, path_buf) {
+        log::warn!("pick_and_add_track: could not queue copy for track {id}: {e}");
+    }
+
     let row = tracks::get(&state.db.engine, id)
         .await
         .map_err(|e| e.to_string())?;
@@ -232,10 +240,20 @@ pub async fn pick_and_add_folder(
         return Ok(None);
     };
     let dir = folder.into_path().map_err(|e| e.to_string())?;
-    ingest::add_folder(&state.db.engine, &dir)
+    let mut summary = ingest::add_folder(&state.db.engine, &dir)
         .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // Queue every newly added file for copy into the managed library
+    // root. `added_tracks` is `#[serde(skip)]`, so draining it here
+    // keeps it out of the payload the UI sees.
+    for (id, source) in std::mem::take(&mut summary.added_tracks) {
+        if let Err(e) = state.fs.copy_for_track(id, source) {
+            log::warn!("pick_and_add_folder: could not queue copy for track {id}: {e}");
+        }
+    }
+
+    Ok(Some(summary))
 }
 
 /// Runs the verify walk and reports failures on the `fs:verify-failed`

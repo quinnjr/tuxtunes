@@ -136,3 +136,86 @@ async fn ingest_emits_failure_and_marks_missing_source_when_unreadable() {
     let row = tuxtunes::db::tracks::get(&db.engine, row_id).await.unwrap();
     assert_eq!(row.import_status, "missing_source");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ingest_leaves_a_file_already_under_the_library_root_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("tuxtunes.db");
+    let lib_root = tmp.path().join("lib");
+    std::fs::create_dir_all(lib_root.join("Someone/Album")).unwrap();
+
+    // The user added a file that already lives inside the managed root.
+    // Copying it would leave a duplicate, so ingest must keep the path
+    // and only fill in the hash.
+    let src = lib_root.join("Someone/Album/01 - Song.flac");
+    std::fs::write(&src, vec![0xABu8; 1024]).unwrap();
+
+    let db = tuxtunes::db::Db::open(&db_path).await.unwrap();
+    tuxtunes::db::preferences::set_library_root(&db.engine, &lib_root)
+        .await
+        .unwrap();
+
+    let row_id: i64 = {
+        let v = db
+            .engine
+            .raw_sql_first(
+                "INSERT INTO tracks (title, artist, album, duration_ms, \
+                 size_bytes, file_path, playlist_ids) VALUES \
+                 ('Song', 'Someone', 'Album', 100, 1024, ?, '[]') RETURNING id",
+                &[prax_query::filter::FilterValue::String(
+                    src.display().to_string(),
+                )],
+            )
+            .await
+            .unwrap()
+            .into_json();
+        v.get("id").and_then(|n| n.as_i64()).unwrap()
+    };
+
+    let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
+    let handle = app.handle().clone();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.handle()
+        .listen(tuxtunes::fs::events::INGEST_COMPLETE, move |event| {
+            let _ = tx.send(event.payload().to_string());
+        });
+
+    let fs = tuxtunes::fs::coordinator::FsCoordinator::new(Arc::clone(&db.engine), handle);
+    fs.copy_for_track(row_id, src.clone()).unwrap();
+
+    tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        .await
+        .expect("fs:ingest-complete within 10s")
+        .expect("channel open");
+
+    let row = tuxtunes::db::tracks::get(&db.engine, row_id).await.unwrap();
+    assert_eq!(row.file_path, src.display().to_string());
+    assert!(row.file_hash.is_some(), "hash should still be recorded");
+
+    let original: Option<String> = db
+        .engine
+        .raw_sql_first(
+            "SELECT original_path FROM tracks WHERE id = ?",
+            &[prax_query::filter::FilterValue::Int(row_id)],
+        )
+        .await
+        .unwrap()
+        .into_json()
+        .get("original_path")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    assert_eq!(original, None, "no copy was made, so no original");
+
+    // Exactly one file under the album directory — no duplicate copy.
+    let entries: Vec<_> = std::fs::read_dir(lib_root.join("Someone/Album"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "flac"))
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "ingest duplicated an already-managed file"
+    );
+}

@@ -1,7 +1,9 @@
 //! Probe an audio file with `lofty` and insert a minimal `Track` row.
 //!
-//! Files are not copied into a managed library root; `file_path` points at
-//! the user-picked source file.
+//! The row's `file_path` starts out pointing at the user-picked source
+//! file. Callers that want the file living under the managed library
+//! root hand the new id to [`crate::fs::coordinator::FsCoordinator::copy_for_track`],
+//! which copies it into place and rewrites `file_path`.
 
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
@@ -180,6 +182,11 @@ pub struct AddFolderSummary {
     pub skipped: u64,
     /// Files lofty could not read; listed so the user can see which.
     pub failed: Vec<String>,
+    /// Row ids of the tracks just inserted, paired with the source path
+    /// each came from, so the caller can queue them for copy-on-add.
+    /// Not part of the UI payload.
+    #[serde(skip)]
+    pub added_tracks: Vec<(i64, std::path::PathBuf)>,
 }
 
 /// Every `file_path` already registered under `dir`, loaded once so
@@ -231,7 +238,10 @@ pub async fn add_folder(
             continue;
         }
         match probe_and_add(engine, &path).await {
-            Ok(_) => summary.added += 1,
+            Ok(id) => {
+                summary.added += 1;
+                summary.added_tracks.push((id, path));
+            }
             Err(IngestError::Probe { path, source }) => {
                 log::warn!("add_folder: skipping {path}: {source}");
                 summary.failed.push(path);
@@ -396,6 +406,23 @@ mod tests {
         assert_eq!(summary.skipped, 1);
         assert_eq!(summary.failed.len(), 1);
         assert!(summary.failed[0].ends_with("broken.flac"));
+
+        // The ids + source paths the caller hands to copy-on-add: one
+        // per newly added file, never the skipped or failed ones.
+        assert_eq!(summary.added_tracks.len(), 2);
+        let mut sources: Vec<_> = summary
+            .added_tracks
+            .iter()
+            .map(|(_, p)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        sources.sort();
+        assert_eq!(sources, vec!["01.WAV", "02.wav"]);
+        assert!(summary.added_tracks.iter().all(|(id, _)| *id > 0));
+
+        // `added_tracks` is internal plumbing, not part of the payload
+        // the UI receives.
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(json.get("added_tracks").is_none(), "{json}");
 
         let n: i64 = db
             .engine

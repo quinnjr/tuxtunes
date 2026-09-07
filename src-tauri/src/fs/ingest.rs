@@ -84,30 +84,39 @@ async fn ingest_one<R: Runtime>(
     let root = preferences::get_library_root(engine).await?;
     let scheme = preferences::get_organize_scheme(engine).await?;
 
-    let rel = render(&scheme, &TrackFields::from_track_row(&row, source_path))?;
+    // A file the user added from inside the library root is already
+    // where it belongs. Copying it would leave a duplicate next to the
+    // original, so keep the path and just record hash/artwork below.
+    let already_managed = source_path.starts_with(&root);
 
-    let target_abs = resolve_collision(&root.join(&rel));
-    if let Some(parent) = target_abs.parent() {
-        let parent = parent.to_path_buf();
-        tokio::task::spawn_blocking(move || std::fs::create_dir_all(parent)).await??;
-    }
+    let target_abs = if already_managed {
+        source_path.to_path_buf()
+    } else {
+        let rel = render(&scheme, &TrackFields::from_track_row(&row, source_path))?;
+        let target_abs = resolve_collision(&root.join(&rel));
+        if let Some(parent) = target_abs.parent() {
+            let parent = parent.to_path_buf();
+            tokio::task::spawn_blocking(move || std::fs::create_dir_all(parent)).await??;
+        }
 
-    tokio::task::spawn_blocking({
-        let src = source_path.to_path_buf();
-        let dst = target_abs.clone();
-        move || std::fs::copy(&src, &dst)
-    })
-    .await??;
+        tokio::task::spawn_blocking({
+            let src = source_path.to_path_buf();
+            let dst = target_abs.clone();
+            move || std::fs::copy(&src, &dst)
+        })
+        .await??;
 
-    let target_hash = tokio::task::spawn_blocking({
-        let p = target_abs.clone();
-        move || hash::hash_file(&p)
-    })
-    .await??;
-    if target_hash != source_hash {
-        let _ = std::fs::remove_file(&target_abs);
-        anyhow::bail!("copy hash mismatch — target deleted");
-    }
+        let target_hash = tokio::task::spawn_blocking({
+            let p = target_abs.clone();
+            move || hash::hash_file(&p)
+        })
+        .await??;
+        if target_hash != source_hash {
+            let _ = std::fs::remove_file(&target_abs);
+            anyhow::bail!("copy hash mismatch — target deleted");
+        }
+        target_abs
+    };
 
     let artwork_result = tokio::task::spawn_blocking({
         let p = target_abs.clone();
@@ -120,12 +129,16 @@ async fn ingest_one<R: Runtime>(
 
     let artwork_str = artwork.as_ref().map(|p| p.display().to_string());
 
+    // `original_path` records where a copied file came from; for one
+    // that was already managed there is no separate original.
+    let original = (!already_managed).then(|| source_path.display().to_string());
+
     tracks::set_file_paths(
         engine,
         track_id,
         &target_abs.display().to_string(),
-        Some(&source_path.display().to_string()),
-        &hash::hash_hex(target_hash),
+        original.as_deref(),
+        &hash::hash_hex(source_hash),
         artwork_str.as_deref(),
     )
     .await?;
