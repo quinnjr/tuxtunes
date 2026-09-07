@@ -1,8 +1,11 @@
+import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { App } from './app';
+import { App, VIEW_KEY } from './app';
 import { LibraryService } from './services/library.service';
+import { PlaybackService } from './services/playback.service';
 import { UiService } from './services/ui.service';
+import { WindowService } from './services/window.service';
 import { appProviders, tauriStub } from './test-helpers';
 
 describe('App', () => {
@@ -17,6 +20,186 @@ describe('App', () => {
     const spy = vi.spyOn(library, 'refreshStats').mockResolvedValue();
     fixture.detectChanges();
     expect(spy).toHaveBeenCalled();
+  });
+
+  describe('media keys', () => {
+    function setup() {
+      const stub = tauriStub();
+      TestBed.configureTestingModule({
+        imports: [App],
+        providers: appProviders(stub),
+      });
+      const fixture = TestBed.createComponent(App);
+      fixture.detectChanges();
+      const playback = TestBed.inject(PlaybackService);
+      const spies = {
+        togglePlay: vi.spyOn(playback, 'togglePlay').mockResolvedValue(),
+        pause: vi.spyOn(playback, 'pause').mockResolvedValue(),
+        stop: vi.spyOn(playback, 'stop').mockResolvedValue(),
+        next: vi.spyOn(playback, 'next').mockResolvedValue(null),
+        previous: vi.spyOn(playback, 'previous').mockResolvedValue(),
+      };
+      return { fixture, spies };
+    }
+
+    function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+      const event = new KeyboardEvent('keydown', { key, cancelable: true, bubbles: true, ...init });
+      document.dispatchEvent(event);
+      return event;
+    }
+
+    it.each([
+      ['MediaPlayPause', 'togglePlay'],
+      ['MediaPlay', 'togglePlay'],
+      ['MediaPause', 'pause'],
+      ['MediaStop', 'stop'],
+      ['MediaTrackNext', 'next'],
+      ['MediaTrackPrevious', 'previous'],
+    ] as const)('%s drives playback.%s', (key, method) => {
+      const { spies } = setup();
+      const event = press(key);
+      for (const [name, spy] of Object.entries(spies)) {
+        expect(spy).toHaveBeenCalledTimes(name === method ? 1 : 0);
+      }
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('ignores ordinary keys', () => {
+      const { spies } = setup();
+      const event = press(' ');
+      for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    it('acts once for a held key', () => {
+      const { spies } = setup();
+      press('MediaTrackNext');
+      press('MediaTrackNext', { repeat: true });
+      press('MediaTrackNext', { repeat: true });
+      expect(spies.next).toHaveBeenCalledOnce();
+    });
+
+    it('is not swallowed by a dialog that stops propagation', () => {
+      const { spies } = setup();
+      const input = document.createElement('input');
+      input.addEventListener('keydown', (e) => e.stopPropagation());
+      document.body.append(input);
+      const event = new KeyboardEvent('keydown', {
+        key: 'MediaPlay',
+        cancelable: true,
+        bubbles: true,
+      });
+      input.dispatchEvent(event);
+      input.remove();
+      expect(spies.togglePlay).toHaveBeenCalledOnce();
+    });
+
+    it('stops listening once the component is destroyed', () => {
+      const { fixture, spies } = setup();
+      fixture.destroy();
+      press('MediaStop');
+      expect(spies.stop).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('F11', () => {
+    function setupWithWindow(customControls: boolean) {
+      const stub = tauriStub();
+      const win = {
+        customControls: signal(customControls),
+        nativeTrafficLights: signal(false),
+        hairline: signal(false),
+        maximized: signal(false),
+        fullscreen: signal(false),
+        toggleFullscreen: vi.fn(async () => undefined),
+      };
+      TestBed.configureTestingModule({
+        imports: [App],
+        providers: [...appProviders(stub), { provide: WindowService, useValue: win }],
+      });
+      const fixture = TestBed.createComponent(App);
+      fixture.detectChanges();
+      const cmp = fixture.componentInstance as unknown as {
+        onFullscreenKey(e: Event): void;
+      };
+      return { cmp, win };
+    }
+
+    it('toggles fullscreen where the app draws its own window controls', () => {
+      const { cmp, win } = setupWithWindow(true);
+      const event = new KeyboardEvent('keydown', { key: 'F11', cancelable: true });
+      cmp.onFullscreenKey(event);
+      expect(win.toggleFullscreen).toHaveBeenCalledOnce();
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('is left to the OS where the window chrome is native', () => {
+      const { cmp, win } = setupWithWindow(false);
+      const event = new KeyboardEvent('keydown', { key: 'F11', cancelable: true });
+      cmp.onFullscreenKey(event);
+      expect(win.toggleFullscreen).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+    });
+  });
+
+  it('suppresses the native context menu on ordinary elements', () => {
+    const stub = tauriStub();
+    TestBed.configureTestingModule({ imports: [App], providers: appProviders(stub) });
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const cmp = fixture.componentInstance as unknown as {
+      onDocumentContextMenu(e: MouseEvent): void;
+    };
+    const preventDefault = vi.fn();
+    const div = document.createElement('div');
+    cmp.onDocumentContextMenu({ target: div, preventDefault } as unknown as MouseEvent);
+    expect(preventDefault).toHaveBeenCalled();
+  });
+
+  it('keeps the native context menu on editable elements', () => {
+    const stub = tauriStub();
+    TestBed.configureTestingModule({ imports: [App], providers: appProviders(stub) });
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const cmp = fixture.componentInstance as unknown as {
+      onDocumentContextMenu(e: MouseEvent): void;
+    };
+    const editableDiv = document.createElement('div');
+    // jsdom never implements the isContentEditable getter; define the
+    // property outright so the test exercises the real branch.
+    Object.defineProperty(editableDiv, 'isContentEditable', { value: true });
+    for (const el of [
+      document.createElement('input'),
+      document.createElement('textarea'),
+      editableDiv,
+    ]) {
+      const preventDefault = vi.fn();
+      cmp.onDocumentContextMenu({ target: el, preventDefault } as unknown as MouseEvent);
+      expect(preventDefault, el.tagName).not.toHaveBeenCalled();
+    }
+  });
+
+  it('keeps the native context menu while text is selected, for right-click copy', () => {
+    const stub = tauriStub();
+    TestBed.configureTestingModule({ imports: [App], providers: appProviders(stub) });
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const cmp = fixture.componentInstance as unknown as {
+      onDocumentContextMenu(e: MouseEvent): void;
+    };
+    const getSelection = vi
+      .spyOn(globalThis, 'getSelection')
+      .mockReturnValue({ isCollapsed: false, toString: () => 'some text' } as unknown as Selection);
+    try {
+      const preventDefault = vi.fn();
+      cmp.onDocumentContextMenu({
+        target: document.createElement('div'),
+        preventDefault,
+      } as unknown as MouseEvent);
+      expect(preventDefault).not.toHaveBeenCalled();
+    } finally {
+      getSelection.mockRestore();
+    }
   });
 
   it('does not throw and reports the error when refreshStats rejects on init', async () => {
@@ -34,5 +217,70 @@ describe('App', () => {
     await fixture.whenStable();
 
     expect(ui.lastError()).toContain('stats unavailable');
+  });
+});
+
+describe('App view persistence', () => {
+  function setup() {
+    TestBed.configureTestingModule({ imports: [App], providers: appProviders(tauriStub()) });
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    return { fixture, ui: TestBed.inject(UiService), library: TestBed.inject(LibraryService) };
+  }
+
+  it('saves the open view to localStorage as it changes', () => {
+    localStorage.clear();
+    const { fixture, ui, library } = setup();
+    ui.libraryView.set('albums');
+    ui.columnBrowserOpen.set(true);
+    library.activePlaylistId.set(7);
+    ui.expandedFolders.set(new Set([2, 5]));
+    ui.nowPlayingOpen.set(true);
+    library.filters.update((f) => ({ ...f, genres: ['Jazz'], search: 'miles' }));
+    fixture.detectChanges();
+    expect(JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}')).toEqual({
+      libraryView: 'albums',
+      playlistView: 'albums',
+      columnBrowserOpen: true,
+      activeDeviceId: null,
+      activePlaylistId: 7,
+      expandedFolders: [2, 5],
+      nowPlayingOpen: true,
+      columns: { genres: ['Jazz'], artists: [], albums: [] },
+    });
+  });
+
+  it('restores the saved view on startup', () => {
+    localStorage.setItem(
+      VIEW_KEY,
+      JSON.stringify({
+        libraryView: 'device',
+        playlistView: 'songs',
+        columnBrowserOpen: false,
+        activeDeviceId: 3,
+        activePlaylistId: 9,
+        expandedFolders: [4],
+        nowPlayingOpen: true,
+        columns: { genres: [], artists: ['Miles Davis'], albums: [] },
+      }),
+    );
+    const { ui, library } = setup();
+    expect(ui.libraryView()).toBe('device');
+    expect(ui.playlistView()).toBe('songs');
+    expect(ui.activeDeviceId()).toBe(3);
+    expect(library.activePlaylistId()).toBe(9);
+    expect(ui.expandedFolders()).toEqual(new Set([4]));
+    expect(ui.nowPlayingOpen()).toBe(true);
+    expect(library.filters().artists).toEqual(['Miles Davis']);
+    expect(library.filters().search).toBeNull();
+  });
+
+  it('falls back to defaults when the saved value is malformed', () => {
+    localStorage.setItem(VIEW_KEY, JSON.stringify({ libraryView: 'bogus' }));
+    const { ui } = setup();
+    expect(ui.libraryView()).toBe('tracks');
+    localStorage.setItem(VIEW_KEY, '{not json');
+    TestBed.resetTestingModule();
+    expect(setup().ui.libraryView()).toBe('tracks');
   });
 });

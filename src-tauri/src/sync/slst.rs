@@ -263,8 +263,10 @@ fn leaf(field: u32, action: u32, value: &[u8]) -> Result<Option<LeafCondition>, 
 
 fn utf16(value: &[u8]) -> String {
     let units: Vec<u16> = value
-        .chunks_exact(2)
-        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_be_bytes(*c))
         .collect();
     String::from_utf16_lossy(&units)
 }

@@ -100,7 +100,15 @@ describe('SmartPlaylistEditorComponent', () => {
       return defaultInvoke(cmd);
     });
     library.playlists.set([
-      { id: 7, name: 'Jazzy', kind: 'smart', parentId: null, sortOrder: 0, trackCount: 3 },
+      {
+        id: 7,
+        name: 'Jazzy',
+        kind: 'smart',
+        parentId: null,
+        sortOrder: 0,
+        trackCount: 3,
+        synced: false,
+      },
     ]);
     ui.smartEditor.set({ playlistId: 7 });
     fixture.detectChanges();
@@ -330,7 +338,15 @@ describe('SmartPlaylistEditorComponent', () => {
     await settle(fixture);
     cmp.name.set('My Edits');
     library.playlists.set([
-      { id: 1, name: 'Something Else', kind: 'smart', parentId: null, sortOrder: 0, trackCount: 0 },
+      {
+        id: 1,
+        name: 'Something Else',
+        kind: 'smart',
+        parentId: null,
+        sortOrder: 0,
+        trackCount: 0,
+        synced: false,
+      },
     ]);
     fixture.detectChanges();
     await settle(fixture);

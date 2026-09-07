@@ -1,0 +1,115 @@
+@if (row(); as track) {
+  <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
+    <form
+      class="mac-sheet flex max-h-[90vh] w-[440px] flex-col gap-3 overflow-auto p-5"
+      (submit)="save($event)"
+      (keydown)="onKeydown($event)"
+    >
+      <header class="hairline-b flex items-baseline justify-between pb-2">
+        <h2 class="text-headline font-semibold text-text-primary">Track Info</h2>
+        <span class="max-w-[240px] truncate text-caption text-text-muted">{{
+          track.filePath
+        }}</span>
+      </header>
+
+      <label class="flex flex-col gap-1 text-body">
+        <span class="text-text-secondary">Title</span>
+        <input
+          type="text"
+          name="title"
+          [value]="form().title"
+          (input)="onInput('title', $event)"
+          class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+        />
+      </label>
+      <label class="flex flex-col gap-1 text-body">
+        <span class="text-text-secondary">Artist</span>
+        <input
+          type="text"
+          name="artist"
+          [value]="form().artist"
+          (input)="onInput('artist', $event)"
+          class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+        />
+      </label>
+      <label class="flex flex-col gap-1 text-body">
+        <span class="text-text-secondary">Album</span>
+        <input
+          type="text"
+          name="album"
+          [value]="form().album"
+          (input)="onInput('album', $event)"
+          class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+        />
+      </label>
+      <label class="flex flex-col gap-1 text-body">
+        <span class="text-text-secondary">Album Artist</span>
+        <input
+          type="text"
+          name="albumArtist"
+          [value]="form().albumArtist"
+          (input)="onInput('albumArtist', $event)"
+          class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+        />
+      </label>
+      <div class="flex gap-3">
+        <label class="flex flex-1 flex-col gap-1 text-body">
+          <span class="text-text-secondary">Genre</span>
+          <input
+            type="text"
+            name="genre"
+            [value]="form().genre"
+            (input)="onInput('genre', $event)"
+            class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+          />
+        </label>
+        <label class="flex w-24 flex-col gap-1 text-body">
+          <span class="text-text-secondary">Year</span>
+          <input
+            type="text"
+            inputmode="numeric"
+            name="year"
+            [value]="form().year"
+            (input)="onInput('year', $event)"
+            class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+          />
+        </label>
+      </div>
+      <div class="flex gap-3">
+        <label class="flex w-28 flex-col gap-1 text-body">
+          <span class="text-text-secondary">Track №</span>
+          <input
+            type="text"
+            inputmode="numeric"
+            name="trackNumber"
+            [value]="form().trackNumber"
+            (input)="onInput('trackNumber', $event)"
+            class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+          />
+        </label>
+        <label class="flex w-28 flex-col gap-1 text-body">
+          <span class="text-text-secondary">Disc №</span>
+          <input
+            type="text"
+            inputmode="numeric"
+            name="discNumber"
+            [value]="form().discNumber"
+            (input)="onInput('discNumber', $event)"
+            class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-text-primary outline-none focus:border-accent"
+          />
+        </label>
+      </div>
+
+      <div class="mt-2 flex justify-end gap-2">
+        <button type="button" class="mac-btn h-7 px-3 text-body" (click)="cancel()">Cancel</button>
+        <button
+          type="submit"
+          [disabled]="!canSave()"
+          class="mac-btn h-7 px-3 text-body disabled:opacity-50"
+        >
+          Save
+        </button>
+      </div>
+    </form>
+  </div>
+}

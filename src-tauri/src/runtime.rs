@@ -1,6 +1,7 @@
 //! App-wide runtime state.
 
 use crate::db::{Db, DbError};
+use crate::device::coordinator::DeviceCoordinator;
 use crate::fs::coordinator::FsCoordinator;
 use crate::playback::{EngineError, PlaybackEngine};
 use crate::sync::coordinator::SyncCoordinator;
@@ -13,6 +14,8 @@ pub struct AppState {
     pub engine: Arc<PlaybackEngine>,
     pub sync: Arc<SyncCoordinator>,
     pub fs: Arc<FsCoordinator>,
+    /// Outbound sync to MTP devices and mounted storage.
+    pub devices: Arc<DeviceCoordinator>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -44,12 +47,18 @@ impl AppState {
                 .map(|v| v.clamp(0, 100) as u8);
         let engine = Arc::new(PlaybackEngine::spawn(app.clone(), initial_volume)?);
         let fs = Arc::new(FsCoordinator::new(Arc::clone(&db.engine), app.clone()));
-        let sync = Arc::new(SyncCoordinator::new(Arc::clone(&db), Arc::clone(&fs), app));
+        let sync = Arc::new(SyncCoordinator::new(
+            Arc::clone(&db),
+            Arc::clone(&fs),
+            app.clone(),
+        ));
+        let devices = Arc::new(DeviceCoordinator::new(Arc::clone(&db), app));
         Ok(Self {
             db,
             engine,
             sync,
             fs,
+            devices,
         })
     }
 }

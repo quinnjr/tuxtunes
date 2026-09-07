@@ -5,13 +5,14 @@ import {
   computed,
   effect,
   inject,
-  signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
+import { DeviceService } from '../../services/device.service';
 import { LibraryService, Playlist } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { LibraryView, UiService } from '../../services/ui.service';
+import { Device } from '../../models/device';
 
 /** A playlist plus its (already-sorted) children, for the sidebar tree. */
 export interface PlaylistNode {
@@ -99,15 +100,15 @@ export class SidebarComponent implements OnInit {
   protected readonly library = inject(LibraryService);
   private readonly sync = inject(SyncService);
   private readonly ctx = inject(ContextMenuService);
+  protected readonly deviceSvc = inject(DeviceService);
+
+  protected readonly devices = this.deviceSvc.devices;
 
   protected readonly tree = computed(this.#computeTree.bind(this));
 
   #computeTree(): PlaylistNode[] {
     return buildPlaylistTree(this.library.playlists());
   }
-
-  /** Folder ids the user has expanded. Folders start collapsed. */
-  protected readonly expanded = signal<Set<number>>(new Set<number>());
 
   constructor() {
     // A finished sync may have added/renamed/removed playlists.
@@ -118,6 +119,125 @@ export class SidebarComponent implements OnInit {
 
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshPlaylists());
+    void this.ui.guard(this.deviceSvc.refresh());
+  }
+
+  // ---------------------------------------------------------------- //
+  // Devices
+  // ---------------------------------------------------------------- //
+
+  /**
+   * A device is shown attached when it has been seen since the app
+   * last looked. For a filesystem device that means its mount is still
+   * a directory, which `refresh_devices` re-checks.
+   */
+  protected isAttached(device: Device): boolean {
+    return device.lastSeenAt !== null;
+  }
+
+  protected isDeviceActive(device: Device): boolean {
+    return this.ui.libraryView() === 'device' && this.ui.activeDeviceId() === device.id;
+  }
+
+  protected isSyncing(device: Device): boolean {
+    return (
+      this.deviceSvc.runState() === 'running' && this.deviceSvc.progress()?.deviceId === device.id
+    );
+  }
+
+  /** Whole-run percentage, floored, for the row's inline indicator. */
+  protected syncPercent(): number {
+    const p = this.deviceSvc.progress();
+    if (!p || p.total === 0) return 0;
+    return Math.min(100, Math.floor((p.current / p.total) * 100));
+  }
+
+  protected deviceTitle(device: Device): string {
+    const where = device.mountPath ?? device.deviceKey;
+    return this.isAttached(device) ? `${device.name} — ${where}` : `${device.name} (not connected)`;
+  }
+
+  protected openDevice(device: Device): void {
+    this.library.activePlaylistId.set(null);
+    this.ui.activeDeviceId.set(device.id);
+    this.ui.columnBrowserOpen.set(false);
+    this.ui.libraryView.set('device');
+  }
+
+  protected rescanDevices(): void {
+    void this.ui.guard(this.deviceSvc.rescan());
+  }
+
+  /**
+   * Pick a mount point and register it. A device reaches TuxTunes as a
+   * gvfs/mtpfs mount, an SD card, or a DAP in mass-storage mode — all
+   * of which are a directory — so the native folder picker is the
+   * whole flow. Opens the new device on success.
+   */
+  protected addDevice(): void {
+    void this.ui.guard(
+      this.deviceSvc.pickAndAddDevice().then((id) => {
+        if (id === null) return;
+        this.library.activePlaylistId.set(null);
+        this.ui.activeDeviceId.set(id);
+        this.ui.columnBrowserOpen.set(false);
+        this.ui.libraryView.set('device');
+      }),
+    );
+  }
+
+  protected onDeviceContextMenu(device: Device, event: MouseEvent): void {
+    const running = this.isSyncing(device);
+    this.ctx.show(event, [
+      {
+        label: 'Sync Now',
+        disabled: running,
+        action: () => void this.ui.guard(this.deviceSvc.runNow(device.id)),
+      },
+      {
+        label: 'Cancel Sync',
+        disabled: !running,
+        action: () => void this.ui.guard(this.deviceSvc.cancel(device.id)),
+      },
+      {
+        label: 'Preview Sync…',
+        action: () => {
+          this.openDevice(device);
+          void this.ui.guard(this.deviceSvc.preview(device.id));
+        },
+      },
+      { label: '---' },
+      { label: 'Device Settings…', action: () => this.openDevice(device) },
+      { label: '---' },
+      {
+        label: 'Forget Device',
+        destructive: true,
+        action: () => this.confirmForget(device),
+      },
+    ]);
+  }
+
+  /**
+   * Forgetting clears the manifest, so the next sync to this device
+   * re-uploads everything and can no longer prune what we wrote
+   * before. Worth a confirmation.
+   */
+  private confirmForget(device: Device): void {
+    this.ui.confirm.set({
+      title: 'Forget Device',
+      message:
+        `Forget “${device.name}”? Its settings and the record of what TuxTunes ` +
+        `put on it are removed. Files already on the device are left alone.`,
+      confirmLabel: 'Forget Device',
+      destructive: true,
+      onConfirm: async () => {
+        if (this.ui.activeDeviceId() === device.id) {
+          this.ui.activeDeviceId.set(null);
+          this.ui.libraryView.set('tracks');
+        }
+        await this.ui.guard(this.deviceSvc.forget(device.id));
+      },
+    });
   }
 
   /**
@@ -163,11 +283,11 @@ export class SidebarComponent implements OnInit {
   }
 
   protected isExpanded(p: Playlist): boolean {
-    return this.expanded().has(p.id);
+    return this.ui.expandedFolders().has(p.id);
   }
 
   protected toggleFolder(p: Playlist): void {
-    this.expanded.update((cur) => {
+    this.ui.expandedFolders.update((cur) => {
       const next = new Set(cur);
       if (next.has(p.id)) next.delete(p.id);
       else next.add(p.id);
@@ -176,13 +296,47 @@ export class SidebarComponent implements OnInit {
   }
 
   /**
-   * Right-click: smart playlists can be edited or deleted; synced
-   * playlists only deleted (they come back on the next sync, so that's
-   * offered as "Remove until next sync").
+   * The two creation items, shared by the node and area menus. A
+   * folder's menu passes its own id so the new playlist lands inside
+   * it; other rows pass their parent so the sibling goes next to them.
+   */
+  private newPlaylistItems(parentId: number | null): ContextMenuItem[] {
+    return [
+      {
+        label: 'New Playlist…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'New Playlist',
+            initial: '',
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.createPlaylist(name, parentId));
+            },
+          }),
+      },
+      {
+        label: 'New Smart Playlist…',
+        action: () => this.ui.smartEditor.set({ playlistId: null }),
+      },
+    ];
+  }
+
+  /**
+   * The playlists() signal may refresh (a sync finishing) while the
+   * menu is open; actions read the row again by id so they never work
+   * from a stale snapshot.
+   */
+  private currentPlaylist(id: number, fallback: Playlist): Playlist {
+    return this.library.playlists().find((x) => x.id === id) ?? fallback;
+  }
+
+  /**
+   * Right-click on a playlist/folder row: rename and delete for
+   * everything, edit for smart playlists, plus the creation items.
+   * Renames and deletes persist across syncs — the backend records a
+   * name override / tombstone so the reconciler honors them.
    */
   protected onPlaylistContextMenu(node: PlaylistNode, event: MouseEvent): void {
     const p = node.playlist;
-    if (this.isFolder(node)) return;
     const items: ContextMenuItem[] = [];
     if (p.kind === 'smart') {
       items.push({
@@ -190,14 +344,57 @@ export class SidebarComponent implements OnInit {
         action: () => this.ui.smartEditor.set({ playlistId: p.id }),
       });
     }
-    items.push({
-      label: p.kind === 'smart' ? 'Delete' : 'Remove until next sync',
-      destructive: true,
-      action: async () => {
-        await this.ui.guard(this.library.deletePlaylist(p.id));
+    items.push(
+      {
+        label: 'Rename…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'Rename Playlist',
+            initial: this.currentPlaylist(p.id, p).name,
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.renamePlaylist(p.id, name));
+            },
+          }),
       },
-    });
+      { label: '---' },
+      {
+        label: 'Delete',
+        destructive: true,
+        action: () => this.deleteWithFolderGuard(node),
+      },
+      { label: '---' },
+      ...this.newPlaylistItems(this.isFolder(node) ? p.id : p.parentId),
+    );
     this.ctx.show(event, items);
+  }
+
+  /**
+   * Deleting a folder orphans its children to the sidebar root — more
+   * than the clicked row — so that case confirms first.
+   */
+  private async deleteWithFolderGuard(node: PlaylistNode): Promise<void> {
+    const p = node.playlist;
+    if (this.isFolder(node) && node.children.length > 0) {
+      const n = node.children.length;
+      this.ui.confirm.set({
+        title: 'Delete Folder',
+        message:
+          `Delete the folder “${p.name}”? Its ${n} playlist${n === 1 ? '' : 's'} ` +
+          `will move to the top level.`,
+        confirmLabel: 'Delete Folder',
+        destructive: true,
+        onConfirm: async () => {
+          await this.ui.guard(this.library.deletePlaylist(p.id));
+        },
+      });
+      return;
+    }
+    await this.ui.guard(this.library.deletePlaylist(p.id));
+  }
+
+  /** Right-click on the playlist section's empty space. */
+  protected onPlaylistAreaContextMenu(event: MouseEvent): void {
+    this.ctx.show(event, this.newPlaylistItems(null));
   }
 
   /** Folders expand/collapse; playlists open in the track list. */

@@ -1,0 +1,30 @@
+@if (ui.namePrompt(); as req) {
+  <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
+    <form
+      class="mac-sheet flex w-[360px] flex-col gap-4 p-5"
+      (submit)="submit($event)"
+      (keydown)="onKeydown($event)"
+      (mousedown)="onMousedown($event)"
+    >
+      <h2 class="text-headline font-semibold text-text-primary">{{ req.title }}</h2>
+      <input
+        #nameInput
+        type="text"
+        [value]="value()"
+        (input)="onInput($event)"
+        placeholder="Name"
+        class="rounded-md border border-border bg-bg-primary px-2 py-1.5 text-body text-text-primary outline-none focus:border-accent"
+      />
+      <div class="flex justify-end gap-2">
+        <button type="button" class="mac-btn h-7 px-3 text-body" (click)="cancel()">Cancel</button>
+        <button
+          type="submit"
+          [disabled]="!canSubmit()"
+          class="mac-btn h-7 px-3 text-body disabled:opacity-50"
+        >
+          OK
+        </button>
+      </div>
+    </form>
+  </div>
+}

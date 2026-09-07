@@ -1,8 +1,8 @@
 //! Database client wrapper over `prax-sqlite`.
 //!
-//! On open, applies the bundled migration SQL from
-//! `src-tauri/prax/migrations/0001_initial/migration.sql` and
-//! `src-tauri/prax/migrations/0002_composite_sync_indexes/migration.sql`.
+//! On open, applies every bundled migration under
+//! `src-tauri/prax/migrations/` in order, from `0001_initial` through
+//! `0005_devices`.
 //!
 //! Applied migrations are tracked in a `schema_migrations` ledger table
 //! (`name`, `applied_at`), created if absent on every open. Migrations are
@@ -24,6 +24,11 @@ use std::sync::Arc;
 const INITIAL_MIGRATION: &str = include_str!("../../prax/migrations/0001_initial/migration.sql");
 const COMPOSITE_SYNC_INDEXES_MIGRATION: &str =
     include_str!("../../prax/migrations/0002_composite_sync_indexes/migration.sql");
+const PLAYLIST_LOCAL_EDITS_MIGRATION: &str =
+    include_str!("../../prax/migrations/0003_playlist_local_edits/migration.sql");
+const TRACK_USER_EDITS_MIGRATION: &str =
+    include_str!("../../prax/migrations/0004_track_user_edits/migration.sql");
+const DEVICES_MIGRATION: &str = include_str!("../../prax/migrations/0005_devices/migration.sql");
 
 /// A single migration entry: a stable name (the ledger key), the SQL batch
 /// to run, and a backfill probe used only when the ledger has no row for
@@ -56,6 +61,27 @@ static MIGRATIONS: &[Migration] = &[
              WHERE type = 'index' AND name IN (\
              'idx_tracks_sync_source_id_persistent_id', \
              'idx_playlists_sync_source_id_persistent_id')",
+        marker_count: 2,
+    },
+    Migration {
+        name: "0003_playlist_local_edits",
+        sql: PLAYLIST_LOCAL_EDITS_MIGRATION,
+        marker_sql: "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'table' AND name = 'playlist_tombstones'",
+        marker_count: 1,
+    },
+    Migration {
+        name: "0004_track_user_edits",
+        sql: TRACK_USER_EDITS_MIGRATION,
+        marker_sql: "SELECT COUNT(*) FROM pragma_table_info('tracks') \
+             WHERE name = 'user_edited'",
+        marker_count: 1,
+    },
+    Migration {
+        name: "0005_devices",
+        sql: DEVICES_MIGRATION,
+        marker_sql: "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type = 'table' AND name IN ('devices', 'device_objects')",
         marker_count: 2,
     },
 ];
@@ -188,6 +214,40 @@ mod tests {
         assert_eq!(count, 0);
     }
 
+    #[tokio::test]
+    async fn migration_0005_creates_device_tables() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp.path()).await.expect("open");
+        let count: i64 = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' \
+                 AND name IN ('devices', 'device_objects')",
+                &[],
+            )
+            .await
+            .expect("sqlite_master queryable");
+        assert_eq!(count, 2, "0005 should create both device tables");
+    }
+
+    #[tokio::test]
+    async fn migration_0005_is_recorded_once_across_opens() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        {
+            let _db = Db::open(tmp.path()).await.expect("first open");
+        }
+        let db = Db::open(tmp.path()).await.expect("second open");
+        let count: i64 = db
+            .engine
+            .raw_sql_scalar(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = '0005_devices'",
+                &[],
+            )
+            .await
+            .expect("ledger queryable");
+        assert_eq!(count, 1, "reopening must not re-apply or re-record 0005");
+    }
+
     async fn composite_sync_index_count(engine: &SqliteRawEngine) -> i64 {
         engine
             .raw_sql_scalar(
@@ -268,9 +328,12 @@ mod tests {
             ledger_names,
             vec![
                 "0001_initial".to_string(),
-                "0002_composite_sync_indexes".to_string()
+                "0002_composite_sync_indexes".to_string(),
+                "0003_playlist_local_edits".to_string(),
+                "0004_track_user_edits".to_string(),
+                "0005_devices".to_string()
             ],
-            "ledger should be backfilled with both migration names"
+            "ledger should carry every migration after upgrade"
         );
 
         // Reopening again should remain a no-op / idempotent.

@@ -63,6 +63,10 @@ pub async fn reconcile(
         .filter(|pid| *pid != 0)
         .collect();
 
+    // Playlists the user deleted locally stay deleted: skip their pids
+    // outright so the source can never re-import them.
+    let tombstoned = playlists::tombstoned_pids(engine, source_id).await?;
+
     let mut keep: Vec<u64> = Vec::with_capacity(lib.playlists().len());
     let mut pending_parent_links: Vec<(i64, u64)> = Vec::new();
 
@@ -80,6 +84,9 @@ pub async fn reconcile(
         let pid = p.persistent_id();
         if pid == 0 {
             stats.warnings += 1;
+            continue;
+        }
+        if tombstoned.contains(&pid) {
             continue;
         }
         keep.push(pid);

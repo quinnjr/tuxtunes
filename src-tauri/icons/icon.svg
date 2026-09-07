@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TuxTunes app icon (source). Rasterize with:
+     rsvg-convert -w SIZE -h SIZE icon.svg -o out.png -->
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff3f5"/>
+      <stop offset="1" stop-color="#ffdde5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- macOS-style squircle background, soft blush gradient -->
+  <rect x="0" y="0" width="512" height="512" rx="115" fill="url(#bg)"/>
+
+  <!-- floating beamed eighth notes, Apple Music red -->
+  <g fill="#fa233b">
+    <path d="M356 118 L416 100 L416 116 L356 134 Z"/>
+    <rect x="350" y="126" width="7" height="80"/>
+    <rect x="409" y="108" width="7" height="80"/>
+    <ellipse cx="344" cy="208" rx="15" ry="11" transform="rotate(-18 344 208)"/>
+    <ellipse cx="403" cy="190" rx="15" ry="11" transform="rotate(-18 403 190)"/>
+  </g>
+  <!-- dainty sparkle dots -->
+  <circle cx="322" cy="132" r="5" fill="#fa233b" opacity="0.25"/>
+  <circle cx="438" cy="160" r="4" fill="#fa233b" opacity="0.3"/>
+  <circle cx="372" cy="238" r="4" fill="#fa233b" opacity="0.2"/>
+
+  <!-- penguin -->
+  <g>
+    <!-- wings -->
+    <ellipse cx="146" cy="336" rx="24" ry="62" fill="#23232e" transform="rotate(16 146 336)"/>
+    <ellipse cx="330" cy="290" rx="24" ry="62" fill="#23232e" transform="rotate(-55 330 290)"/>
+    <!-- feet -->
+    <ellipse cx="206" cy="428" rx="26" ry="13" fill="#ffb27d"/>
+    <ellipse cx="278" cy="428" rx="26" ry="13" fill="#ffb27d"/>
+    <!-- body -->
+    <ellipse cx="242" cy="310" rx="98" ry="120" fill="#23232e"/>
+    <!-- belly -->
+    <ellipse cx="242" cy="342" rx="64" ry="80" fill="#fffdfd"/>
+    <!-- eye patches -->
+    <circle cx="214" cy="262" r="14" fill="#fffdfd"/>
+    <circle cx="270" cy="262" r="14" fill="#fffdfd"/>
+    <!-- pupils, glanced toward the notes -->
+    <circle cx="218" cy="264" r="6.5" fill="#23232e"/>
+    <circle cx="274" cy="264" r="6.5" fill="#23232e"/>
+    <circle cx="220.5" cy="261.5" r="2" fill="#fffdfd"/>
+    <circle cx="276.5" cy="261.5" r="2" fill="#fffdfd"/>
+    <!-- rosy cheeks -->
+    <circle cx="196" cy="290" r="9" fill="#ffc4cf"/>
+    <circle cx="288" cy="290" r="9" fill="#ffc4cf"/>
+    <!-- beak -->
+    <path d="M230 280 L254 280 L242 296 Z" fill="#ffb27d" stroke="#ffb27d"
+          stroke-width="6" stroke-linejoin="round"/>
+  </g>
+</svg>

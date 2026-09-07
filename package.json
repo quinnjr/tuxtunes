@@ -1,6 +1,6 @@
 {
   "name": "tuxtunes",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
@@ -27,6 +27,7 @@
   },
   "type": "module",
   "private": true,
+  "license": "MIT OR Apache-2.0",
   "packageManager": "pnpm@11.9.0",
   "dependencies": {
     "@angular/cdk": "^22.0.2",

@@ -38,6 +38,10 @@ const TRACK = (id: number): TrackRow => ({
   artist: null,
   album: null,
   albumArtist: null,
+  genre: null,
+  year: null,
+  trackNumber: null,
+  discNumber: null,
   durationMs: 1000,
   filePath: '/x',
   sampleRate: null,
@@ -116,7 +120,7 @@ describe('ArtistSplitViewComponent', () => {
 
   it('play() forwards to PlaybackService', async () => {
     const { cmp, playback } = setup();
-    const spy = vi.spyOn(playback, 'play').mockResolvedValue();
+    const spy = vi.spyOn(playback, 'play').mockResolvedValue(true);
     await cmp.play(TRACK(9));
     expect(spy).toHaveBeenCalledWith(9);
   });

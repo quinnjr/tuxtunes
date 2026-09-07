@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod device;
 pub mod fs;
 pub mod integration;
 pub mod library;
@@ -43,7 +44,11 @@ pub fn run() {
             commands::library::pick_and_add_track,
             commands::library::pick_and_add_folder,
             commands::library::verify_library,
+            commands::library::update_track_metadata,
+            commands::library::write_tags_to_files,
             commands::library::remove_track,
+            commands::library::remove_tracks,
+            commands::library::trash_tracks,
             commands::library::trash_track,
             commands::library::show_in_files,
             commands::playback::play_track,
@@ -57,12 +62,28 @@ pub fn run() {
             commands::audio::list_audio_devices,
             commands::audio::set_audio_device,
             commands::audio::get_audio_prefs,
+            commands::window::host_os,
+            commands::window::quit_app,
             commands::sync::list_sync_sources,
             commands::sync::add_sync_source,
             commands::sync::run_sync_now,
+            commands::device::list_devices,
+            commands::device::get_device,
+            commands::device::add_filesystem_device,
+            commands::device::pick_and_add_device,
+            commands::device::refresh_devices,
+            commands::device::update_device_selection,
+            commands::device::update_device_settings,
+            commands::device::forget_device,
+            commands::device::preview_device_sync,
+            commands::device::run_device_sync,
+            commands::device::cancel_device_sync,
             commands::smart::evaluate_smart_rule,
             commands::smart::preview_smart_rule,
             commands::playlists::list_playlists,
+            commands::playlists::create_playlist,
+            commands::playlists::add_tracks_to_playlist,
+            commands::playlists::remove_tracks_from_playlist,
             commands::playlists::create_smart_playlist,
             commands::playlists::update_smart_playlist,
             commands::playlists::delete_playlist,
@@ -77,6 +98,9 @@ pub fn run() {
             commands::preferences::get_keep_organized,
             commands::preferences::set_keep_organized,
             commands::preferences::reorganize_track,
+            commands::preferences::consolidate_library,
+            commands::preferences::reclaimable_originals,
+            commands::preferences::reclaim_originals,
         ])
         .setup(move |app| {
             let dir = data_dir(app);
@@ -93,6 +117,51 @@ pub fn run() {
             // Mount the system tray. Failures are logged inside install()
             // — the app continues without a tray rather than crashing.
             integration::tray::install(app.handle());
+
+            // Watch for library changes committed by other processes
+            // (tuxtunes-cli, direct sqlite edits) and tell the UI to
+            // refresh. A poll failure ends the watcher with a warning
+            // rather than crashing — the app just loses live refresh.
+            {
+                use tauri::Emitter;
+                let engine = Arc::clone(&state_ref.db).engine.clone();
+                let app_for_watch = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let conn = match crate::db::watch::checkout(&engine).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::warn!("db watch: checkout failed: {e}");
+                            return;
+                        }
+                    };
+                    let mut last = match crate::db::watch::data_version(&conn).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("db watch: baseline failed: {e}");
+                            return;
+                        }
+                    };
+                    loop {
+                        tokio::time::sleep(crate::db::watch::POLL_INTERVAL).await;
+                        match crate::db::watch::changed_since(&conn, last).await {
+                            Ok((v, changed)) => {
+                                last = v;
+                                if changed {
+                                    if let Err(e) =
+                                        app_for_watch.emit("library:external-change", ())
+                                    {
+                                        log::warn!("db watch: emit failed: {e}");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("db watch: poll failed, stopping: {e}");
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
 
             // Mount the MPRIS server. Returns a handle the event
             // listeners below mutate on engine state changes; failures

@@ -5,6 +5,7 @@
 
 import { Provider } from '@angular/core';
 import { vi } from 'vitest';
+import { DeviceService } from './services/device.service';
 import { LibraryService } from './services/library.service';
 import { PlaybackService } from './services/playback.service';
 import { PreferencesService } from './services/preferences.service';
@@ -35,7 +36,9 @@ export const defaultInvoke = async (cmd: string): Promise<unknown> => {
     cmd === 'open_playlist' ||
     cmd === 'list_sync_sources' ||
     cmd === 'list_audio_devices' ||
-    cmd === 'get_distinct'
+    cmd === 'get_distinct' ||
+    cmd === 'list_devices' ||
+    cmd === 'refresh_devices'
   ) {
     return [];
   }
@@ -72,6 +75,7 @@ export function tauriStub(
 export function appProviders(stub: TauriStub): Provider[] {
   return [
     { provide: TauriService, useValue: stub },
+    DeviceService,
     LibraryService,
     PlaybackService,
     PreferencesService,

@@ -30,6 +30,25 @@ impl FsCoordinator {
             .map_err(|_| "ingest worker has exited".to_string())
     }
 
+    /// Queue the bulk consolidate pass. Returns as soon as it is
+    /// queued; progress arrives on `fs:consolidate-progress` and the
+    /// summary on `fs:consolidate-complete`.
+    pub fn consolidate_library(&self) -> Result<(), String> {
+        self.ingest
+            .tx
+            .send(IngestCommand::ConsolidateAll)
+            .map_err(|_| "ingest worker has exited".to_string())
+    }
+
+    /// Queue the reclaim pass. Progress arrives on
+    /// `fs:reclaim-progress`, the summary on `fs:reclaim-complete`.
+    pub fn reclaim_originals(&self) -> Result<(), String> {
+        self.ingest
+            .tx
+            .send(IngestCommand::ReclaimOriginals)
+            .map_err(|_| "ingest worker has exited".to_string())
+    }
+
     pub fn reorganize_track(&self, track_id: i64) -> Result<(), String> {
         self.organize
             .tx

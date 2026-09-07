@@ -1,4 +1,4 @@
-import { Injectable, computed, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
 import { TauriService } from './tauri.service';
 import { SmartRule } from '../models/smart';
 import { mapTrack, TrackRow, TrackRowRaw } from './playback.service';
@@ -54,6 +54,9 @@ export interface Playlist {
   parentId: number | null;
   sortOrder: number;
   trackCount: number | null;
+  /** True for playlists that came from a sync source — deleting one
+   * only lasts until the next sync. */
+  synced: boolean;
 }
 
 interface PlaylistRaw {
@@ -63,6 +66,42 @@ interface PlaylistRaw {
   parent_id: number | null;
   sort_order: number;
   cached_track_count: number | null;
+  sync_source_id: number | null;
+}
+
+/**
+ * How many ingest results to remember for rows that are not loaded. A
+ * large import emits one per file, so this is bounded; 1,000 covers
+ * more than the 500-row page `refreshTracks` loads by default.
+ */
+const MAX_TRACKED_INGESTS = 1000;
+
+/** Payload of the backend's `fs:ingest-complete` event. */
+interface IngestCompleteRaw {
+  track_id: number;
+  managed_path: string;
+  /** Sidecar cover written beside the file; not the row's artwork. */
+  artwork_path: string | null;
+}
+
+/** Outcome of writing library metadata back into the files. */
+export interface WriteBackSummary {
+  written: number;
+  covers: number;
+  failed: string[];
+}
+
+/** Outcome of adding picked files; mirrors AddFolderSummary. */
+export interface AddTracksSummary {
+  added: TrackRowRaw[];
+  existing: number;
+  failed: string[];
+}
+
+/** What a bulk removal actually did. */
+export interface RemoveSummary {
+  removed: number[];
+  failed: string[];
 }
 
 export interface AddFolderSummary {
@@ -123,9 +162,115 @@ export const DEFAULT_SORT: TrackSort = {
   descending: true,
 };
 
+/** The descriptive fields editable from the Get Info… dialog. */
+export interface TrackMetadataEdit {
+  title: string;
+  artist: string | null;
+  album: string | null;
+  albumArtist: string | null;
+  genre: string | null;
+  year: number | null;
+  trackNumber: number | null;
+  discNumber: number | null;
+}
+
 @Injectable({ providedIn: 'root' })
-export class LibraryService {
+export class LibraryService implements OnDestroy {
   private readonly tauri = inject(TauriService);
+
+  #unlistenExternal: (() => void) | null = null;
+  #unlistenIngest: (() => void) | null = null;
+  #unlistenConsolidate: (() => void) | null = null;
+  /** Ingest results seen this session, newest last. See #applyIngestResult. */
+  readonly #ingested = new Map<number, IngestCompleteRaw>();
+
+  constructor() {
+    // The backend polls the database for commits made by other
+    // processes (tuxtunes-cli, direct edits) and emits this event.
+    // Refresh everything the sidebar and track list show; failures are
+    // swallowed — the next change or manual action retries anyway.
+    void this.tauri
+      .listen('library:external-change', () => {
+        // allSettled: a failed refresh never rejects or blocks the rest.
+        void Promise.allSettled([
+          this.refreshPlaylists(),
+          this.refreshTracks(),
+          this.refreshStats(),
+        ]);
+      })
+      .then((off) => {
+        this.#unlistenExternal = off;
+      });
+
+    // The consolidate pass rewrites file_path across the library, and
+    // those paths only exist in the database until something reloads.
+    void this.tauri
+      .listen('fs:consolidate-complete', () => {
+        void Promise.allSettled([this.refreshTracks(), this.refreshStats()]);
+      })
+      .then((off) => {
+        this.#unlistenConsolidate = off;
+      });
+
+    // Newly added files are copied into the managed library folder in
+    // the background, which rewrites their file_path. Patch the loaded
+    // rows in place rather than refreshing — a folder import emits one
+    // event per track.
+    void this.tauri
+      .listen<IngestCompleteRaw>('fs:ingest-complete', (e) => {
+        this.#applyIngestResult(e);
+      })
+      .then((off) => {
+        this.#unlistenIngest = off;
+      });
+  }
+
+  ngOnDestroy(): void {
+    this.#unlistenExternal?.();
+    this.#unlistenExternal = null;
+    this.#unlistenIngest?.();
+    this.#unlistenIngest = null;
+    this.#unlistenConsolidate?.();
+    this.#unlistenConsolidate = null;
+  }
+
+  /**
+   * Record an ingest result and fold it into the loaded rows.
+   *
+   * The event can beat the row into the list — both add flows queue the
+   * copy before their `invoke` resolves — so results are kept and
+   * re-applied whenever rows are (re)loaded, rather than dropped when
+   * no row matches yet.
+   */
+  #applyIngestResult(e: IngestCompleteRaw): void {
+    this.#ingested.set(e.track_id, e);
+    if (this.#ingested.size > MAX_TRACKED_INGESTS) {
+      // Map iterates in insertion order, so this evicts the oldest.
+      const oldest = this.#ingested.keys().next().value;
+      if (oldest !== undefined) this.#ingested.delete(oldest);
+    }
+    this.tracks.update((rows) => this.#withIngestResults(rows));
+  }
+
+  /**
+   * Point rows at the paths ingest gave them. Returns the input array
+   * untouched when nothing applies, so the signal does not notify.
+   */
+  #withIngestResults(rows: TrackRow[]): TrackRow[] {
+    if (this.#ingested.size === 0) return rows;
+    let changed = false;
+    const next = rows.map((row) => {
+      const e = this.#ingested.get(row.id);
+      if (!e || row.filePath === e.managed_path) return row;
+      changed = true;
+      // Only the path: `artwork_path` on the event is the sidecar
+      // written next to the audio file, which the asset protocol will
+      // not serve. The row's artwork comes from the $APPDATA cache that
+      // resolve_track_artwork fills.
+      return { ...row, filePath: e.managed_path };
+    });
+    return changed ? next : rows;
+  }
 
   readonly stats = signal<LibraryStats | null>(null);
   readonly tracks = signal<TrackRow[]>([]);
@@ -200,7 +345,7 @@ export class LibraryService {
       filters: this.filters(),
       sort: this.sort(),
     });
-    this.tracks.set(raws.map((raw) => mapTrack(raw)));
+    this.tracks.set(this.#withIngestResults(raws.map((raw) => mapTrack(raw))));
   }
 
   /**
@@ -236,7 +381,7 @@ export class LibraryService {
     if (sort.column !== DEFAULT_SORT.column || sort.descending !== DEFAULT_SORT.descending) {
       rows = sortTracks(rows, sort);
     }
-    this.tracks.set(rows);
+    this.tracks.set(this.#withIngestResults(rows));
     const count = raws.length;
     this.playlists.update((all) =>
       all.map((p) => (p.id === id && p.trackCount !== count ? { ...p, trackCount: count } : p)),
@@ -273,10 +418,89 @@ export class LibraryService {
     if (this.activePlaylistId() === playlistId) await this.refreshTracks();
   }
 
+  /**
+   * Create an empty user-owned regular playlist (inside `parentId`
+   * when given); returns its id. The playlist exists once the invoke
+   * resolves — a failed sidebar refresh must not make the caller treat
+   * the creation as failed, so that error is swallowed here and the
+   * next refresh corrects the sidebar.
+   */
+  async createPlaylist(name: string, parentId: number | null = null): Promise<number> {
+    const id = await this.tauri.invoke<number>('create_playlist', {
+      name: name.trim(),
+      parentId,
+    });
+    try {
+      await this.refreshPlaylists();
+    } catch {
+      // Sidebar is stale, not wrong — the id below is still valid.
+    }
+    return id;
+  }
+
+  /**
+   * The "New Playlist… from a track selection" flow: create, add, then
+   * refresh once. Composed here so the gesture costs a single sidebar
+   * refetch and the add still runs even if a refresh would have failed.
+   */
+  async createPlaylistWithTracks(
+    name: string,
+    trackIds: number[],
+    parentId: number | null = null,
+  ): Promise<number> {
+    const id = await this.tauri.invoke<number>('create_playlist', {
+      name: name.trim(),
+      parentId,
+    });
+    await this.tauri.invoke<void>('add_tracks_to_playlist', { playlistId: id, trackIds });
+    await this.refreshPlaylists();
+    return id;
+  }
+
+  async renamePlaylist(playlistId: number, name: string): Promise<void> {
+    await this.tauri.invoke<void>('rename_playlist', { playlistId, name });
+    await this.refreshPlaylists();
+  }
+
+  /**
+   * Append tracks to a regular playlist. Refreshes the sidebar counts,
+   * and — when the target is the playlist on screen — the visible rows
+   * too, in parallel.
+   */
+  async addTracksToPlaylist(playlistId: number, trackIds: number[]): Promise<void> {
+    await this.tauri.invoke<void>('add_tracks_to_playlist', { playlistId, trackIds });
+    await this.#refreshAfterPlaylistEdit(playlistId);
+  }
+
+  /**
+   * Remove tracks from a regular playlist. When that playlist is the
+   * one on screen, reload its rows so they disappear immediately.
+   */
+  async removeTracksFromPlaylist(playlistId: number, trackIds: number[]): Promise<void> {
+    await this.tauri.invoke<void>('remove_tracks_from_playlist', { playlistId, trackIds });
+    await this.#refreshAfterPlaylistEdit(playlistId);
+  }
+
+  async #refreshAfterPlaylistEdit(playlistId: number): Promise<void> {
+    const refreshes = [this.refreshPlaylists()];
+    if (this.activePlaylistId() === playlistId) refreshes.push(this.refreshTracks());
+    await Promise.all(refreshes);
+  }
+
   async deletePlaylist(playlistId: number): Promise<void> {
     await this.tauri.invoke<void>('delete_playlist', { playlistId });
     if (this.activePlaylistId() === playlistId) this.activePlaylistId.set(null);
     await this.refreshPlaylists();
+  }
+
+  /**
+   * Edit a track's descriptive metadata. The backend writes the file's
+   * own tags first and only then the DB (flagging the row user_edited
+   * so a sync keeps the edit); the visible list refreshes after.
+   */
+  async updateTrackMetadata(trackId: number, edit: TrackMetadataEdit): Promise<void> {
+    await this.tauri.invoke<void>('update_track_metadata', { trackId, edit });
+    await this.refreshTracks();
   }
 
   async refreshPlaylists(): Promise<void> {
@@ -289,6 +513,7 @@ export class LibraryService {
         parentId: r.parent_id,
         sortOrder: r.sort_order,
         trackCount: r.cached_track_count,
+        synced: r.sync_source_id !== null,
       })),
     );
   }
@@ -315,13 +540,85 @@ export class LibraryService {
     return raws;
   }
 
-  async addTrackFromPicker(): Promise<TrackRow | null> {
-    const raw = await this.tauri.invoke<TrackRowRaw | null>('pick_and_add_track');
-    if (!raw) return null;
-    const mapped = mapTrack(raw);
-    this.tracks.update((cur) => [mapped, ...cur]);
+  /**
+   * Pick one or more audio files and add them. Resolves to the
+   * backend's summary, or null if the dialog was cancelled.
+   *
+   * New rows are prepended so the list does not jump under a user who
+   * has sorted it — but only in the unfiltered library view. `tracks`
+   * is a view, not the library: with a playlist open or a column-browser
+   * filter on, a picked file does not belong in it, so reload instead.
+   */
+  async addTracksFromPicker(): Promise<AddTracksSummary | null> {
+    const summary = await this.tauri.invoke<AddTracksSummary | null>('pick_and_add_track');
+    if (!summary) return null;
+    if (summary.added.length === 0) {
+      // Nothing new, but a re-picked file may still have moved through
+      // copy-on-add, and an interrupted run can leave rows the UI has
+      // not seen.
+      await Promise.all([this.refreshTracks(), this.refreshStats()]);
+      return summary;
+    }
+
+    const filtered = this.activePlaylistId() !== null || this.#hasActiveFilters();
+    if (filtered) {
+      await Promise.all([this.refreshTracks(), this.refreshStats()]);
+      return summary;
+    }
+
+    // Dedupe within the batch as well as against the list: two picks
+    // can resolve to one row (a file and the managed copy it was
+    // copied to both match it).
+    const seen = new Set<number>();
+    const fresh: TrackRow[] = [];
+    for (const raw of summary.added) {
+      const row = mapTrack(raw);
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      fresh.push(row);
+    }
+    this.tracks.update((cur) =>
+      this.#withIngestResults([...fresh, ...cur.filter((t) => !seen.has(t.id))]),
+    );
     await this.refreshStats();
-    return mapped;
+    return summary;
+  }
+
+  /** Whether anything narrows the library view right now. */
+  #hasActiveFilters(): boolean {
+    const f = this.filters();
+    return f.search !== null || f.genres.length > 0 || f.artists.length > 0 || f.albums.length > 0;
+  }
+
+  /**
+   * Remove tracks from the library, or send their files to the trash.
+   * Resolves to what actually went, so the caller can act on that
+   * rather than on what it asked for.
+   */
+  async removeTracks(
+    command: 'remove_tracks' | 'trash_tracks',
+    trackIds: number[],
+  ): Promise<RemoveSummary> {
+    const summary = await this.tauri.invoke<RemoveSummary>(command, { trackIds });
+    // Ids are rowids and SQLite reuses them, so a remembered ingest
+    // result for a deleted track could be applied to an unrelated new
+    // one that lands on the same id.
+    for (const id of summary.removed) this.#ingested.delete(id);
+    return summary;
+  }
+
+  /**
+   * Write what the library knows about these tracks into their files'
+   * own tags, cover included. Refreshes afterwards: the backend clears
+   * each file's stored hash, which the list shows as verification
+   * state.
+   */
+  async writeTagsToFiles(trackIds: number[]): Promise<WriteBackSummary> {
+    const summary = await this.tauri.invoke<WriteBackSummary>('write_tags_to_files', {
+      trackIds,
+    });
+    await this.refreshTracks();
+    return summary;
   }
 
   /**

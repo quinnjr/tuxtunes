@@ -285,6 +285,72 @@ input[type='range'] {
       0 10px 20px color-mix(in srgb, #000000 14%, transparent);
   }
 
+  /* Caption buttons for the frameless window (Linux, Windows): the
+     platform's own layout — minimize, maximize, close, right-aligned,
+     each a full-height strip with a symbolic glyph, hover fill, and a
+     red close like every GNOME/KDE/Windows title bar. The macOS traffic
+     lights are never drawn by us; AppKit overlays the real ones. */
+  .win-control {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* Windows' caption-button width; in px because the root font is
+       13px and a rem value would shrink it. */
+    width: 46px;
+    border: 0;
+    color: var(--color-text-secondary);
+    cursor: default;
+    transition:
+      background-color 80ms ease,
+      color 80ms ease;
+  }
+
+  .win-control svg {
+    width: 10px;
+    height: 10px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+  }
+
+  .win-control:hover {
+    background-color: color-mix(in srgb, #ffffff 10%, transparent);
+    color: var(--color-text-primary);
+  }
+
+  .win-control:active {
+    background-color: color-mix(in srgb, #ffffff 16%, transparent);
+  }
+
+  :root[data-theme='light'] .win-control:hover {
+    background-color: color-mix(in srgb, #000000 8%, transparent);
+  }
+
+  :root[data-theme='light'] .win-control:active {
+    background-color: color-mix(in srgb, #000000 14%, transparent);
+  }
+
+  .win-control-close:hover {
+    background-color: #c42b1c;
+    color: #ffffff;
+  }
+
+  .win-control-close:active {
+    background-color: #b3271a;
+    color: #ffffff;
+  }
+
+  /* Frameless Linux windows get no compositor border; a hairline keeps
+     the edge legible against a same-colored desktop. An outline, not
+     an inset shadow: the shell's children tile it edge-to-edge with
+     opaque backgrounds, and a shadow paints beneath them while an
+     outline paints above every descendant. */
+  .frameless {
+    outline: 1px solid var(--color-border-strong);
+    outline-offset: -1px;
+  }
+
   /* Modal sheets (import wizard, preferences). Opaque surface, not
      vibrancy — a sheet is a document you act on, and blur behind text
      fields hurts legibility. */

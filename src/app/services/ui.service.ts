@@ -1,7 +1,30 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed, signal } from '@angular/core';
 import { toErrorMessage } from '../utils/errors';
 
-export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings';
+export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
+
+/**
+ * How an open playlist is presented: `albums` is the per-album picker
+ * (artwork cards that drop down into their tracks), `songs` the flat
+ * list in playlist order. The library's tracks/albums/artists split
+ * only applies to "all songs".
+ */
+export type PlaylistView = 'albums' | 'songs';
+
+export interface NamePromptRequest {
+  title: string;
+  initial: string;
+  onSubmit: (name: string) => void | Promise<void>;
+}
+
+export interface ConfirmRequest {
+  title: string;
+  message: string;
+  /** Label for the confirming button, e.g. "Delete Folder". */
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void | Promise<void>;
+}
 
 @Injectable({ providedIn: 'root' })
 export class UiService {
@@ -11,8 +34,21 @@ export class UiService {
   /** Top-level view selection. Drives main-content's active component. */
   readonly libraryView = signal<LibraryView>('tracks');
 
+  /** Presentation of the active playlist; sticky across playlists. */
+  readonly playlistView = signal<PlaylistView>('albums');
+
   /** Whether the column browser strip is shown above the active view. */
   readonly columnBrowserOpen = signal(false);
+
+  /**
+   * Which device the `'device'` view is showing. Kept separate from
+   * `libraryView` so returning to a library view and back does not
+   * lose the user's place.
+   */
+  readonly activeDeviceId = signal<number | null>(null);
+
+  /** Sidebar folder ids the user has expanded. Folders start collapsed. */
+  readonly expandedFolders = signal<Set<number>>(new Set<number>());
 
   /** Whether the Now Playing slide-out is visible. */
   readonly nowPlayingOpen = signal(false);
@@ -22,6 +58,40 @@ export class UiService {
    * playlist; a number = editing that smart playlist's rule.
    */
   readonly smartEditor = signal<{ playlistId: number | null } | null>(null);
+
+  /**
+   * In-app replacement for `window.prompt`: null = closed; otherwise
+   * the modal shows `title` with `initial` in the input and calls
+   * `onSubmit` with the trimmed non-empty name.
+   */
+  readonly namePrompt = signal<NamePromptRequest | null>(null);
+
+  /**
+   * In-app confirmation dialog for actions that destroy more than the
+   * thing that was clicked (deleting a folder full of playlists).
+   */
+  readonly confirm = signal<ConfirmRequest | null>(null);
+
+  /** Track-info (Get Info…) editor: null = closed. */
+  readonly trackInfo = signal<{ trackId: number } | null>(null);
+
+  /**
+   * Whether any modal owns the screen. Keyboard shortcuts bound on
+   * document check this so a list-level key (Delete, ⌘A) does not fire
+   * behind an open dialog.
+   */
+  readonly anyModalOpen = computed(this.#computeAnyModalOpen.bind(this));
+
+  #computeAnyModalOpen(): boolean {
+    return (
+      this.importWizardOpen() ||
+      this.preferencesOpen() ||
+      this.smartEditor() !== null ||
+      this.namePrompt() !== null ||
+      this.confirm() !== null ||
+      this.trackInfo() !== null
+    );
+  }
 
   /**
    * Most recent user-facing failure (a backend command rejected, a

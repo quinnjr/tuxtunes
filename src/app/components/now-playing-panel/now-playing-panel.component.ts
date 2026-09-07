@@ -1,4 +1,4 @@
-import { CdkDrag, CdkDragDrop, CdkDropList, moveItemInArray } from '@angular/cdk/drag-drop';
+import { CdkDrag, CdkDragDrop, CdkDropList } from '@angular/cdk/drag-drop';
 import { Component, HostListener, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { LibraryService } from '../../services/library.service';
@@ -55,9 +55,7 @@ export class NowPlayingPanelComponent {
   }
 
   protected drop(event: CdkDragDrop<TrackRow[]>): void {
-    const next = [...this.playback.queue()];
-    moveItemInArray(next, event.previousIndex, event.currentIndex);
-    this.playback.queue.set(next);
+    this.playback.reorderQueue(event.previousIndex, event.currentIndex);
   }
 
   protected async playFromQueue(index: number): Promise<void> {

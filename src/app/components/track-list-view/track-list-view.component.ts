@@ -1,8 +1,10 @@
 import { ScrollingModule } from '@angular/cdk/scrolling';
 import {
   Component,
+  HostListener,
   OnInit,
   computed,
+  effect,
   inject,
   signal,
   ChangeDetectionStrategy,
@@ -22,6 +24,16 @@ interface Column {
   /** Right-align numeric columns. */
   numeric?: boolean;
   format(t: TrackRow): string;
+}
+
+/**
+ * "Could not delete Song A and 3 more." — names one so the user can go
+ * looking, counts the rest so a batch failure does not fill the screen.
+ */
+function describeFailures(failed: string[], verb: string): string {
+  const [first] = failed;
+  const rest = failed.length - 1;
+  return `Could not ${verb} ${first}${rest > 0 ? ` and ${rest} more` : ''}.`;
 }
 
 const ALL_COLUMNS: Column[] = [
@@ -94,8 +106,26 @@ export class TrackListViewComponent implements OnInit {
   /** Column-picker [⚙] popover. */
   protected readonly pickerOpen = signal(false);
 
+  constructor() {
+    // Whatever replaces the list — a different playlist, a column-browser
+    // filter, a search — invalidates the selection. Keeping it would let
+    // a Delete act on rows the user picked in a view they have left, and
+    // can no longer see.
+    effect(() => {
+      this.library.activePlaylistId();
+      this.library.filters();
+      this.library.search();
+      this.clearSelection();
+    });
+  }
+
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshTracks());
+  }
+
+  private clearSelection(): void {
+    if (this.selection().size > 0) this.selection.set(new Set());
+    this.anchorIndex = null;
   }
 
   #computeVisibleColumns(): Column[] {
@@ -157,7 +187,11 @@ export class TrackListViewComponent implements OnInit {
       const tracks = this.library.tracks();
       const [a, b] = [this.anchorIndex, index].sort((x, y) => x - y);
       const next = new Set(this.selection());
-      for (let i = a; i <= b; i += 1) next.add(tracks[i].id);
+      // Clamped: the anchor is an index into a list that may have grown
+      // or shrunk since it was set (rows added, deleted, refreshed).
+      for (let i = Math.max(a, 0); i <= Math.min(b, tracks.length - 1); i += 1) {
+        next.add(tracks[i].id);
+      }
       this.selection.set(next);
       return;
     }
@@ -171,6 +205,106 @@ export class TrackListViewComponent implements OnInit {
     }
     this.selection.set(new Set([t.id]));
     this.anchorIndex = index;
+  }
+
+  /** The selected rows, in list order. Empty when nothing is picked. */
+  protected selectedTracks(): TrackRow[] {
+    const ids = this.selection();
+    return ids.size === 0 ? [] : this.library.tracks().filter((t) => ids.has(t.id));
+  }
+
+  /**
+   * List-wide keyboard shortcuts. Bound on document so they work
+   * wherever focus sits inside the list, and suppressed while the user
+   * is typing or a modal owns the screen — Delete in a text field
+   * means "delete a character".
+   */
+  @HostListener('document:keydown', ['$event'])
+  onKeydown(event: KeyboardEvent): void {
+    if (this.isTypingTarget(event.target) || this.ui.anyModalOpen()) return;
+
+    const isMulti = event.ctrlKey || event.metaKey;
+    if (isMulti && (event.key === 'a' || event.key === 'A')) {
+      event.preventDefault();
+      this.selectAll();
+      return;
+    }
+    if (event.key === 'Escape' && this.selection().size > 0) {
+      event.preventDefault();
+      this.clearSelection();
+      return;
+    }
+    if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+    const targets = this.selectedTracks();
+    if (targets.length === 0) return;
+    event.preventDefault();
+    void this.deleteSelection(targets, event.shiftKey);
+  }
+
+  /**
+   * What Delete means depends on what is on screen, matching the
+   * context menu exactly:
+   *
+   * - in one of the user's own manual playlists, it takes the tracks
+   *   out of *that playlist* and touches no files (shift-Delete falls
+   *   through to the library meaning, as it does in iTunes);
+   * - in the library — or a smart/synced playlist, where removal is
+   *   not ours to do — it moves the files to the trash after a
+   *   confirmation, or with shift, drops the rows from the library and
+   *   leaves the files alone.
+   */
+  private async deleteSelection(targets: TrackRow[], shift: boolean): Promise<void> {
+    const active = this.library.activePlaylist();
+    const ownPlaylist = active?.kind === 'regular' && !active.synced;
+    if (ownPlaylist && !shift) {
+      await this.ui.guard(
+        this.library.removeTracksFromPlaylist(
+          active.id,
+          targets.map((t) => t.id),
+        ),
+      );
+      this.selection.set(new Set());
+      return;
+    }
+    if (shift) {
+      await this.removeTargets(targets, 'remove_tracks');
+      return;
+    }
+    this.confirmTrash(targets);
+  }
+
+  /** Whether the event's target is somewhere text is being entered. */
+  private isTypingTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el) return false;
+    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true;
+  }
+
+  protected selectAll(): void {
+    this.selection.set(new Set(this.library.tracks().map((t) => t.id)));
+    // Keep an anchor: onRowClick's shift branch needs one, and clearing
+    // it would make the next shift-click collapse the whole selection
+    // to the row that was clicked.
+    this.anchorIndex ??= 0;
+  }
+
+  /**
+   * Ask before moving files to the trash: it reaches outside the
+   * library, and a range selection can be far larger than the row the
+   * user was looking at.
+   */
+  private confirmTrash(targets: TrackRow[]): void {
+    const n = targets.length;
+    const what = n === 1 ? `“${targets[0].title}”` : `${n} tracks`;
+    this.ui.confirm.set({
+      title: n === 1 ? 'Move to Trash' : 'Move Files to Trash',
+      message:
+        `Move ${what} to the trash? The file${n === 1 ? '' : 's'} leave${n === 1 ? 's' : ''} ` +
+        `your whole library, not just this view, and go to the system trash.`,
+      confirmLabel: n === 1 ? 'Move to Trash' : `Move ${n} to Trash`,
+      destructive: true,
+      onConfirm: () => this.removeTargets(targets, 'trash_tracks'),
+    });
   }
 
   /**
@@ -209,7 +343,21 @@ export class TrackListViewComponent implements OnInit {
           for (const target of [...targets].reverse()) this.playback.playNext(target);
         },
       },
+      {
+        label: 'Add to Playlist',
+        children: this.addToPlaylistChildren(targets),
+      },
+      ...this.removeFromPlaylistItems(targets),
       { label: '---' },
+      {
+        label: 'Get Info…',
+        disabled: !single,
+        action: () => this.ui.trackInfo.set({ trackId: t.id }),
+      },
+      {
+        label: single ? 'Write Tags to File' : `Write Tags to ${targets.length} Files`,
+        action: () => this.writeTags(targets),
+      },
       {
         label: 'Show in Files',
         disabled: !single,
@@ -221,12 +369,86 @@ export class TrackListViewComponent implements OnInit {
       {
         label: single ? 'Remove from Library' : `Remove ${targets.length} from Library`,
         destructive: true,
-        action: () => this.removeTargets(targets, 'remove_track'),
+        action: () => this.removeTargets(targets, 'remove_tracks'),
       },
       {
         label: single ? 'Move to Trash' : `Move ${targets.length} to Trash`,
         destructive: true,
-        action: () => this.removeTargets(targets, 'trash_track'),
+        action: () => this.confirmTrash(targets),
+      },
+      { label: '---' },
+      { label: 'Select All', action: () => this.selectAll() },
+    ];
+  }
+
+  /**
+   * Push the library's metadata into the files themselves. Corrections
+   * made here — and everything an iTunes import carried in — otherwise
+   * live only in this database.
+   */
+  private async writeTags(targets: TrackRow[]): Promise<void> {
+    const summary = await this.ui.guard(this.library.writeTagsToFiles(targets.map((t) => t.id)));
+    if (summary === null) return;
+    if (summary.failed.length > 0) {
+      this.ui.lastError.set(describeFailures(summary.failed, 'write tags for'));
+    }
+  }
+
+  /**
+   * Submenu targets: the user's own manual playlists (synced ones get
+   * rewritten on the next sync, so adding there would silently vanish),
+   * plus a "New Playlist…" shortcut that creates one and adds the
+   * selection in a single flow.
+   */
+  private addToPlaylistChildren(targets: TrackRow[]): ContextMenuItem[] {
+    const ids = targets.map((t) => t.id);
+    const own = this.library
+      .playlists()
+      .filter((p) => p.kind === 'regular' && !p.synced)
+      .map((p): ContextMenuItem => ({
+        label: p.name,
+        action: async () => {
+          await this.ui.guard(this.library.addTracksToPlaylist(p.id, ids));
+        },
+      }));
+    return [
+      ...own,
+      ...(own.length > 0 ? [{ label: '---' }] : []),
+      {
+        label: 'New Playlist…',
+        action: () =>
+          this.ui.namePrompt.set({
+            title: 'New Playlist',
+            initial: '',
+            onSubmit: async (name) => {
+              await this.ui.guard(this.library.createPlaylistWithTracks(name, ids));
+            },
+          }),
+      },
+    ];
+  }
+
+  /**
+   * "Remove from Playlist" — only while one of the user's own manual
+   * playlists is on screen. A synced playlist's rows come back on the
+   * next sync (and the backend refuses to write them anyway).
+   */
+  private removeFromPlaylistItems(targets: TrackRow[]): ContextMenuItem[] {
+    const active = this.library.activePlaylist();
+    if (active?.kind !== 'regular' || active.synced) return [];
+    const single = targets.length === 1;
+    return [
+      {
+        label: single ? 'Remove from Playlist' : `Remove ${targets.length} from Playlist`,
+        action: async () => {
+          await this.ui.guard(
+            this.library.removeTracksFromPlaylist(
+              active.id,
+              targets.map((t) => t.id),
+            ),
+          );
+          this.selection.set(new Set());
+        },
       },
     ];
   }
@@ -238,14 +460,58 @@ export class TrackListViewComponent implements OnInit {
    */
   private async removeTargets(
     targets: TrackRow[],
-    command: 'remove_track' | 'trash_track',
+    command: 'remove_tracks' | 'trash_tracks',
   ): Promise<void> {
-    for (const target of targets) {
-      await this.ui.guard(this.tauri.invoke(command, { trackId: target.id }));
+    const summary = await this.ui.guard(
+      this.library.removeTracks(
+        command,
+        targets.map((t) => t.id),
+      ),
+    );
+    if (summary === null) return;
+
+    const removed = new Set(summary.removed);
+    this.clearSelection();
+
+    // Only what actually went, and only after it went: a delete that
+    // failed (a read-only mount) must not cost the user their playback
+    // position or their queue.
+    if (command === 'trash_tracks' && removed.size > 0) {
+      // The files are off the disk now. Anything still pointing at one
+      // — the transport, the queue, the engine's pre-queued track —
+      // would be playing something that is not there.
+      if (removed.has(this.playback.currentTrackId() ?? -1)) {
+        await this.playback.stop();
+      }
+      this.playback.updateQueue((q) => q.filter((t) => !removed.has(t.id)));
     }
-    this.selection.set(new Set());
-    await this.ui.guard(this.library.refreshTracks());
-    await this.ui.guard(this.library.refreshStats());
+
+    await Promise.all([
+      this.ui.guard(this.library.refreshTracks()),
+      this.ui.guard(this.library.refreshStats()),
+    ]);
+    if (command === 'trash_tracks' && removed.size > 0) {
+      // After the reload, so the replacement candidate comes from the
+      // list as it is now rather than the one with the deleted rows.
+      await this.playback.resetPrefetch();
+    }
+
+    if (summary.failed.length > 0) {
+      this.ui.lastError.set(describeFailures(summary.failed, 'delete'));
+    }
+  }
+
+  /**
+   * Right-click on the header row: every column with a checkmark for
+   * the visible ones — same state the [⚙] picker edits.
+   */
+  protected onHeaderContextMenu(event: MouseEvent): void {
+    const items: ContextMenuItem[] = ALL_COLUMNS.map((col) => ({
+      label: col.label,
+      checked: this.isColumnVisible(col.id),
+      action: () => this.toggleColumn(col.id),
+    }));
+    this.ctx.show(event, items);
   }
 
   protected togglePicker(event: MouseEvent): void {
@@ -254,9 +520,24 @@ export class TrackListViewComponent implements OnInit {
   }
 
   protected toggleColumn(id: SortColumn): void {
-    this.visibleColumnIds.update((ids) =>
-      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
-    );
+    this.visibleColumnIds.update((ids) => {
+      if (!ids.includes(id)) return [...ids, id];
+      // Never hide the last column — an empty table has no way back in.
+      if (ids.length === 1) return ids;
+      return ids.filter((x) => x !== id);
+    });
+  }
+
+  /**
+   * The picker's full-screen backdrop lives inside the header, so a
+   * right-click on it would bubble into onHeaderContextMenu and open
+   * the column menu over the picker. Swallow it and close the picker
+   * instead — same as a plain click.
+   */
+  protected onPickerBackdropContextMenu(event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.closePicker();
   }
 
   protected isColumnVisible(id: SortColumn): boolean {

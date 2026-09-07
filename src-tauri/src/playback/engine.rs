@@ -421,12 +421,21 @@ fn handle_command<R: Runtime>(
                     duration_ms: state.last_duration_ms,
                 });
             }
-            *current_track = None;
+            let prev = current_track.take();
+            // mpv's `pause` flag is sticky across `stop`: a paused →
+            // stopped → play sequence would otherwise flip it back to
+            // false on an idle player and the observer would report a
+            // phantom Playing over nothing. Clear it here while
+            // `current_track` is None so the observer stays quiet.
+            let _ = mpv.set_property("pause", false);
             state.loading = false;
+            state.last_emitted_position_ms = 0;
+            state.emit_state(app, PlaybackState::Stopped);
             let _ = app.emit(
-                events::STATE_CHANGED,
-                StateChanged {
-                    state: PlaybackState::Stopped,
+                events::TRACK_CHANGED,
+                TrackChanged {
+                    track_id: None,
+                    prev_track_id: prev,
                 },
             );
         }
@@ -655,6 +664,11 @@ fn handle_event<R: Runtime>(
                 state.last_duration_ms = (dur * 1000.0) as i64;
             }
             ("pause", PropertyData::Flag(paused)) => {
+                // With nothing loaded a pause flip carries no playback
+                // meaning (Stop resets the flag on an idle player).
+                if state.current_track.is_none() {
+                    return;
+                }
                 state.emit_state(
                     app,
                     if paused {
@@ -952,5 +966,29 @@ mod end_file_tests {
                 .any(|e| e.starts_with(events::STATE_CHANGED) && e.contains("playing")),
             "{events:?}"
         );
+    }
+
+    #[test]
+    fn pause_flip_while_idle_emits_nothing() {
+        let (app, mut state, tx, _rx, seen) = harness();
+        state.current_track = None;
+        state.loading = false;
+        handle_event(
+            Event::PropertyChange {
+                name: "pause",
+                change: PropertyData::Flag(false),
+                reply_userdata: 0,
+            },
+            app.handle(),
+            &mut state,
+            &tx,
+            false,
+        );
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "{:?}",
+            seen.lock().unwrap()
+        );
+        assert_eq!(state.last_emitted_state, None);
     }
 }
