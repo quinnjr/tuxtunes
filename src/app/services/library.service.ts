@@ -160,6 +160,7 @@ export class LibraryService implements OnDestroy {
 
   #unlistenExternal: (() => void) | null = null;
   #unlistenIngest: (() => void) | null = null;
+  #unlistenConsolidate: (() => void) | null = null;
   /** Ingest results seen this session, newest last. See #applyIngestResult. */
   readonly #ingested = new Map<number, IngestCompleteRaw>();
 
@@ -181,6 +182,16 @@ export class LibraryService implements OnDestroy {
         this.#unlistenExternal = off;
       });
 
+    // The consolidate pass rewrites file_path across the library, and
+    // those paths only exist in the database until something reloads.
+    void this.tauri
+      .listen('fs:consolidate-complete', () => {
+        void Promise.allSettled([this.refreshTracks(), this.refreshStats()]);
+      })
+      .then((off) => {
+        this.#unlistenConsolidate = off;
+      });
+
     // Newly added files are copied into the managed library folder in
     // the background, which rewrites their file_path. Patch the loaded
     // rows in place rather than refreshing — a folder import emits one
@@ -199,6 +210,8 @@ export class LibraryService implements OnDestroy {
     this.#unlistenExternal = null;
     this.#unlistenIngest?.();
     this.#unlistenIngest = null;
+    this.#unlistenConsolidate?.();
+    this.#unlistenConsolidate = null;
   }
 
   /**

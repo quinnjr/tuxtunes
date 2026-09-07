@@ -21,10 +21,12 @@ interface PrefsInternals {
   hide(): void;
   toggleKeep(): void;
   preview(): string;
+  reorganize(): Promise<void>;
+  reorganizeStatus(): string | null;
 }
 
-function setup() {
-  const stub = tauriStub();
+function setup(invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>) {
+  const stub = invoke ? tauriStub(invoke) : tauriStub();
   TestBed.configureTestingModule({
     imports: [PreferencesPanelComponent],
     providers: appProviders(stub),
@@ -36,6 +38,7 @@ function setup() {
     cmp: fixture.componentInstance as unknown as PrefsInternals,
     prefs: TestBed.inject(PreferencesService),
     ui: TestBed.inject(UiService),
+    stub,
   };
 }
 
@@ -137,5 +140,54 @@ describe('PreferencesPanelComponent', () => {
 
     expect(cmp.draftRoot()).toBe('');
     expect(ui.lastError()).toContain('unreachable');
+  });
+
+  describe('reorganize()', () => {
+    it('saves the draft first, so the pass uses the root on screen', async () => {
+      const { cmp, stub } = setup(async () => undefined);
+      cmp.draftRoot.set('/music/new');
+      cmp.draftScheme.set('{title}.{ext}');
+
+      await cmp.reorganize();
+
+      expect(stub.invoke).toHaveBeenCalledWith('set_library_root', { path: '/music/new' });
+      expect(stub.invoke).toHaveBeenCalledWith('set_organize_scheme', {
+        scheme: '{title}.{ext}',
+      });
+      expect(stub.invoke).toHaveBeenCalledWith('consolidate_library');
+    });
+
+    it('reports progress and clears it on the summary', async () => {
+      const { cmp, stub } = setup(async () => undefined);
+      expect(cmp.reorganizeStatus()).toBeNull();
+
+      await cmp.reorganize();
+      expect(cmp.reorganizeStatus()).toBe('Starting…');
+
+      stub.emit('fs:consolidate-progress', { current: 7, total: 20 });
+      expect(cmp.reorganizeStatus()).toBe('Reorganizing 7 of 20…');
+
+      stub.emit('fs:consolidate-complete', {
+        total: 20,
+        moved: 19,
+        copied: 1,
+        in_place: 0,
+        failed: 0,
+      });
+      expect(cmp.reorganizeStatus()).toBeNull();
+    });
+
+    it('does not start the pass when saving the draft fails', async () => {
+      const { cmp, stub, ui } = setup(async (cmd) => {
+        if (cmd === 'set_library_root') throw new Error('root is not writable');
+        return undefined;
+      });
+
+      await cmp.reorganize();
+
+      expect(stub.invoke).not.toHaveBeenCalledWith('consolidate_library');
+      expect(ui.lastError()).toBe('root is not writable');
+      expect(cmp.reorganizeStatus()).toBeNull();
+    });
   });
 });

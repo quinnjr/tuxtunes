@@ -100,38 +100,6 @@
             </button>
           </div>
           <div class="rounded-lg border border-border bg-bg-surface p-4">
-            <h3 class="mb-1 text-body font-medium text-text-primary">Reorganize library</h3>
-            <p class="mb-3 text-footnote text-text-muted">
-              Brings every track to the path the organize scheme asks for under the library folder.
-              Files already inside the folder are moved; files outside it are copied in, leaving
-              your originals where they are.
-            </p>
-            <div class="flex items-center gap-3">
-              <button
-                type="button"
-                (click)="consolidate()"
-                [disabled]="consolidateStatus() !== null"
-                class="mac-btn h-8 px-3 bg-bg-elevated disabled:opacity-50"
-              >
-                Reorganize now
-              </button>
-              @if (consolidateStatus(); as status) {
-                <span class="text-footnote text-text-muted">{{ status }}</span>
-              }
-              @if (prefs.consolidateResult(); as r) {
-                <span class="text-footnote text-accent">
-                  {{ r.moved }} moved, {{ r.copied }} copied, {{ r.in_place }} already in place
-                  @if (r.failed > 0) {
-                    <span>, {{ r.failed }} failed</span>
-                  }
-                </span>
-              }
-            </div>
-            @if (consolidateError(); as msg) {
-              <p class="mt-2 text-footnote text-accent">{{ msg }}</p>
-            }
-          </div>
-          <div class="rounded-lg border border-border bg-bg-surface p-4">
             <h3 class="mb-1 text-body font-medium text-text-primary">Verify library</h3>
             <p class="mb-3 text-footnote text-text-muted">
               Re-hashes every track file and flags mismatches. Long-running on large libraries.
