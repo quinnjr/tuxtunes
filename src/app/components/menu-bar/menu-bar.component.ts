@@ -5,6 +5,7 @@ import {
   faFolderPlus,
   faGear,
   faPlus,
+  faRightFromBracket,
   faWandMagicSparkles,
 } from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
@@ -37,6 +38,7 @@ export class MenuBarComponent {
   protected readonly faWand = faWandMagicSparkles;
   protected readonly faFileImport = faFileImport;
   protected readonly faGear = faGear;
+  protected readonly faExit = faRightFromBracket;
 
   /** Which top-level menu is open, if any. Null closes every dropdown. */
   protected readonly openMenu = signal<MenuId | null>(null);
@@ -80,6 +82,11 @@ export class MenuBarComponent {
         ? `Could not read ${name}${tail}.`
         : `Added ${handled}; could not read ${name}${tail}.`,
     );
+  }
+
+  protected async exit(): Promise<void> {
+    this.close();
+    await this.ui.guard(this.win.quit());
   }
 
   protected newSmartPlaylist(): void {

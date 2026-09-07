@@ -16,6 +16,7 @@ interface MenuBarInternals {
   newSmartPlaylist(): void;
   importItunes(): void;
   openPreferences(): void;
+  exit(): Promise<void>;
 }
 
 function setup(extraProviders: Provider[] = []) {
@@ -31,6 +32,8 @@ function setup(extraProviders: Provider[] = []) {
     cmp: fixture.componentInstance as unknown as MenuBarInternals,
     library: TestBed.inject(LibraryService),
     ui: TestBed.inject(UiService),
+    win: TestBed.inject(WindowService),
+    stub,
   };
 }
 
@@ -179,5 +182,28 @@ describe('MenuBarComponent', () => {
       fixture.detectChanges();
       expect(nav?.classList.contains('pl-20')).toBe(true);
     });
+  });
+
+  it('exit() quits the app and closes the menu', async () => {
+    const { cmp, stub } = setup();
+    cmp.toggle('file');
+
+    await cmp.exit();
+
+    expect(cmp.openMenu()).toBeNull();
+    // Not window.close(): the tray outlives a closed window, so the
+    // process has to be ended on the backend.
+    expect(stub.invoke).toHaveBeenCalledWith('quit_app');
+  });
+
+  it('exit() reports a refused quit instead of leaving the menu open', async () => {
+    const { cmp, ui, win } = setup();
+    vi.spyOn(win, 'quit').mockRejectedValue(new Error('no window'));
+    cmp.toggle('file');
+
+    await cmp.exit();
+
+    expect(cmp.openMenu()).toBeNull();
+    expect(ui.lastError()).toBe('no window');
   });
 });

@@ -127,6 +127,15 @@ export class WindowService {
     await this.win?.close();
   }
 
+  /**
+   * End the app, not just the window. The tray outlives a closed
+   * window, so quitting has to go through the backend — the same
+   * `app.exit(0)` the tray's own Quit item uses.
+   */
+  async quit(): Promise<void> {
+    await this.tauri.invoke<void>('quit_app');
+  }
+
   #computeCustomControls(): boolean {
     return this.available && this.platform() !== 'macos';
   }
