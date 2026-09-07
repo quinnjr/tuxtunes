@@ -433,9 +433,110 @@ pub async fn update_track_metadata(
     };
     crate::fs::tags::write_metadata(std::path::Path::new(&row.file_path), &e)
         .map_err(|err| err.to_string())?;
+    // A cover TuxTunes resolved for this album lives only in its cache
+    // until something puts it in the file; saving an edit is the
+    // natural moment. Only when the file has none of its own — an edit
+    // is no reason to replace art the file already carries.
+    write_back_cover(&row);
     crate::db::tracks::update_metadata(&state.db.engine, track_id, &e)
         .await
+        .map_err(|err| err.to_string())?;
+    // The file's bytes changed, so the stored hash no longer describes
+    // it and Verify would call it corrupt.
+    crate::db::tracks::clear_file_hash(&state.db.engine, track_id)
+        .await
         .map_err(|err| err.to_string())
+}
+
+/// Outcome of [`write_tags_to_files`]; serialized for the UI.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct WriteBackSummary {
+    /// Files whose tags were rewritten from the library's values.
+    pub written: u64,
+    /// Of those, how many also got a cover they did not have.
+    pub covers: u64,
+    /// Titles of tracks that could not be written, for the UI to name.
+    pub failed: Vec<String>,
+}
+
+/// Push what the library knows about each track into its file's own
+/// tags: the descriptive fields, plus the resolved cover for a file
+/// that has no embedded picture.
+///
+/// Metadata corrected in TuxTunes — or carried in from an iTunes
+/// import, which is full of edits that were never in the files — lives
+/// only in this database until this writes it out. That makes the file
+/// self-describing again: other players see it, and a re-import after
+/// the library is gone brings the corrections back with it.
+#[tauri::command]
+pub async fn write_tags_to_files(
+    state: tauri::State<'_, AppState>,
+    track_ids: Vec<i64>,
+) -> Result<WriteBackSummary, String> {
+    Ok(write_tags_for(&state.db.engine, &track_ids).await)
+}
+
+/// Body of [`write_tags_to_files`], free of `tauri::State` so it can be
+/// exercised directly against a temp database.
+pub async fn write_tags_for(
+    engine: &prax_sqlite::raw::SqliteRawEngine,
+    track_ids: &[i64],
+) -> WriteBackSummary {
+    let mut summary = WriteBackSummary::default();
+    for &id in track_ids {
+        let row = match tracks::get(engine, id).await {
+            Ok(row) => row,
+            Err(e) => {
+                log::warn!("write_tags_to_files: track {id} is gone: {e}");
+                continue;
+            }
+        };
+        let edit = crate::db::tracks::MetadataEdit {
+            title: &row.title,
+            artist: row.artist.as_deref(),
+            album: row.album.as_deref(),
+            album_artist: row.album_artist.as_deref(),
+            genre: row.genre.as_deref(),
+            year: row.year,
+            track_number: row.track_number,
+            disc_number: row.disc_number,
+        };
+        if let Err(e) = crate::fs::tags::write_metadata(std::path::Path::new(&row.file_path), &edit)
+        {
+            log::warn!("write_tags_to_files: {}: {e}", row.file_path);
+            summary.failed.push(row.title.clone());
+            continue;
+        }
+        if write_back_cover(&row) {
+            summary.covers += 1;
+        }
+        summary.written += 1;
+        if let Err(e) = crate::db::tracks::clear_file_hash(engine, id).await {
+            log::warn!("write_tags_to_files: could not clear the hash for {id}: {e}");
+        }
+    }
+    summary
+}
+
+/// Embed the row's cover in its file when the file has none. Returns
+/// whether a cover was written. Best-effort: a file that will not take
+/// a picture is not worth failing an otherwise good tag write over.
+fn write_back_cover(row: &TrackRow) -> bool {
+    let Some(art) = row.artwork_path.as_deref() else {
+        return false;
+    };
+    let art = std::path::Path::new(art);
+    let audio = std::path::Path::new(&row.file_path);
+    if !art.is_file() || crate::fs::tags::has_embedded_cover(audio) {
+        return false;
+    }
+    match crate::fs::tags::write_cover(audio, art) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("could not embed a cover in {}: {e}", row.file_path);
+            false
+        }
+    }
 }
 
 #[tauri::command]
@@ -445,15 +546,31 @@ pub async fn remove_track(state: tauri::State<'_, AppState>, track_id: i64) -> R
 
 /// Body of [`remove_track`], free of `tauri::State` so the bulk command
 /// and tests can drive it directly.
+///
+/// Removing a track leaves nothing of it behind: the row carries every
+/// correction the user made that the file itself never had, so it goes
+/// whole rather than lingering to be re-adopted by a later import.
 pub async fn remove_track_from(
     engine: &prax_sqlite::raw::SqliteRawEngine,
     track_id: i64,
 ) -> Result<(), String> {
+    // Read the row first: once it is gone there is no way back to the
+    // cover it was using, and a cached image no track references is
+    // just a file the user cannot see or reach.
+    let artwork = tracks::get(engine, track_id)
+        .await
+        .ok()
+        .and_then(|row| row.artwork_path);
+
     let sql = "DELETE FROM tracks WHERE id = ?";
     engine
         .raw_sql_execute(sql, &[FilterValue::Int(track_id)])
         .await
         .map_err(|e| e.to_string())?;
+
+    if let Some(art) = artwork {
+        prune_cached_artwork(engine, &art).await;
+    }
     // Leave no dangling playlist entry behind — SQLite reuses rowids,
     // so a stale id could later resolve to an unrelated track.
     crate::db::playlists::prune_track(engine, track_id)
@@ -464,6 +581,42 @@ pub async fn remove_track_from(
     crate::db::device_objects::detach_track(engine, track_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Delete a cached cover once no track row points at it any more.
+///
+/// The cache lives under `$APPDATA/artwork/`, keyed by content hash, so
+/// several albums can share one file — only the last reference takes it
+/// with it. Anything outside the cache (a sidecar in the user's own
+/// music folder) is left alone: it is not ours to delete.
+async fn prune_cached_artwork(engine: &prax_sqlite::raw::SqliteRawEngine, artwork_path: &str) {
+    let still_used: i64 = match engine
+        .raw_sql_scalar(
+            "SELECT COUNT(*) FROM tracks WHERE artwork_path = ?",
+            &[FilterValue::String(artwork_path.to_string())],
+        )
+        .await
+    {
+        Ok(n) => n,
+        Err(e) => {
+            log::warn!("could not check whether {artwork_path} is still in use: {e}");
+            return;
+        }
+    };
+    if still_used > 0 {
+        return;
+    }
+    let path = std::path::Path::new(artwork_path);
+    // Only files we put in the cache: the parent directory is named
+    // `artwork` and sits in the app's data dir.
+    if path.parent().and_then(|p| p.file_name()) != Some(std::ffi::OsStr::new("artwork")) {
+        return;
+    }
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("could not remove the cached cover {artwork_path}: {e}");
+        }
+    }
 }
 
 /// What a bulk removal actually did.

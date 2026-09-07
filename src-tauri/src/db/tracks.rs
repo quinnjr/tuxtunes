@@ -664,6 +664,23 @@ pub async fn path_in_use(engine: &SqliteRawEngine, path: &str) -> Result<bool, T
     Ok(n > 0)
 }
 
+/// Forget the stored hash for a track whose file we just rewrote.
+///
+/// Writing tags changes the file's bytes, so the hash recorded at
+/// import no longer describes it; leaving it would make the next
+/// Verify report a mismatch on a file the user themselves corrected.
+pub async fn clear_file_hash(engine: &SqliteRawEngine, local_id: i64) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    engine
+        .raw_sql_execute(
+            "UPDATE tracks SET file_hash = NULL, verified_at = CURRENT_TIMESTAMP WHERE id = ?",
+            &[FV::Int(local_id)],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
 /// Record a freshly-computed file hash (plus bump `verified_at`) — used
 /// by the "Verify Library" walk when content confirms a file is intact.
 pub async fn set_file_hash(

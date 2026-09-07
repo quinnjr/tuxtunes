@@ -84,6 +84,13 @@ interface IngestCompleteRaw {
   artwork_path: string | null;
 }
 
+/** Outcome of writing library metadata back into the files. */
+export interface WriteBackSummary {
+  written: number;
+  covers: number;
+  failed: string[];
+}
+
 /** Outcome of adding picked files; mirrors AddFolderSummary. */
 export interface AddTracksSummary {
   added: TrackRowRaw[];
@@ -597,6 +604,20 @@ export class LibraryService implements OnDestroy {
     // result for a deleted track could be applied to an unrelated new
     // one that lands on the same id.
     for (const id of summary.removed) this.#ingested.delete(id);
+    return summary;
+  }
+
+  /**
+   * Write what the library knows about these tracks into their files'
+   * own tags, cover included. Refreshes afterwards: the backend clears
+   * each file's stored hash, which the list shows as verification
+   * state.
+   */
+  async writeTagsToFiles(trackIds: number[]): Promise<WriteBackSummary> {
+    const summary = await this.tauri.invoke<WriteBackSummary>('write_tags_to_files', {
+      trackIds,
+    });
+    await this.refreshTracks();
     return summary;
   }
 
