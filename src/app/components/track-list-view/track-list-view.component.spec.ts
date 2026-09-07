@@ -738,4 +738,54 @@ describe('TrackListViewComponent', () => {
       expect(cmp.selection()).toEqual(new Set([1, 2, 3]));
     });
   });
+
+  describe('Write Tags to File', () => {
+    const menuFor = (cmp: ListInternals, ctx: ContextMenuService, t: TrackRow) => {
+      const showSpy = vi.spyOn(ctx, 'show');
+      cmp.onRowContextMenu(t, {
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      } as unknown as MouseEvent);
+      return (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+    };
+
+    it('sends the whole selection to the backend', async () => {
+      const { cmp, ctx, library, invoke } = setup(async (cmd) =>
+        cmd === 'write_tags_to_files' ? { written: 2, covers: 1, failed: [] } : [],
+      );
+      library.tracks.set([TRACK(1), TRACK(2)]);
+      cmp.selection.set(new Set([1, 2]));
+
+      const items = menuFor(cmp, ctx, TRACK(1));
+      await items.find((i) => i.label === 'Write Tags to 2 Files')!.action?.();
+
+      expect(invoke).toHaveBeenCalledWith('write_tags_to_files', { trackIds: [1, 2] });
+    });
+
+    it('names a file it could not write', async () => {
+      const { cmp, ctx, library, ui } = setup(async (cmd) =>
+        cmd === 'write_tags_to_files'
+          ? { written: 1, covers: 0, failed: ['Locked Song', 'Another'] }
+          : [],
+      );
+      library.tracks.set([TRACK(1)]);
+
+      const items = menuFor(cmp, ctx, TRACK(1));
+      await items.find((i) => i.label === 'Write Tags to File')!.action?.();
+
+      expect(ui.lastError()).toBe('Could not write tags for Locked Song and 1 more.');
+    });
+
+    it('says nothing when every file was written', async () => {
+      const { cmp, ctx, library, ui } = setup(async (cmd) =>
+        cmd === 'write_tags_to_files' ? { written: 1, covers: 1, failed: [] } : [],
+      );
+      library.tracks.set([TRACK(1)]);
+
+      const items = menuFor(cmp, ctx, TRACK(1));
+      await items.find((i) => i.label === 'Write Tags to File')!.action?.();
+
+      expect(ui.lastError()).toBeNull();
+    });
+  });
 });

@@ -341,6 +341,10 @@ export class TrackListViewComponent implements OnInit {
         action: () => this.ui.trackInfo.set({ trackId: t.id }),
       },
       {
+        label: single ? 'Write Tags to File' : `Write Tags to ${targets.length} Files`,
+        action: () => this.writeTags(targets),
+      },
+      {
         label: 'Show in Files',
         disabled: !single,
         action: async () => {
@@ -361,6 +365,23 @@ export class TrackListViewComponent implements OnInit {
       { label: '---' },
       { label: 'Select All', action: () => this.selectAll() },
     ];
+  }
+
+  /**
+   * Push the library's metadata into the files themselves. Corrections
+   * made here — and everything an iTunes import carried in — otherwise
+   * live only in this database.
+   */
+  private async writeTags(targets: TrackRow[]): Promise<void> {
+    const summary = await this.ui.guard(this.library.writeTagsToFiles(targets.map((t) => t.id)));
+    if (summary === null) return;
+    if (summary.failed.length > 0) {
+      const [first] = summary.failed;
+      const rest = summary.failed.length - 1;
+      this.ui.lastError.set(
+        `Could not write tags for ${first}${rest > 0 ? ` and ${rest} more` : ''}.`,
+      );
+    }
   }
 
   /**
