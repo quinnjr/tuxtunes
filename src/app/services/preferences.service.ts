@@ -14,6 +14,28 @@ export interface ConsolidateResult {
   moved: number;
   copied: number;
   in_place: number;
+  /** Rows whose file is not on disk — nothing to consolidate. */
+  missing: number;
+  failed: number;
+}
+
+/** What reclaiming would free, before doing it. */
+export interface ReclaimEstimate {
+  files: number;
+  bytes: number;
+}
+
+/** Live state of the reclaim pass. */
+export interface ReclaimProgress {
+  current: number;
+  total: number;
+}
+
+/** Summary the backend emits when the reclaim pass finishes. */
+export interface ReclaimResult {
+  reclaimed: number;
+  bytes_freed: number;
+  skipped: number;
   failed: number;
 }
 
@@ -29,6 +51,13 @@ export class PreferencesService implements OnDestroy {
   readonly consolidateProgress = signal<ConsolidateProgress | null>(null);
   /** Summary of the last finished pass, or null if none ran this session. */
   readonly consolidateResult = signal<ConsolidateResult | null>(null);
+
+  /** What a reclaim would free right now, or null before it is asked. */
+  readonly reclaimEstimate = signal<ReclaimEstimate | null>(null);
+  /** Non-null while the reclaim pass is running. */
+  readonly reclaimProgress = signal<ReclaimProgress | null>(null);
+  /** Summary of the last finished reclaim, or null if none ran. */
+  readonly reclaimResult = signal<ReclaimResult | null>(null);
 
   private readonly unlisteners: UnlistenFn[] = [];
 
@@ -51,6 +80,17 @@ export class PreferencesService implements OnDestroy {
       await this.tauri.listen<ConsolidateResult>('fs:consolidate-complete', (r) => {
         this.consolidateProgress.set(null);
         this.consolidateResult.set(r);
+        // Copying in leaves originals behind, so what is reclaimable
+        // has just changed.
+        void this.refreshReclaimEstimate();
+      }),
+      await this.tauri.listen<ReclaimProgress>('fs:reclaim-progress', (p) => {
+        this.reclaimProgress.set(p);
+      }),
+      await this.tauri.listen<ReclaimResult>('fs:reclaim-complete', (r) => {
+        this.reclaimProgress.set(null);
+        this.reclaimResult.set(r);
+        void this.refreshReclaimEstimate();
       }),
     );
   }
@@ -79,6 +119,27 @@ export class PreferencesService implements OnDestroy {
     this.libraryRoot.set(root);
     this.organizeScheme.set(scheme);
     this.keepOrganized.set(keep);
+  }
+
+  /** Ask what a reclaim would free. Cheap enough to call on open. */
+  async refreshReclaimEstimate(): Promise<void> {
+    this.reclaimEstimate.set(await this.tauri.invoke<ReclaimEstimate>('reclaimable_originals'));
+  }
+
+  /**
+   * Trash the originals of files copied into the managed library. Each
+   * copy is verified byte-identical first, so this is not "delete the
+   * source" — it is "the source is provably redundant".
+   */
+  async reclaimOriginals(): Promise<void> {
+    this.reclaimResult.set(null);
+    this.reclaimProgress.set({ current: 0, total: 0 });
+    try {
+      await this.tauri.invoke<void>('reclaim_originals');
+    } catch (error) {
+      this.reclaimProgress.set(null);
+      throw error;
+    }
   }
 
   async setLibraryRoot(path: string): Promise<void> {

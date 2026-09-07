@@ -39,6 +39,9 @@ pub enum IngestCommand {
     /// here rather than on a worker of its own so it cannot race the
     /// copy-on-add work it shares the `tracks` table with.
     ConsolidateAll,
+    /// Trash the source files that copying left behind. Same queue,
+    /// same reason: it must not run while a copy is still in flight.
+    ReclaimOriginals,
 }
 
 pub struct IngestWorker {
@@ -79,6 +82,11 @@ impl IngestWorker {
                             if !source_path.exists() {
                                 let _ = tracks::mark_missing_source(&engine, track_id).await;
                             }
+                        }
+                    }
+                    IngestCommand::ReclaimOriginals => {
+                        if let Err(e) = crate::fs::reclaim::reclaim_all(&engine, &app).await {
+                            log::warn!("reclaim originals failed: {e}");
                         }
                     }
                     IngestCommand::ConsolidateAll => {
