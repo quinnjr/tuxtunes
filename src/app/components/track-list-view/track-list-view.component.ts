@@ -4,6 +4,7 @@ import {
   HostListener,
   OnInit,
   computed,
+  effect,
   inject,
   signal,
   ChangeDetectionStrategy,
@@ -95,8 +96,26 @@ export class TrackListViewComponent implements OnInit {
   /** Column-picker [⚙] popover. */
   protected readonly pickerOpen = signal(false);
 
+  constructor() {
+    // Whatever replaces the list — a different playlist, a column-browser
+    // filter, a search — invalidates the selection. Keeping it would let
+    // a Delete act on rows the user picked in a view they have left, and
+    // can no longer see.
+    effect(() => {
+      this.library.activePlaylistId();
+      this.library.filters();
+      this.library.search();
+      this.clearSelection();
+    });
+  }
+
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshTracks());
+  }
+
+  private clearSelection(): void {
+    if (this.selection().size > 0) this.selection.set(new Set());
+    this.anchorIndex = null;
   }
 
   #computeVisibleColumns(): Column[] {
@@ -198,18 +217,46 @@ export class TrackListViewComponent implements OnInit {
     }
     if (event.key === 'Escape' && this.selection().size > 0) {
       event.preventDefault();
-      this.selection.set(new Set());
+      this.clearSelection();
       return;
     }
     if (event.key !== 'Delete' && event.key !== 'Backspace') return;
     const targets = this.selectedTracks();
     if (targets.length === 0) return;
     event.preventDefault();
-    // Shift bypasses the trash and takes the row out of the library
-    // only, leaving the file alone — the same split the context menu
-    // offers, and the one iTunes trained people to expect.
-    if (event.shiftKey) void this.removeTargets(targets, 'remove_track');
-    else this.confirmTrash(targets);
+    void this.deleteSelection(targets, event.shiftKey);
+  }
+
+  /**
+   * What Delete means depends on what is on screen, matching the
+   * context menu exactly:
+   *
+   * - in one of the user's own manual playlists, it takes the tracks
+   *   out of *that playlist* and touches no files (shift-Delete falls
+   *   through to the library meaning, as it does in iTunes);
+   * - in the library — or a smart/synced playlist, where removal is
+   *   not ours to do — it moves the files to the trash after a
+   *   confirmation, or with shift, drops the rows from the library and
+   *   leaves the files alone.
+   */
+  private async deleteSelection(targets: TrackRow[], shift: boolean): Promise<void> {
+    const active = this.library.activePlaylist();
+    const ownPlaylist = active?.kind === 'regular' && !active.synced;
+    if (ownPlaylist && !shift) {
+      await this.ui.guard(
+        this.library.removeTracksFromPlaylist(
+          active.id,
+          targets.map((t) => t.id),
+        ),
+      );
+      this.selection.set(new Set());
+      return;
+    }
+    if (shift) {
+      await this.removeTargets(targets, 'remove_track');
+      return;
+    }
+    this.confirmTrash(targets);
   }
 
   /** Whether the event's target is somewhere text is being entered. */
@@ -221,7 +268,10 @@ export class TrackListViewComponent implements OnInit {
 
   protected selectAll(): void {
     this.selection.set(new Set(this.library.tracks().map((t) => t.id)));
-    this.anchorIndex = null;
+    // Keep an anchor: onRowClick's shift branch needs one, and clearing
+    // it would make the next shift-click collapse the whole selection
+    // to the row that was clicked.
+    this.anchorIndex ??= 0;
   }
 
   /**
@@ -236,7 +286,7 @@ export class TrackListViewComponent implements OnInit {
       title: n === 1 ? 'Move to Trash' : 'Move Files to Trash',
       message:
         `Move ${what} to the trash? The file${n === 1 ? '' : 's'} leave${n === 1 ? 's' : ''} ` +
-        `the library and your disk.`,
+        `your whole library, not just this view, and go to the system trash.`,
       confirmLabel: n === 1 ? 'Move to Trash' : `Move ${n} to Trash`,
       destructive: true,
       onConfirm: () => this.removeTargets(targets, 'trash_track'),

@@ -631,4 +631,111 @@ describe('TrackListViewComponent', () => {
       expect(cmp.selectedTracks().map((t) => t.id)).toEqual([1, 3]);
     });
   });
+
+  describe('Delete inside a playlist', () => {
+    const press = (key: string, mods: Partial<KeyboardEvent> = {}): KeyboardEvent =>
+      ({
+        key,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        target: document.body,
+        preventDefault: vi.fn(),
+        ...mods,
+      }) as unknown as KeyboardEvent;
+
+    const PLAYLIST = (overrides = {}) => ({
+      id: 9,
+      name: 'Mine',
+      kind: 'regular' as const,
+      parentId: null,
+      sortOrder: 0,
+      trackCount: 2,
+      synced: false,
+      ...overrides,
+    });
+
+    it('removes the tracks from the playlist, not from disk', async () => {
+      const { cmp, library, invoke, ui } = setup();
+      library.playlists.set([PLAYLIST()]);
+      library.activePlaylistId.set(9);
+      library.tracks.set([TRACK(1), TRACK(2)]);
+      cmp.selection.set(new Set([1, 2]));
+
+      cmp.onKeydown(press('Delete'));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(ui.confirm()).toBeNull();
+      expect(invoke).toHaveBeenCalledWith('remove_tracks_from_playlist', {
+        playlistId: 9,
+        trackIds: [1, 2],
+      });
+      expect(invoke).not.toHaveBeenCalledWith('trash_track', expect.anything());
+    });
+
+    it('shift+Delete still drops the rows from the library', async () => {
+      const { cmp, library, invoke } = setup();
+      library.playlists.set([PLAYLIST()]);
+      library.activePlaylistId.set(9);
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+
+      cmp.onKeydown(press('Delete', { shiftKey: true }));
+      await Promise.resolve();
+      expect(invoke).toHaveBeenCalledWith('remove_track', { trackId: 1 });
+    });
+
+    it('falls back to trashing in a synced playlist, where removal is not ours to do', () => {
+      const { cmp, library, ui } = setup();
+      library.playlists.set([PLAYLIST({ synced: true })]);
+      library.activePlaylistId.set(9);
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+
+      cmp.onKeydown(press('Delete'));
+      expect(ui.confirm()).not.toBeNull();
+    });
+  });
+
+  describe('selection lifetime', () => {
+    it('drops the selection when the list is replaced by another view', async () => {
+      const { fixture, cmp, library } = setup();
+      library.tracks.set([TRACK(1), TRACK(2)]);
+      cmp.selection.set(new Set([1, 2]));
+
+      // Opening a playlist swaps the rows out from under the selection.
+      library.activePlaylistId.set(9);
+      fixture.detectChanges();
+      await Promise.resolve();
+
+      expect(cmp.selection().size).toBe(0);
+    });
+
+    it('drops the selection when a search narrows the list', async () => {
+      const { fixture, cmp, library } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+
+      library.setSearch('beatles');
+      fixture.detectChanges();
+      await Promise.resolve();
+
+      expect(cmp.selection().size).toBe(0);
+    });
+
+    it('keeps an anchor after Select All so a later shift-click still extends', () => {
+      const { cmp, library } = setup();
+      library.tracks.set([TRACK(1), TRACK(2), TRACK(3)]);
+      cmp.selectAll();
+
+      cmp.onRowClick(2, TRACK(3), {
+        shiftKey: true,
+        ctrlKey: false,
+        metaKey: false,
+      } as unknown as MouseEvent);
+
+      expect(cmp.selection()).toEqual(new Set([1, 2, 3]));
+    });
+  });
 });

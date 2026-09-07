@@ -21,9 +21,6 @@ use prax_sqlite::raw::SqliteRawEngine;
 use std::path::Path;
 use tauri::{AppHandle, Emitter, Runtime};
 
-/// Rows per query. Matches the verify walk.
-const PAGE: i64 = 500;
-
 /// Tracks between progress emits. A 51K-track library would otherwise
 /// push 51K events at the webview.
 const PROGRESS_EVERY: u64 = 25;
@@ -41,10 +38,19 @@ pub async fn consolidate_all<R: Runtime>(
     engine: &SqliteRawEngine,
     app: &AppHandle<R>,
 ) -> Result<ConsolidateStats, anyhow::Error> {
-    let total: i64 = engine
-        .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
-        .await?;
-    let total = total.max(0) as u64;
+    // The full id list up front, rather than paging by OFFSET: the pass
+    // runs for minutes while adds and deletes continue from other
+    // tasks, and an OFFSET window over `date_added DESC` shifts under
+    // every insert — skipping a row per insert and re-visiting one per
+    // delete. Ids are cheap (8 bytes each, ~400 KB at 51K tracks) and
+    // fix the work set at the moment the user asked for it.
+    let ids: Vec<i64> = engine
+        .raw_sql_query("SELECT id FROM tracks ORDER BY id", &[])
+        .await?
+        .into_iter()
+        .filter_map(|row| row.into_json().get("id").and_then(|v| v.as_i64()))
+        .collect();
+    let total = ids.len() as u64;
 
     let root = preferences::get_library_root(engine).await?;
     let scheme = preferences::get_organize_scheme(engine).await?;
@@ -54,29 +60,23 @@ pub async fn consolidate_all<R: Runtime>(
         ..Default::default()
     };
 
-    // Paged by offset like the verify walk. Rows that move are still
-    // ordered the same way (the sort is not on `file_path`), so the
-    // page window stays stable as paths change underneath it.
-    let mut offset = 0i64;
-    loop {
-        let batch = tracks::list(engine, PAGE, offset, &Default::default(), None).await?;
-        if batch.is_empty() {
-            break;
+    for (seen, id) in ids.into_iter().enumerate() {
+        if (seen as u64).is_multiple_of(PROGRESS_EVERY) {
+            let _ = app.emit(
+                CONSOLIDATE_PROGRESS,
+                ConsolidateProgress {
+                    current: seen as u64,
+                    total,
+                },
+            );
         }
-        for (i, row) in batch.iter().enumerate() {
-            let seen = (offset as u64) + (i as u64);
-            if seen.is_multiple_of(PROGRESS_EVERY) {
-                let _ = app.emit(
-                    CONSOLIDATE_PROGRESS,
-                    ConsolidateProgress {
-                        current: seen,
-                        total,
-                    },
-                );
-            }
-            consolidate_one(engine, app, row, &root, &scheme, &mut stats).await;
+        // Re-read each row as it comes up: the pass is slow enough that
+        // a metadata edit mid-walk should be reflected in the path we
+        // render, and a row deleted in the meantime is simply skipped.
+        match tracks::get(engine, id).await {
+            Ok(row) => consolidate_one(engine, app, &row, &root, &scheme, &mut stats).await,
+            Err(_) => stats.total -= 1,
         }
-        offset += batch.len() as i64;
     }
 
     let _ = app.emit(

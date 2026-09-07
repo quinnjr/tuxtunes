@@ -145,6 +145,12 @@ pub(crate) async fn ingest_one<R: Runtime>(
     // treat as "no artwork" rather than failing the whole ingest.
     let artwork = artwork_result.unwrap_or(None);
 
+    // The sidecar is written for the folder's sake (other players read
+    // it, and `resolve_for_files` can pick it up later) but is NOT what
+    // goes in `artwork_path`: the asset-protocol scope is pinned to
+    // `$APPDATA/artwork/**`, so a path under the library root would 403
+    // in the webview. That column belongs to `resolve_artwork_for_album`
+    // and its cache; passing None here leaves whatever it resolved.
     let artwork_str = artwork.as_ref().map(|p| p.display().to_string());
 
     // `original_path` records where a copied file came from. For a file
@@ -158,7 +164,7 @@ pub(crate) async fn ingest_one<R: Runtime>(
         &target_abs.display().to_string(),
         original.as_deref(),
         &hash::hash_hex(target_hash),
-        artwork_str.as_deref(),
+        None,
     )
     .await?;
 

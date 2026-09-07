@@ -496,10 +496,14 @@ pub async fn delete_missing(
 }
 
 /// Update the path-related columns after a successful ingest. Sets
-/// `file_path`, `file_hash`, `artwork_path`; marks `import_status =
-/// 'ok'` and refreshes `verified_at`. A `None` `original_path` leaves
-/// the stored value alone rather than clearing it — a file that needed
-/// no copy still keeps the provenance an earlier sync recorded.
+/// `file_path` and `file_hash`; marks `import_status = 'ok'` and
+/// refreshes `verified_at`.
+///
+/// `original_path` and `artwork_path` are `COALESCE`d: passing `None`
+/// leaves the stored value alone rather than clearing it. A file that
+/// needed no copy keeps the provenance an earlier sync recorded, and a
+/// re-ingest (the consolidate pass runs over rows that already have
+/// artwork resolved) cannot wipe a cover path.
 ///
 /// Returns the number of rows updated: 0 means the track was deleted
 /// while the ingest was in flight, which the caller has to clean up
@@ -517,7 +521,8 @@ pub async fn set_file_paths(
     let sql = "UPDATE tracks SET \
         file_path = ?, \
         original_path = COALESCE(?, original_path), \
-        file_hash = ?, artwork_path = ?, \
+        file_hash = ?, \
+        artwork_path = COALESCE(?, artwork_path), \
         import_status = 'ok', verified_at = CURRENT_TIMESTAMP \
         WHERE id = ?";
     let params = vec![

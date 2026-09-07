@@ -133,8 +133,21 @@ async fn ingest_emits_failure_and_marks_missing_source_when_unreadable() {
         "{payload}"
     );
 
-    let row = tuxtunes::db::tracks::get(&db.engine, row_id).await.unwrap();
-    assert_eq!(row.import_status, "missing_source");
+    // The event is emitted before the row is flagged, so poll rather
+    // than reading once.
+    let start = std::time::Instant::now();
+    loop {
+        let row = tuxtunes::db::tracks::get(&db.engine, row_id).await.unwrap();
+        if row.import_status == "missing_source" {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "still {:?} 5s after fs:ingest-failed",
+            row.import_status
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
 
 /// Insert a minimal row whose `file_path` is `src`, returning its id.

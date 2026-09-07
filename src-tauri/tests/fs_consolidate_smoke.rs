@@ -131,10 +131,15 @@ async fn consolidate_counts_a_missing_file_as_failed_and_carries_on() {
         .await
         .unwrap();
 
+    // The walk runs in id order, so the missing file has to be inserted
+    // first for its failure to actually precede the healthy track —
+    // otherwise the copy has already happened and the test would pass
+    // even if a per-track failure abandoned the rest of the walk.
     insert_track(&db, "Gone", &tmp.path().join("gone.flac")).await;
     let real = tmp.path().join("real.flac");
     std::fs::write(&real, vec![0xABu8; 1024]).unwrap();
     let real_id = insert_track(&db, "Real", &real).await;
+    assert!(real_id > 1, "the missing-file row must sort first");
 
     let app: tauri::App<tauri::test::MockRuntime> = tauri::test::mock_app();
     let handle = app.handle().clone();
