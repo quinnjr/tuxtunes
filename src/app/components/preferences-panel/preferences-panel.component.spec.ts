@@ -23,6 +23,11 @@ interface PrefsInternals {
   preview(): string;
   reorganize(): Promise<void>;
   reorganizeStatus(): string | null;
+  reorganizeSummary(): string | null;
+  reclaim(): void;
+  reclaimStatus(): string | null;
+  reclaimOffer(): string | null;
+  reclaimSummary(): string | null;
 }
 
 function setup(invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>) {
@@ -188,6 +193,95 @@ describe('PreferencesPanelComponent', () => {
       expect(stub.invoke).not.toHaveBeenCalledWith('consolidate_library');
       expect(ui.lastError()).toBe('root is not writable');
       expect(cmp.reorganizeStatus()).toBeNull();
+    });
+  });
+
+  describe('reclaim()', () => {
+    const estimate = { files: 23_020, bytes: 209_379_655_680 };
+
+    it('names the files and the space before trashing anything', async () => {
+      const { cmp, prefs, ui, stub } = setup(async (cmd) =>
+        cmd === 'reclaimable_originals' ? estimate : undefined,
+      );
+      await prefs.refreshReclaimEstimate();
+
+      cmp.reclaim();
+
+      const req = ui.confirm();
+      expect(req?.destructive).toBe(true);
+      expect(req?.message).toContain('23,020');
+      expect(req?.message).toContain('195 GiB');
+      // Nothing happens until the user says so.
+      expect(stub.invoke).not.toHaveBeenCalledWith('reclaim_originals');
+
+      await req?.onConfirm();
+      expect(stub.invoke).toHaveBeenCalledWith('reclaim_originals');
+    });
+
+    it('does nothing when there is nothing to reclaim', async () => {
+      const { cmp, prefs, ui } = setup(async (cmd) =>
+        cmd === 'reclaimable_originals' ? { files: 0, bytes: 0 } : undefined,
+      );
+      await prefs.refreshReclaimEstimate();
+
+      cmp.reclaim();
+
+      expect(ui.confirm()).toBeNull();
+      expect(cmp.reclaimOffer()).toBe('No duplicated originals to reclaim.');
+    });
+
+    it('reports progress and then what it freed', async () => {
+      const { cmp, prefs, ui, stub } = setup(async (cmd) =>
+        cmd === 'reclaimable_originals' ? estimate : undefined,
+      );
+      await prefs.refreshReclaimEstimate();
+      cmp.reclaim();
+      await ui.confirm()?.onConfirm();
+
+      expect(cmp.reclaimStatus()).toBe('Starting…');
+      stub.emit('fs:reclaim-progress', { current: 500, total: 23_020 });
+      expect(cmp.reclaimStatus()).toBe('Reclaiming 500 of 23020…');
+
+      stub.emit('fs:reclaim-complete', {
+        reclaimed: 23_000,
+        bytes_freed: 209_379_655_680,
+        skipped: 20,
+        failed: 0,
+      });
+      expect(cmp.reclaimStatus()).toBeNull();
+      expect(cmp.reclaimSummary()).toBe('23,000 trashed (195 GiB), 20 left alone');
+    });
+  });
+
+  describe('reorganizeSummary()', () => {
+    it('reports rows whose file is not on disk apart from failures', async () => {
+      const { cmp, stub } = setup(async () => undefined);
+      await Promise.resolve(); // listener registration settles
+      stub.emit('fs:consolidate-complete', {
+        total: 24_618,
+        moved: 1,
+        copied: 23_020,
+        in_place: 16,
+        missing: 1581,
+        failed: 0,
+      });
+      expect(cmp.reorganizeSummary()).toBe(
+        '1 moved, 23020 copied, 16 already in place, 1581 files not found',
+      );
+    });
+
+    it('still names real failures', async () => {
+      const { cmp, stub } = setup(async () => undefined);
+      await Promise.resolve();
+      stub.emit('fs:consolidate-complete', {
+        total: 3,
+        moved: 1,
+        copied: 1,
+        in_place: 0,
+        missing: 0,
+        failed: 1,
+      });
+      expect(cmp.reorganizeSummary()).toBe('1 moved, 1 copied, 0 already in place, 1 failed');
     });
   });
 });

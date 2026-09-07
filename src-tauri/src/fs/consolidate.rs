@@ -31,6 +31,11 @@ pub struct ConsolidateStats {
     pub moved: u64,
     pub copied: u64,
     pub in_place: u64,
+    /// Rows whose file is not on disk. An import can carry in
+    /// thousands of these — iTunes collision-suffix entries for files
+    /// that were already gone — and calling them failures is alarming
+    /// and useless.
+    pub missing: u64,
     pub failed: u64,
 }
 
@@ -86,6 +91,7 @@ pub async fn consolidate_all<R: Runtime>(
             moved: stats.moved,
             copied: stats.copied,
             in_place: stats.in_place,
+            missing: stats.missing,
             failed: stats.failed,
         },
     );
@@ -103,6 +109,13 @@ async fn consolidate_one<R: Runtime>(
     stats: &mut ConsolidateStats,
 ) {
     let current = Path::new(&row.file_path);
+
+    // A row whose file is not there has nothing to consolidate. This
+    // is the common shape of an imported library, not an error.
+    if !current.is_file() {
+        stats.missing += 1;
+        return;
+    }
 
     let rel = match render(scheme, &TrackFields::from_track_row(row, current)) {
         Ok(rel) => rel,
