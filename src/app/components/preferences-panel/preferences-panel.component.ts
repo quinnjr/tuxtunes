@@ -1,6 +1,7 @@
 import { Component, effect, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
+import { LibraryService } from '../../services/library.service';
 import { PreferencesService } from '../../services/preferences.service';
 import { ColorMode, ThemeService } from '../../services/theme.service';
 import { UiService } from '../../services/ui.service';
@@ -14,6 +15,7 @@ import { UiService } from '../../services/ui.service';
 export class PreferencesPanelComponent {
   protected readonly prefs = inject(PreferencesService);
   protected readonly theme = inject(ThemeService);
+  private readonly library = inject(LibraryService);
   private readonly ui = inject(UiService);
   protected readonly open = this.ui.preferencesOpen;
 
@@ -56,6 +58,30 @@ export class PreferencesPanelComponent {
 
   protected hide(): void {
     this.open.set(false);
+  }
+
+  /**
+   * Bring every track to the path the organize scheme asks for. Saves
+   * the draft first, so the pass uses the root and scheme on screen
+   * rather than whatever was stored when the dialog opened.
+   */
+  protected async reorganize(): Promise<void> {
+    const saved = await this.ui.guard(
+      Promise.all([
+        this.prefs.setLibraryRoot(this.draftRoot()),
+        this.prefs.setOrganizeScheme(this.draftScheme()),
+        this.prefs.setKeepOrganized(this.draftKeep()),
+      ]),
+    );
+    if (saved === null) return;
+    await this.ui.guard(this.prefs.consolidateLibrary());
+  }
+
+  /** `current of total` while the pass runs, else null. */
+  protected reorganizeStatus(): string | null {
+    const p = this.prefs.consolidateProgress();
+    if (!p) return null;
+    return p.total > 0 ? `Reorganizing ${p.current} of ${p.total}…` : 'Starting…';
   }
 
   protected toggleKeep(): void {

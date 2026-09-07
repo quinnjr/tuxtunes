@@ -61,6 +61,35 @@
         Keep library organized (rename on metadata edit)
       </label>
 
+      <div class="hairline-t flex flex-col gap-2 pt-3 text-body">
+        <span class="text-text-secondary">Organize existing files</span>
+        <p class="text-caption text-text-muted">
+          Brings every track already in the library to the path above. Files inside the library
+          folder are moved; files outside it are copied in and your originals are left alone.
+        </p>
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            (click)="reorganize()"
+            [disabled]="reorganizeStatus() !== null"
+            class="mac-btn h-8 px-3 bg-bg-elevated disabled:opacity-50"
+          >
+            Reorganize now
+          </button>
+          @if (reorganizeStatus(); as status) {
+            <span class="text-footnote text-text-muted">{{ status }}</span>
+          }
+          @if (prefs.consolidateResult(); as r) {
+            <span class="text-footnote text-accent">
+              {{ r.moved }} moved, {{ r.copied }} copied, {{ r.in_place }} already in place
+              @if (r.failed > 0) {
+                <span>, {{ r.failed }} failed</span>
+              }
+            </span>
+          }
+        </div>
+      </div>
+
       <footer class="hairline-t mt-2 flex justify-end gap-2 pt-3">
         <button type="button" (click)="hide()" class="mac-btn h-8 px-4 bg-bg-elevated">
           Cancel

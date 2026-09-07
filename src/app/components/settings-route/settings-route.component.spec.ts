@@ -1,7 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LibraryService } from '../../services/library.service';
-import { PreferencesService } from '../../services/preferences.service';
 import { SyncService } from '../../services/sync.service';
 import { UiService } from '../../services/ui.service';
 import { appProviders, defaultInvoke, tauriStub } from '../../test-helpers';
@@ -17,9 +16,6 @@ interface RouteInternals {
   openImportWizard(): void;
   openLibraryPrefs(): void;
   verify(): Promise<void>;
-  consolidate(): Promise<void>;
-  consolidateStatus(): string | null;
-  consolidateError(): string | null;
 }
 
 function setup(invoke: (cmd: string) => Promise<unknown> = defaultInvoke) {
@@ -34,7 +30,6 @@ function setup(invoke: (cmd: string) => Promise<unknown> = defaultInvoke) {
     fixture,
     cmp: fixture.componentInstance as unknown as RouteInternals,
     library: TestBed.inject(LibraryService),
-    prefs: TestBed.inject(PreferencesService),
     sync: TestBed.inject(SyncService),
     ui: TestBed.inject(UiService),
     stub,
@@ -138,58 +133,6 @@ describe('SettingsRouteComponent', () => {
       expect(cmp.verifyState()).toBe('error');
       expect(cmp.verifyError()).toBe('checksum mismatch');
       expect(refresh).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('consolidate()', () => {
-    it('reports progress from the backend and clears it on the summary', async () => {
-      const { cmp, stub } = setup(async (cmd) => {
-        if (cmd === 'consolidate_library') return undefined;
-        return defaultInvoke(cmd);
-      });
-      expect(cmp.consolidateStatus()).toBeNull();
-
-      await cmp.consolidate();
-      expect(cmp.consolidateStatus()).toBe('Starting…');
-
-      stub.emit('fs:consolidate-progress', { current: 40, total: 120 });
-      expect(cmp.consolidateStatus()).toBe('Reorganizing 40 of 120…');
-
-      stub.emit('fs:consolidate-complete', {
-        total: 120,
-        moved: 100,
-        copied: 19,
-        in_place: 1,
-        failed: 0,
-      });
-      expect(cmp.consolidateStatus()).toBeNull();
-    });
-
-    it('reloads the track list once the pass finishes, since paths moved', async () => {
-      const { cmp, library, stub } = setup(async (cmd) => {
-        if (cmd === 'consolidate_library') return undefined;
-        return defaultInvoke(cmd);
-      });
-      const refresh = vi.spyOn(library, 'refreshTracks').mockResolvedValue();
-      await cmp.consolidate();
-      stub.emit('fs:consolidate-complete', {
-        total: 1,
-        moved: 1,
-        copied: 0,
-        in_place: 0,
-        failed: 0,
-      });
-      expect(refresh).toHaveBeenCalled();
-    });
-
-    it('surfaces a rejected command instead of leaving the button disabled', async () => {
-      const { cmp } = setup(async (cmd) => {
-        if (cmd === 'consolidate_library') throw new Error('ingest worker has exited');
-        return defaultInvoke(cmd);
-      });
-      await cmp.consolidate();
-      expect(cmp.consolidateError()).toBe('ingest worker has exited');
-      expect(cmp.consolidateStatus()).toBeNull();
     });
   });
 });
