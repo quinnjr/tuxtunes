@@ -15,6 +15,8 @@ pub const ORGANIZE_APPLIED: &str = "fs:organize-applied";
 pub const ORGANIZE_FAILED: &str = "fs:organize-failed";
 pub const CONSOLIDATE_PROGRESS: &str = "fs:consolidate-progress";
 pub const CONSOLIDATE_COMPLETE: &str = "fs:consolidate-complete";
+pub const RECLAIM_PROGRESS: &str = "fs:reclaim-progress";
+pub const RECLAIM_COMPLETE: &str = "fs:reclaim-complete";
 pub const VERIFY_PROGRESS: &str = "fs:verify-progress";
 pub const VERIFY_COMPLETE: &str = "fs:verify-complete";
 pub const VERIFY_FAILED: &str = "fs:verify-failed";
@@ -71,6 +73,30 @@ pub struct ConsolidateComplete {
     pub copied: u64,
     /// Files already at the path the scheme asks for.
     pub in_place: u64,
+    /// Rows whose file is not on disk at all. Counted apart from
+    /// `failed` because there is nothing wrong with the pass — an
+    /// import can carry in thousands of rows for files that were
+    /// already gone, and reporting those as failures is alarming and
+    /// useless.
+    pub missing: u64,
+    pub failed: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReclaimProgress {
+    pub current: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReclaimComplete {
+    /// Originals sent to the trash.
+    pub reclaimed: u64,
+    /// Bytes those originals occupied.
+    pub bytes_freed: u64,
+    /// Originals left alone: the copy did not match, or one of the two
+    /// files was not there.
+    pub skipped: u64,
     pub failed: u64,
 }
 
@@ -107,6 +133,8 @@ mod tests {
         assert_eq!(ORGANIZE_FAILED, "fs:organize-failed");
         assert_eq!(CONSOLIDATE_PROGRESS, "fs:consolidate-progress");
         assert_eq!(CONSOLIDATE_COMPLETE, "fs:consolidate-complete");
+        assert_eq!(RECLAIM_PROGRESS, "fs:reclaim-progress");
+        assert_eq!(RECLAIM_COMPLETE, "fs:reclaim-complete");
         assert_eq!(VERIFY_PROGRESS, "fs:verify-progress");
         assert_eq!(VERIFY_COMPLETE, "fs:verify-complete");
         assert_eq!(VERIFY_FAILED, "fs:verify-failed");

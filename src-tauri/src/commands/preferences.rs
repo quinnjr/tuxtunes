@@ -64,6 +64,33 @@ pub async fn consolidate_library(state: tauri::State<'_, AppState>) -> Result<()
     state.fs.consolidate_library()
 }
 
+/// How many copied-in originals could be trashed, and how many bytes
+/// they occupy. Lets the UI say what the button would do first.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReclaimEstimate {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+#[tauri::command]
+pub async fn reclaimable_originals(
+    state: tauri::State<'_, AppState>,
+) -> Result<ReclaimEstimate, String> {
+    let (files, bytes) = crate::fs::reclaim::pending(&state.db.engine)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(ReclaimEstimate { files, bytes })
+}
+
+/// Trash the originals of files copied into the managed library, once
+/// each copy is verified byte-identical. Returns as soon as the pass is
+/// queued; it reports through `fs:reclaim-progress` and
+/// `fs:reclaim-complete`.
+#[tauri::command]
+pub async fn reclaim_originals(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.fs.reclaim_originals()
+}
+
 #[tauri::command]
 pub async fn reorganize_track(
     state: tauri::State<'_, AppState>,

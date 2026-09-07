@@ -119,7 +119,7 @@ async fn consolidate_moves_copies_and_leaves_files_as_appropriate() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn consolidate_counts_a_missing_file_as_failed_and_carries_on() {
+async fn consolidate_counts_a_missing_file_apart_and_carries_on() {
     let tmp = tempfile::tempdir().unwrap();
     let lib_root = tmp.path().join("lib");
     std::fs::create_dir_all(&lib_root).unwrap();
@@ -157,7 +157,11 @@ async fn consolidate_counts_a_missing_file_as_failed_and_carries_on() {
         .expect("fs:consolidate-complete within 15s")
         .expect("channel open");
     let summary: serde_json::Value = serde_json::from_str(&payload).unwrap();
-    assert_eq!(summary["failed"], 1, "{payload}");
+    // A row whose file is not on disk is reported as missing, not
+    // failed: an imported library is full of them, and calling 1,500
+    // of those failures says nothing useful.
+    assert_eq!(summary["missing"], 1, "{payload}");
+    assert_eq!(summary["failed"], 0, "{payload}");
     assert_eq!(summary["copied"], 1, "{payload}");
 
     let row = tuxtunes::db::tracks::get(&db.engine, real_id)
