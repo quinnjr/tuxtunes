@@ -115,23 +115,102 @@ describe('LibraryService', () => {
     expect(out).toEqual([{ value: 'Rock', count: 5 }]);
   });
 
-  it('addTrackFromPicker() returns null when the user cancels', async () => {
+  it('addTracksFromPicker() returns null when the user cancels', async () => {
     const { svc } = build(async () => null);
-    const out = await svc.addTrackFromPicker();
+    const out = await svc.addTracksFromPicker();
     expect(out).toBeNull();
     expect(svc.tracks()).toHaveLength(0);
   });
 
-  it('addTrackFromPicker() prepends new tracks and refreshes stats', async () => {
+  it('addTracksFromPicker() prepends the new rows and refreshes stats', async () => {
     const responses: Record<string, unknown> = {
-      pick_and_add_track: RAW_TRACK,
+      pick_and_add_track: {
+        added: [RAW_TRACK, { ...RAW_TRACK, id: 2, title: 'Second' }],
+        existing: 0,
+        failed: [],
+      },
+      get_library_stats: { track_count: 2, total_duration_ms: 0, total_size_bytes: 0 },
+    };
+    const { svc } = build(async (cmd) => responses[cmd]);
+    const out = await svc.addTracksFromPicker();
+    expect(out?.added).toHaveLength(2);
+    expect(svc.tracks().map((t) => t.id)).toEqual([1, 2]);
+    expect(svc.stats()?.trackCount).toBe(2);
+  });
+
+  it('addTracksFromPicker() leaves an already-present row where it is', async () => {
+    const responses: Record<string, unknown> = {
+      list_tracks: [RAW_TRACK, { ...RAW_TRACK, id: 2, title: 'Second' }],
+      // A re-picked file is reported as existing, not added, so it is
+      // never re-inserted at the top — which would change play order.
+      pick_and_add_track: { added: [], existing: 1, failed: [] },
+      get_library_stats: { track_count: 2, total_duration_ms: 0, total_size_bytes: 0 },
+    };
+    const { svc } = build(async (cmd) => responses[cmd]);
+    await svc.refreshTracks();
+
+    await svc.addTracksFromPicker();
+    expect(svc.tracks().map((t) => t.id)).toEqual([1, 2]);
+  });
+
+  it('addTracksFromPicker() dedupes ids repeated within one batch', async () => {
+    const responses: Record<string, unknown> = {
+      pick_and_add_track: { added: [RAW_TRACK, RAW_TRACK], existing: 0, failed: [] },
       get_library_stats: { track_count: 1, total_duration_ms: 0, total_size_bytes: 0 },
     };
     const { svc } = build(async (cmd) => responses[cmd]);
-    const out = await svc.addTrackFromPicker();
-    expect(out).not.toBeNull();
+    await svc.addTracksFromPicker();
     expect(svc.tracks()).toHaveLength(1);
-    expect(svc.stats()?.trackCount).toBe(1);
+  });
+
+  it('addTracksFromPicker() reloads instead of prepending while a playlist is open', async () => {
+    const responses: Record<string, unknown> = {
+      open_playlist: [RAW_TRACK],
+      pick_and_add_track: {
+        added: [{ ...RAW_TRACK, id: 99, title: 'Rock' }],
+        existing: 0,
+        failed: [],
+      },
+      get_library_stats: { track_count: 1, total_duration_ms: 0, total_size_bytes: 0 },
+    };
+    const { svc } = build(async (cmd) => responses[cmd] ?? []);
+    await svc.openPlaylist(9);
+
+    // The picked file is not a member of this playlist, so it must not
+    // be injected into the view.
+    await svc.addTracksFromPicker();
+    expect(svc.tracks().map((t) => t.id)).toEqual([1]);
+  });
+
+  it('addTracksFromPicker() reports files it could not read', async () => {
+    const responses: Record<string, unknown> = {
+      pick_and_add_track: { added: [], existing: 0, failed: ['broken.flac'] },
+    };
+    const { svc } = build(async (cmd) => responses[cmd] ?? []);
+    const out = await svc.addTracksFromPicker();
+    expect(out?.failed).toEqual(['broken.flac']);
+    expect(svc.tracks()).toHaveLength(0);
+  });
+
+  it('removeTracks() forgets ingest results for the ids that went', async () => {
+    const responses: Record<string, unknown> = {
+      list_tracks: [RAW_TRACK],
+      remove_tracks: { removed: [1], failed: [] },
+    };
+    const { svc, emit } = build(async (cmd) => responses[cmd] ?? []);
+    await svc.refreshTracks();
+    await Promise.resolve();
+
+    emit('fs:ingest-complete', { track_id: 1, managed_path: '/managed/a.flac' });
+    expect(svc.tracks()[0].filePath).toBe('/managed/a.flac');
+
+    const summary = await svc.removeTracks('remove_tracks', [1]);
+    expect(summary.removed).toEqual([1]);
+
+    // SQLite reuses rowids: a new track landing on id 1 must not
+    // inherit the deleted one's managed path.
+    await svc.refreshTracks();
+    expect(svc.tracks()[0].filePath).toBe('/tmp/a.flac');
   });
 
   it('refreshAlbums() camelCases album rows', async () => {
@@ -586,11 +665,11 @@ describe('LibraryService.resolveTrackArtwork', () => {
 });
 
 describe('negative cases', () => {
-  it('addTrackFromPicker() rejects when pick_and_add_track fails', async () => {
+  it('addTracksFromPicker() rejects when pick_and_add_track fails', async () => {
     const { svc } = build(async () => {
       throw new Error('picker failed');
     });
-    await expect(svc.addTrackFromPicker()).rejects.toThrow('picker failed');
+    await expect(svc.addTracksFromPicker()).rejects.toThrow('picker failed');
     expect(svc.tracks()).toEqual([]);
   });
 

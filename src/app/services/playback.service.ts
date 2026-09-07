@@ -486,6 +486,22 @@ export class PlaybackService implements OnDestroy {
     }
   }
 
+  /**
+   * Drop the engine's pre-queued track, then re-derive one from the
+   * current queue and list.
+   *
+   * Used when the track that was pre-queued is about to stop existing:
+   * `refreshPrefetch` alone would re-derive the same candidate from a
+   * list that has not been reloaded yet and dedupe itself into a no-op,
+   * leaving the engine armed to roll into a file that is gone.
+   */
+  async resetPrefetch(): Promise<void> {
+    this.prefetchSeq += 1;
+    this.prefetched = null;
+    await this.ui.guard(this.tauri.invoke<void>('clear_prefetch'));
+    this.refreshPrefetch();
+  }
+
   /** Re-evaluate the pre-queued track after the queue changed. */
   private refreshPrefetch(): void {
     const current = this.currentTrackId();

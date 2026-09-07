@@ -51,9 +51,9 @@ describe('MenuBarComponent', () => {
     expect(cmp.openMenu()).toBe('settings');
   });
 
-  it('addFile() delegates to LibraryService.addTrackFromPicker and closes the menu', async () => {
+  it('addFile() delegates to LibraryService.addTracksFromPicker and closes the menu', async () => {
     const { cmp, library } = setup();
-    const spy = vi.spyOn(library, 'addTrackFromPicker').mockResolvedValue(null);
+    const spy = vi.spyOn(library, 'addTracksFromPicker').mockResolvedValue(null);
     cmp.toggle('file');
     await cmp.addFile();
     expect(spy).toHaveBeenCalled();
@@ -102,9 +102,9 @@ describe('MenuBarComponent', () => {
     expect(text).toContain('Settings');
   });
 
-  it('addFile() closes the menu and reports the error when addTrackFromPicker rejects', async () => {
+  it('addFile() closes the menu and reports the error when addTracksFromPicker rejects', async () => {
     const { cmp, library, ui } = setup();
-    vi.spyOn(library, 'addTrackFromPicker').mockRejectedValue(new Error('picker failed'));
+    vi.spyOn(library, 'addTracksFromPicker').mockRejectedValue(new Error('picker failed'));
     cmp.toggle('file');
 
     await expect(cmp.addFile()).resolves.toBeUndefined();
