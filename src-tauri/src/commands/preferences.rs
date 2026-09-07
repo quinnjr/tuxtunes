@@ -55,6 +55,15 @@ pub async fn set_keep_organized(
         .map_err(|e| e.to_string())
 }
 
+/// Move (or copy) every track to the path `organize_scheme` asks for
+/// under the library root. Returns once the pass is queued — it runs on
+/// the ingest worker and reports through `fs:consolidate-progress` and
+/// `fs:consolidate-complete`.
+#[tauri::command]
+pub async fn consolidate_library(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.fs.consolidate_library()
+}
+
 #[tauri::command]
 pub async fn reorganize_track(
     state: tauri::State<'_, AppState>,

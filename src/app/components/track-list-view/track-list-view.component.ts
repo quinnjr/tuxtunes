@@ -1,8 +1,10 @@
 import { ScrollingModule } from '@angular/cdk/scrolling';
 import {
   Component,
+  HostListener,
   OnInit,
   computed,
+  effect,
   inject,
   signal,
   ChangeDetectionStrategy,
@@ -94,8 +96,26 @@ export class TrackListViewComponent implements OnInit {
   /** Column-picker [⚙] popover. */
   protected readonly pickerOpen = signal(false);
 
+  constructor() {
+    // Whatever replaces the list — a different playlist, a column-browser
+    // filter, a search — invalidates the selection. Keeping it would let
+    // a Delete act on rows the user picked in a view they have left, and
+    // can no longer see.
+    effect(() => {
+      this.library.activePlaylistId();
+      this.library.filters();
+      this.library.search();
+      this.clearSelection();
+    });
+  }
+
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshTracks());
+  }
+
+  private clearSelection(): void {
+    if (this.selection().size > 0) this.selection.set(new Set());
+    this.anchorIndex = null;
   }
 
   #computeVisibleColumns(): Column[] {
@@ -173,6 +193,106 @@ export class TrackListViewComponent implements OnInit {
     this.anchorIndex = index;
   }
 
+  /** The selected rows, in list order. Empty when nothing is picked. */
+  protected selectedTracks(): TrackRow[] {
+    const ids = this.selection();
+    return ids.size === 0 ? [] : this.library.tracks().filter((t) => ids.has(t.id));
+  }
+
+  /**
+   * List-wide keyboard shortcuts. Bound on document so they work
+   * wherever focus sits inside the list, and suppressed while the user
+   * is typing or a modal owns the screen — Delete in a text field
+   * means "delete a character".
+   */
+  @HostListener('document:keydown', ['$event'])
+  onKeydown(event: KeyboardEvent): void {
+    if (this.isTypingTarget(event.target) || this.ui.anyModalOpen()) return;
+
+    const isMulti = event.ctrlKey || event.metaKey;
+    if (isMulti && (event.key === 'a' || event.key === 'A')) {
+      event.preventDefault();
+      this.selectAll();
+      return;
+    }
+    if (event.key === 'Escape' && this.selection().size > 0) {
+      event.preventDefault();
+      this.clearSelection();
+      return;
+    }
+    if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+    const targets = this.selectedTracks();
+    if (targets.length === 0) return;
+    event.preventDefault();
+    void this.deleteSelection(targets, event.shiftKey);
+  }
+
+  /**
+   * What Delete means depends on what is on screen, matching the
+   * context menu exactly:
+   *
+   * - in one of the user's own manual playlists, it takes the tracks
+   *   out of *that playlist* and touches no files (shift-Delete falls
+   *   through to the library meaning, as it does in iTunes);
+   * - in the library — or a smart/synced playlist, where removal is
+   *   not ours to do — it moves the files to the trash after a
+   *   confirmation, or with shift, drops the rows from the library and
+   *   leaves the files alone.
+   */
+  private async deleteSelection(targets: TrackRow[], shift: boolean): Promise<void> {
+    const active = this.library.activePlaylist();
+    const ownPlaylist = active?.kind === 'regular' && !active.synced;
+    if (ownPlaylist && !shift) {
+      await this.ui.guard(
+        this.library.removeTracksFromPlaylist(
+          active.id,
+          targets.map((t) => t.id),
+        ),
+      );
+      this.selection.set(new Set());
+      return;
+    }
+    if (shift) {
+      await this.removeTargets(targets, 'remove_track');
+      return;
+    }
+    this.confirmTrash(targets);
+  }
+
+  /** Whether the event's target is somewhere text is being entered. */
+  private isTypingTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el) return false;
+    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true;
+  }
+
+  protected selectAll(): void {
+    this.selection.set(new Set(this.library.tracks().map((t) => t.id)));
+    // Keep an anchor: onRowClick's shift branch needs one, and clearing
+    // it would make the next shift-click collapse the whole selection
+    // to the row that was clicked.
+    this.anchorIndex ??= 0;
+  }
+
+  /**
+   * Ask before moving files to the trash: it reaches outside the
+   * library, and a range selection can be far larger than the row the
+   * user was looking at.
+   */
+  private confirmTrash(targets: TrackRow[]): void {
+    const n = targets.length;
+    const what = n === 1 ? `“${targets[0].title}”` : `${n} tracks`;
+    this.ui.confirm.set({
+      title: n === 1 ? 'Move to Trash' : 'Move Files to Trash',
+      message:
+        `Move ${what} to the trash? The file${n === 1 ? '' : 's'} leave${n === 1 ? 's' : ''} ` +
+        `your whole library, not just this view, and go to the system trash.`,
+      confirmLabel: n === 1 ? 'Move to Trash' : `Move ${n} to Trash`,
+      destructive: true,
+      onConfirm: () => this.removeTargets(targets, 'trash_track'),
+    });
+  }
+
   /**
    * Right-click resolves a context-menu item set scoped to the
    * effective selection — the clicked row plus any prior multi-selection
@@ -236,8 +356,10 @@ export class TrackListViewComponent implements OnInit {
       {
         label: single ? 'Move to Trash' : `Move ${targets.length} to Trash`,
         destructive: true,
-        action: () => this.removeTargets(targets, 'trash_track'),
+        action: () => this.confirmTrash(targets),
       },
+      { label: '---' },
+      { label: 'Select All', action: () => this.selectAll() },
     ];
   }
 

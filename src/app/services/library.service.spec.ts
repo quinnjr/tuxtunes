@@ -404,7 +404,6 @@ describe('LibraryService playlists', () => {
     });
 
     expect(svc.tracks()[0].filePath).toBe('/home/u/Music/TuxTunes/Artist/Album/01 - Title.flac');
-    expect(svc.tracks()[0].artworkPath).toBe('/home/u/Music/TuxTunes/Artist/Album/cover.jpg');
     // Patching in place: no reload, so a folder import does not issue
     // one round trip per copied file.
     expect(invoke).not.toHaveBeenCalled();
@@ -426,20 +425,23 @@ describe('LibraryService playlists', () => {
     expect(svc.tracks()[0].filePath).toBe('/managed/01 - Title.flac');
   });
 
-  it('an ingest-complete event clears artwork the backend found none for', async () => {
+  it('an ingest-complete event leaves the row artwork alone', async () => {
     const { svc, emit } = build(async (cmd) =>
-      cmd === 'list_tracks' ? [{ ...RAW_TRACK, artwork_path: '/stale/cover.jpg' }] : [],
+      cmd === 'list_tracks' ? [{ ...RAW_TRACK, artwork_path: '/cache/cover.jpg' }] : [],
     );
     await svc.refreshTracks();
     await Promise.resolve();
 
+    // The event's artwork_path is the sidecar beside the audio file,
+    // which the asset protocol will not serve — the row keeps the
+    // cached path resolve_track_artwork gave it.
     emit('fs:ingest-complete', {
       track_id: 1,
       managed_path: '/managed/01 - Title.flac',
-      artwork_path: null,
+      artwork_path: '/managed/cover.jpg',
     });
 
-    expect(svc.tracks()[0].artworkPath).toBeNull();
+    expect(svc.tracks()[0].artworkPath).toBe('/cache/cover.jpg');
   });
 
   it('an ingest-complete event for an unloaded track leaves the list untouched', async () => {

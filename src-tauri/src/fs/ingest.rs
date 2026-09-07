@@ -31,7 +31,14 @@ use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub enum IngestCommand {
-    CopyForTrack { track_id: i64, source_path: PathBuf },
+    CopyForTrack {
+        track_id: i64,
+        source_path: PathBuf,
+    },
+    /// Bring the whole library to its `organize_scheme` paths. Queued
+    /// here rather than on a worker of its own so it cannot race the
+    /// copy-on-add work it shares the `tracks` table with.
+    ConsolidateAll,
 }
 
 pub struct IngestWorker {
@@ -74,6 +81,16 @@ impl IngestWorker {
                             }
                         }
                     }
+                    IngestCommand::ConsolidateAll => {
+                        if let Err(e) = crate::fs::consolidate::consolidate_all(&engine, &app).await
+                        {
+                            // consolidate_all only bails on a failure
+                            // that would make the rest meaningless (the
+                            // preference read, the row query); per-track
+                            // problems are counted in its stats.
+                            log::warn!("consolidate library failed: {e}");
+                        }
+                    }
                 }
             }
         });
@@ -81,7 +98,7 @@ impl IngestWorker {
     }
 }
 
-async fn ingest_one<R: Runtime>(
+pub(crate) async fn ingest_one<R: Runtime>(
     engine: &SqliteRawEngine,
     app: &AppHandle<R>,
     track_id: i64,
@@ -111,7 +128,7 @@ async fn ingest_one<R: Runtime>(
     // spell the same location differently (symlinked $HOME, `..`).
     // Anything else under the root — a drop folder, an unorganised
     // stash — is still copied into place, exactly like an outside file.
-    let already_managed = same_file(&ideal, source_path);
+    let already_managed = path::same_file(&ideal, source_path);
 
     let (target_abs, target_hash) = if already_managed {
         (source_path.to_path_buf(), source_hash)
@@ -128,6 +145,12 @@ async fn ingest_one<R: Runtime>(
     // treat as "no artwork" rather than failing the whole ingest.
     let artwork = artwork_result.unwrap_or(None);
 
+    // The sidecar is written for the folder's sake (other players read
+    // it, and `resolve_for_files` can pick it up later) but is NOT what
+    // goes in `artwork_path`: the asset-protocol scope is pinned to
+    // `$APPDATA/artwork/**`, so a path under the library root would 403
+    // in the webview. That column belongs to `resolve_artwork_for_album`
+    // and its cache; passing None here leaves whatever it resolved.
     let artwork_str = artwork.as_ref().map(|p| p.display().to_string());
 
     // `original_path` records where a copied file came from. For a file
@@ -141,7 +164,7 @@ async fn ingest_one<R: Runtime>(
         &target_abs.display().to_string(),
         original.as_deref(),
         &hash::hash_hex(target_hash),
-        artwork_str.as_deref(),
+        None,
     )
     .await?;
 
@@ -240,16 +263,6 @@ async fn free_target(engine: &SqliteRawEngine, ideal: &std::path::Path) -> anyho
         ideal,
         path::COLLISION_ATTEMPTS + 1,
     ))
-}
-
-/// Whether two paths name the same file. Falls back to comparing the
-/// paths as written when either side does not exist yet — which is the
-/// normal case for the copy target.
-fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
 }
 
 /// Add the owner-write bit if it is missing. Best-effort: a filesystem

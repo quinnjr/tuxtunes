@@ -80,6 +80,7 @@ const MAX_TRACKED_INGESTS = 1000;
 interface IngestCompleteRaw {
   track_id: number;
   managed_path: string;
+  /** Sidecar cover written beside the file; not the row's artwork. */
   artwork_path: string | null;
 }
 
@@ -227,11 +228,13 @@ export class LibraryService implements OnDestroy {
     let changed = false;
     const next = rows.map((row) => {
       const e = this.#ingested.get(row.id);
-      if (!e) return row;
-      const artworkPath = e.artwork_path ?? null;
-      if (row.filePath === e.managed_path && row.artworkPath === artworkPath) return row;
+      if (!e || row.filePath === e.managed_path) return row;
       changed = true;
-      return { ...row, filePath: e.managed_path, artworkPath };
+      // Only the path: `artwork_path` on the event is the sidecar
+      // written next to the audio file, which the asset protocol will
+      // not serve. The row's artwork comes from the $APPDATA cache that
+      // resolve_track_artwork fills.
+      return { ...row, filePath: e.managed_path };
     });
     return changed ? next : rows;
   }

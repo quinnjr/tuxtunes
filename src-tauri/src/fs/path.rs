@@ -129,6 +129,35 @@ pub fn collision_candidate(candidate: &Path, n: u32) -> PathBuf {
     parent.join(name)
 }
 
+/// Whether two paths name the same file. Falls back to comparing the
+/// paths as written when either side does not exist yet — which is the
+/// normal case for a copy target.
+///
+/// Paths reaching the file layer come from three places that spell the
+/// same location differently: a file picker (fully resolved), the
+/// `library_root` preference (whatever the user typed or picked), and
+/// the `file_path` column (whatever was stored at import). Comparing
+/// them literally reports a symlinked `$HOME`, a `..`, or a trailing
+/// slash as a different file.
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+/// Whether `path` lives inside `root`, resolved the same way
+/// [`same_file`] resolves its arguments. An empty or relative root
+/// yields false rather than matching everything.
+pub fn is_under(root: &Path, path: &Path) -> bool {
+    if root.as_os_str().is_empty() || root.is_relative() {
+        return false;
+    }
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    path.starts_with(&root)
+}
+
 /// Sanitize a single path component: replace `/` with `-`, strip control
 /// chars, collapse whitespace runs, trim leading/trailing dots and
 /// spaces. Preserves Unicode and meaningful leading dashes (e.g., in

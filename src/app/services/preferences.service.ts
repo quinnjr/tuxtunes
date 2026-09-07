@@ -1,13 +1,74 @@
-import { Injectable, inject, signal } from '@angular/core';
+import { Injectable, OnDestroy, inject, signal } from '@angular/core';
+import { type UnlistenFn } from '@tauri-apps/api/event';
 import { TauriService } from './tauri.service';
 
+/** Live state of the bulk consolidate pass. */
+export interface ConsolidateProgress {
+  current: number;
+  total: number;
+}
+
+/** Summary the backend emits when the consolidate pass finishes. */
+export interface ConsolidateResult {
+  total: number;
+  moved: number;
+  copied: number;
+  in_place: number;
+  failed: number;
+}
+
 @Injectable({ providedIn: 'root' })
-export class PreferencesService {
+export class PreferencesService implements OnDestroy {
   private readonly tauri = inject(TauriService);
 
   readonly libraryRoot = signal<string>('');
   readonly organizeScheme = signal<string>('');
   readonly keepOrganized = signal<boolean>(true);
+
+  /** Non-null while the consolidate pass is running. */
+  readonly consolidateProgress = signal<ConsolidateProgress | null>(null);
+  /** Summary of the last finished pass, or null if none ran this session. */
+  readonly consolidateResult = signal<ConsolidateResult | null>(null);
+
+  private readonly unlisteners: UnlistenFn[] = [];
+
+  constructor() {
+    void this.subscribeConsolidate().catch((error: unknown) =>
+      console.error('failed to subscribe to consolidate events', error),
+    );
+  }
+
+  ngOnDestroy(): void {
+    for (const off of this.unlisteners) off();
+    this.unlisteners.length = 0;
+  }
+
+  private async subscribeConsolidate(): Promise<void> {
+    this.unlisteners.push(
+      await this.tauri.listen<ConsolidateProgress>('fs:consolidate-progress', (p) => {
+        this.consolidateProgress.set(p);
+      }),
+      await this.tauri.listen<ConsolidateResult>('fs:consolidate-complete', (r) => {
+        this.consolidateProgress.set(null);
+        this.consolidateResult.set(r);
+      }),
+    );
+  }
+
+  /**
+   * Start the consolidate pass. Resolves as soon as it is queued: the
+   * work itself reports through the two signals above.
+   */
+  async consolidateLibrary(): Promise<void> {
+    this.consolidateResult.set(null);
+    this.consolidateProgress.set({ current: 0, total: 0 });
+    try {
+      await this.tauri.invoke<void>('consolidate_library');
+    } catch (error) {
+      this.consolidateProgress.set(null);
+      throw error;
+    }
+  }
 
   async refresh(): Promise<void> {
     const [root, scheme, keep] = await Promise.all([
