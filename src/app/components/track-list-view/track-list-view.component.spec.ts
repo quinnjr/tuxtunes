@@ -738,4 +738,56 @@ describe('TrackListViewComponent', () => {
       expect(cmp.selection()).toEqual(new Set([1, 2, 3]));
     });
   });
+
+  describe('removing what is playing', () => {
+    it('stops playback when the current track is deleted', async () => {
+      const { cmp, ctx, library, playback } = setup();
+      library.tracks.set([TRACK(1), TRACK(2)]);
+      playback.currentTrackId.set(1);
+      const stop = vi.spyOn(playback, 'stop').mockResolvedValue();
+
+      const showSpy = vi.spyOn(ctx, 'show');
+      cmp.onRowContextMenu(TRACK(1), {
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      } as unknown as MouseEvent);
+      const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+      await items.find((i) => i.label === 'Remove from Library')!.action?.();
+
+      expect(stop).toHaveBeenCalled();
+    });
+
+    it('leaves playback alone when a different track is deleted', async () => {
+      const { cmp, ctx, library, playback } = setup();
+      library.tracks.set([TRACK(1), TRACK(2)]);
+      playback.currentTrackId.set(2);
+      const stop = vi.spyOn(playback, 'stop').mockResolvedValue();
+
+      const showSpy = vi.spyOn(ctx, 'show');
+      cmp.onRowContextMenu(TRACK(1), {
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      } as unknown as MouseEvent);
+      const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+      await items.find((i) => i.label === 'Remove from Library')!.action?.();
+
+      expect(stop).not.toHaveBeenCalled();
+    });
+
+    it('drops the deleted tracks from the queue', async () => {
+      const { cmp, ctx, library, playback } = setup();
+      library.tracks.set([TRACK(1), TRACK(2)]);
+      playback.queue.set([TRACK(1), TRACK(2)]);
+
+      const showSpy = vi.spyOn(ctx, 'show');
+      cmp.onRowContextMenu(TRACK(1), {
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      } as unknown as MouseEvent);
+      const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
+      await items.find((i) => i.label === 'Remove from Library')!.action?.();
+
+      expect(playback.queue().map((t) => t.id)).toEqual([2]);
+    });
+  });
 });

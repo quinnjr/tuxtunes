@@ -198,14 +198,18 @@ fn queue_copy(state: &AppState, track_id: i64, source: std::path::PathBuf) {
     }
 }
 
+/// Pick one or more audio files and add each to the library. Returns
+/// the added rows (newest first, as the picker listed them), or `None`
+/// if the dialog was cancelled. A file lofty cannot read is skipped
+/// with a log line rather than failing the whole selection.
 #[tauri::command]
 pub async fn pick_and_add_track(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<TrackRow>, String> {
+) -> Result<Option<Vec<TrackRow>>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let file_opt = app
+    let picked = app
         .dialog()
         .file()
         .add_filter(
@@ -214,13 +218,30 @@ pub async fn pick_and_add_track(
                 "flac", "mp3", "m4a", "wav", "ogg", "opus", "aiff", "dsf", "dff",
             ],
         )
-        .blocking_pick_file();
+        .blocking_pick_files();
 
-    let Some(path_resp) = file_opt else {
+    let Some(paths) = picked else {
         return Ok(None);
     };
-    let path_buf = path_resp.into_path().map_err(|e| e.to_string())?;
 
+    let mut rows = Vec::with_capacity(paths.len());
+    for path_resp in paths {
+        let path_buf = path_resp.into_path().map_err(|e| e.to_string())?;
+        match add_one_picked_file(&state, path_buf).await {
+            Ok(row) => rows.push(row),
+            // One unreadable file must not cost the user the rest of a
+            // multi-file selection.
+            Err(e) => log::warn!("pick_and_add_track: skipping a file: {e}"),
+        }
+    }
+    Ok(Some(rows))
+}
+
+/// Add one picked file, or return the row it already has.
+async fn add_one_picked_file(
+    state: &tauri::State<'_, AppState>,
+    path_buf: std::path::PathBuf,
+) -> Result<TrackRow, String> {
     // Re-picking a file that is already in the library returns the row
     // it already has. Without this the add would succeed and copy a
     // second time, because copy-on-add vacates the source path that
@@ -231,7 +252,6 @@ pub async fn pick_and_add_track(
     {
         return tracks::get(&state.db.engine, existing)
             .await
-            .map(Some)
             .map_err(|e| e.to_string());
     }
 
@@ -239,12 +259,11 @@ pub async fn pick_and_add_track(
         .await
         .map_err(|e| e.to_string())?;
 
-    queue_copy(&state, id, path_buf);
+    queue_copy(state, id, path_buf);
 
-    let row = tracks::get(&state.db.engine, id)
+    tracks::get(&state.db.engine, id)
         .await
-        .map_err(|e| e.to_string())?;
-    Ok(Some(row))
+        .map_err(|e| e.to_string())
 }
 
 /// Pick a folder and add every audio file under it (recursively) that

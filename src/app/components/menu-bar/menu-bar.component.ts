@@ -51,7 +51,7 @@ export class MenuBarComponent {
 
   protected async addFile(): Promise<void> {
     this.close();
-    await this.ui.guard(this.library.addTrackFromPicker());
+    await this.ui.guard(this.library.addTracksFromPicker());
   }
 
   protected async addFolder(): Promise<void> {

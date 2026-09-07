@@ -115,23 +115,46 @@ describe('LibraryService', () => {
     expect(out).toEqual([{ value: 'Rock', count: 5 }]);
   });
 
-  it('addTrackFromPicker() returns null when the user cancels', async () => {
+  it('addTracksFromPicker() returns null when the user cancels', async () => {
     const { svc } = build(async () => null);
-    const out = await svc.addTrackFromPicker();
+    const out = await svc.addTracksFromPicker();
     expect(out).toBeNull();
     expect(svc.tracks()).toHaveLength(0);
   });
 
-  it('addTrackFromPicker() prepends new tracks and refreshes stats', async () => {
+  it('addTracksFromPicker() prepends every picked track and refreshes stats', async () => {
     const responses: Record<string, unknown> = {
-      pick_and_add_track: RAW_TRACK,
+      pick_and_add_track: [RAW_TRACK, { ...RAW_TRACK, id: 2, title: 'Second' }],
+      get_library_stats: { track_count: 2, total_duration_ms: 0, total_size_bytes: 0 },
+    };
+    const { svc } = build(async (cmd) => responses[cmd]);
+    const out = await svc.addTracksFromPicker();
+    expect(out).toHaveLength(2);
+    expect(svc.tracks().map((t) => t.id)).toEqual([1, 2]);
+    expect(svc.stats()?.trackCount).toBe(2);
+  });
+
+  it('addTracksFromPicker() does not duplicate a row the picker re-added', async () => {
+    const responses: Record<string, unknown> = {
+      list_tracks: [RAW_TRACK],
+      pick_and_add_track: [RAW_TRACK],
       get_library_stats: { track_count: 1, total_duration_ms: 0, total_size_bytes: 0 },
     };
     const { svc } = build(async (cmd) => responses[cmd]);
-    const out = await svc.addTrackFromPicker();
-    expect(out).not.toBeNull();
+    await svc.refreshTracks();
+
+    // The backend answers a re-picked file with the row it already has.
+    await svc.addTracksFromPicker();
     expect(svc.tracks()).toHaveLength(1);
-    expect(svc.stats()?.trackCount).toBe(1);
+  });
+
+  it('addTracksFromPicker() leaves the list alone when nothing readable was picked', async () => {
+    const responses: Record<string, unknown> = { pick_and_add_track: [] };
+    const { svc, invoke } = build(async (cmd) => responses[cmd]);
+    const out = await svc.addTracksFromPicker();
+    expect(out).toEqual([]);
+    expect(svc.tracks()).toHaveLength(0);
+    expect(invoke).not.toHaveBeenCalledWith('get_library_stats');
   });
 
   it('refreshAlbums() camelCases album rows', async () => {
@@ -586,11 +609,11 @@ describe('LibraryService.resolveTrackArtwork', () => {
 });
 
 describe('negative cases', () => {
-  it('addTrackFromPicker() rejects when pick_and_add_track fails', async () => {
+  it('addTracksFromPicker() rejects when pick_and_add_track fails', async () => {
     const { svc } = build(async () => {
       throw new Error('picker failed');
     });
-    await expect(svc.addTrackFromPicker()).rejects.toThrow('picker failed');
+    await expect(svc.addTracksFromPicker()).rejects.toThrow('picker failed');
     expect(svc.tracks()).toEqual([]);
   });
 

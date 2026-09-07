@@ -507,11 +507,23 @@ export class LibraryService implements OnDestroy {
     return raws;
   }
 
-  async addTrackFromPicker(): Promise<TrackRow | null> {
-    const raw = await this.tauri.invoke<TrackRowRaw | null>('pick_and_add_track');
-    if (!raw) return null;
-    const mapped = mapTrack(raw);
-    this.tracks.update((cur) => this.#withIngestResults([mapped, ...cur]));
+  /**
+   * Pick one or more audio files and add them. Resolves to the added
+   * rows, or null if the dialog was cancelled. The rows are prepended
+   * rather than refetched so the list does not jump under a user who
+   * has sorted or filtered it.
+   */
+  async addTracksFromPicker(): Promise<TrackRow[] | null> {
+    const raws = await this.tauri.invoke<TrackRowRaw[] | null>('pick_and_add_track');
+    if (!raws) return null;
+    const mapped = raws.map((raw) => mapTrack(raw));
+    if (mapped.length === 0) return mapped;
+    // A re-picked file comes back as the row it already has; adding it
+    // again would show a duplicate until the next refresh.
+    const added = new Set(mapped.map((t) => t.id));
+    this.tracks.update((cur) =>
+      this.#withIngestResults([...mapped, ...cur.filter((t) => !added.has(t.id))]),
+    );
     await this.refreshStats();
     return mapped;
   }

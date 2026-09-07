@@ -431,6 +431,17 @@ export class TrackListViewComponent implements OnInit {
     targets: TrackRow[],
     command: 'remove_track' | 'trash_track',
   ): Promise<void> {
+    const removed = new Set(targets.map((t) => t.id));
+    // Stop before the rows go: playing on from a track that is being
+    // deleted (its file, with 'trash_track') leaves the transport
+    // showing something the library no longer has.
+    if (removed.has(this.playback.currentTrackId() ?? -1)) {
+      await this.playback.stop();
+    }
+    // Anything queued behind it is gone too — auto-advance would walk
+    // straight into a file that is not there any more.
+    this.playback.updateQueue((q) => q.filter((t) => !removed.has(t.id)));
+
     for (const target of targets) {
       await this.ui.guard(this.tauri.invoke(command, { trackId: target.id }));
     }
