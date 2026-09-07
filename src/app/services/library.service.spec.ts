@@ -410,6 +410,38 @@ describe('LibraryService playlists', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it('an ingest-complete event that arrives before its row still applies', async () => {
+    const { svc, emit } = build(async (cmd) => (cmd === 'list_tracks' ? [RAW_TRACK] : []));
+    await Promise.resolve(); // listener registration settles
+
+    // The backend queues the copy before the add command returns, so
+    // the event can beat the row into the list.
+    emit('fs:ingest-complete', {
+      track_id: 1,
+      managed_path: '/managed/01 - Title.flac',
+      artwork_path: null,
+    });
+    await svc.refreshTracks();
+
+    expect(svc.tracks()[0].filePath).toBe('/managed/01 - Title.flac');
+  });
+
+  it('an ingest-complete event clears artwork the backend found none for', async () => {
+    const { svc, emit } = build(async (cmd) =>
+      cmd === 'list_tracks' ? [{ ...RAW_TRACK, artwork_path: '/stale/cover.jpg' }] : [],
+    );
+    await svc.refreshTracks();
+    await Promise.resolve();
+
+    emit('fs:ingest-complete', {
+      track_id: 1,
+      managed_path: '/managed/01 - Title.flac',
+      artwork_path: null,
+    });
+
+    expect(svc.tracks()[0].artworkPath).toBeNull();
+  });
+
   it('an ingest-complete event for an unloaded track leaves the list untouched', async () => {
     const { svc, emit } = build(async (cmd) => (cmd === 'list_tracks' ? [RAW_TRACK] : []));
     await svc.refreshTracks();

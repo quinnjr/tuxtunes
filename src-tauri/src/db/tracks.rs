@@ -496,8 +496,14 @@ pub async fn delete_missing(
 }
 
 /// Update the path-related columns after a successful ingest. Sets
-/// `file_path`, `original_path`, `file_hash`, `artwork_path`; marks
-/// `import_status = 'ok'` and refreshes `verified_at`.
+/// `file_path`, `file_hash`, `artwork_path`; marks `import_status =
+/// 'ok'` and refreshes `verified_at`. A `None` `original_path` leaves
+/// the stored value alone rather than clearing it — a file that needed
+/// no copy still keeps the provenance an earlier sync recorded.
+///
+/// Returns the number of rows updated: 0 means the track was deleted
+/// while the ingest was in flight, which the caller has to clean up
+/// after.
 pub async fn set_file_paths(
     engine: &SqliteRawEngine,
     local_id: i64,
@@ -505,11 +511,13 @@ pub async fn set_file_paths(
     original_path: Option<&str>,
     file_hash_hex: &str,
     artwork_path: Option<&str>,
-) -> Result<(), TracksError> {
+) -> Result<u64, TracksError> {
     use crate::db::sync_util::opt_str;
     use prax_query::filter::FilterValue as FV;
     let sql = "UPDATE tracks SET \
-        file_path = ?, original_path = ?, file_hash = ?, artwork_path = ?, \
+        file_path = ?, \
+        original_path = COALESCE(?, original_path), \
+        file_hash = ?, artwork_path = ?, \
         import_status = 'ok', verified_at = CURRENT_TIMESTAMP \
         WHERE id = ?";
     let params = vec![
@@ -522,7 +530,6 @@ pub async fn set_file_paths(
     engine
         .raw_sql_execute(sql, &params)
         .await
-        .map(|_| ())
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 

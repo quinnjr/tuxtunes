@@ -185,6 +185,19 @@ pub async fn resolve_track_artwork(
     resolve_artwork_for_album(&app, engine, &album_artist, &album).await
 }
 
+/// Hand a freshly added track to the copy-on-add worker, which copies
+/// it under the library root and rewrites `file_path` when it lands.
+/// The row the command returns still points at the source; the UI
+/// picks up the managed path from `fs:ingest-complete`.
+///
+/// A dead worker is logged rather than failed on — the track is in the
+/// library and playable from where it is either way.
+fn queue_copy(state: &AppState, track_id: i64, source: std::path::PathBuf) {
+    if let Err(e) = state.fs.copy_for_track(track_id, source) {
+        log::warn!("could not queue copy-on-add for track {track_id}: {e}");
+    }
+}
+
 #[tauri::command]
 pub async fn pick_and_add_track(
     app: tauri::AppHandle,
@@ -208,17 +221,25 @@ pub async fn pick_and_add_track(
     };
     let path_buf = path_resp.into_path().map_err(|e| e.to_string())?;
 
+    // Re-picking a file that is already in the library returns the row
+    // it already has. Without this the add would succeed and copy a
+    // second time, because copy-on-add vacates the source path that
+    // `file_path`'s UNIQUE constraint used to guard.
+    if let Some(existing) = ingest::track_id_for_path(&state.db.engine, &path_buf)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return tracks::get(&state.db.engine, existing)
+            .await
+            .map(Some)
+            .map_err(|e| e.to_string());
+    }
+
     let id = ingest::probe_and_add(&state.db.engine, &path_buf)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Copy the file into the managed library root. The worker rewrites
-    // `file_path` when it lands, so the row we return here still points
-    // at the source; the UI picks up the managed path from
-    // `fs:ingest-complete`.
-    if let Err(e) = state.fs.copy_for_track(id, path_buf) {
-        log::warn!("pick_and_add_track: could not queue copy for track {id}: {e}");
-    }
+    queue_copy(&state, id, path_buf);
 
     let row = tracks::get(&state.db.engine, id)
         .await
@@ -244,13 +265,10 @@ pub async fn pick_and_add_folder(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Queue every newly added file for copy into the managed library
-    // root. `added_tracks` is `#[serde(skip)]`, so draining it here
-    // keeps it out of the payload the UI sees.
+    // `added_tracks` is `#[serde(skip)]`, so draining it here keeps it
+    // out of the payload the UI sees.
     for (id, source) in std::mem::take(&mut summary.added_tracks) {
-        if let Err(e) = state.fs.copy_for_track(id, source) {
-            log::warn!("pick_and_add_folder: could not queue copy for track {id}: {e}");
-        }
+        queue_copy(&state, id, source);
     }
 
     Ok(Some(summary))
