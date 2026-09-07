@@ -185,6 +185,19 @@ pub async fn resolve_track_artwork(
     resolve_artwork_for_album(&app, engine, &album_artist, &album).await
 }
 
+/// Hand a freshly added track to the copy-on-add worker, which copies
+/// it under the library root and rewrites `file_path` when it lands.
+/// The row the command returns still points at the source; the UI
+/// picks up the managed path from `fs:ingest-complete`.
+///
+/// A dead worker is logged rather than failed on — the track is in the
+/// library and playable from where it is either way.
+fn queue_copy(state: &AppState, track_id: i64, source: std::path::PathBuf) {
+    if let Err(e) = state.fs.copy_for_track(track_id, source) {
+        log::warn!("could not queue copy-on-add for track {track_id}: {e}");
+    }
+}
+
 #[tauri::command]
 pub async fn pick_and_add_track(
     app: tauri::AppHandle,
@@ -208,9 +221,25 @@ pub async fn pick_and_add_track(
     };
     let path_buf = path_resp.into_path().map_err(|e| e.to_string())?;
 
+    // Re-picking a file that is already in the library returns the row
+    // it already has. Without this the add would succeed and copy a
+    // second time, because copy-on-add vacates the source path that
+    // `file_path`'s UNIQUE constraint used to guard.
+    if let Some(existing) = ingest::track_id_for_path(&state.db.engine, &path_buf)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return tracks::get(&state.db.engine, existing)
+            .await
+            .map(Some)
+            .map_err(|e| e.to_string());
+    }
+
     let id = ingest::probe_and_add(&state.db.engine, &path_buf)
         .await
         .map_err(|e| e.to_string())?;
+
+    queue_copy(&state, id, path_buf);
 
     let row = tracks::get(&state.db.engine, id)
         .await
@@ -232,10 +261,17 @@ pub async fn pick_and_add_folder(
         return Ok(None);
     };
     let dir = folder.into_path().map_err(|e| e.to_string())?;
-    ingest::add_folder(&state.db.engine, &dir)
+    let mut summary = ingest::add_folder(&state.db.engine, &dir)
         .await
-        .map(Some)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    // `added_tracks` is `#[serde(skip)]`, so draining it here keeps it
+    // out of the payload the UI sees.
+    for (id, source) in std::mem::take(&mut summary.added_tracks) {
+        queue_copy(&state, id, source);
+    }
+
+    Ok(Some(summary))
 }
 
 /// Runs the verify walk and reports failures on the `fs:verify-failed`

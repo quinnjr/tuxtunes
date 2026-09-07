@@ -69,6 +69,20 @@ interface PlaylistRaw {
   sync_source_id: number | null;
 }
 
+/**
+ * How many ingest results to remember for rows that are not loaded. A
+ * large import emits one per file, so this is bounded; 1,000 covers
+ * more than the 500-row page `refreshTracks` loads by default.
+ */
+const MAX_TRACKED_INGESTS = 1000;
+
+/** Payload of the backend's `fs:ingest-complete` event. */
+interface IngestCompleteRaw {
+  track_id: number;
+  managed_path: string;
+  artwork_path: string | null;
+}
+
 export interface AddFolderSummary {
   added: number;
   skipped: number;
@@ -144,6 +158,9 @@ export class LibraryService implements OnDestroy {
   private readonly tauri = inject(TauriService);
 
   #unlistenExternal: (() => void) | null = null;
+  #unlistenIngest: (() => void) | null = null;
+  /** Ingest results seen this session, newest last. See #applyIngestResult. */
+  readonly #ingested = new Map<number, IngestCompleteRaw>();
 
   constructor() {
     // The backend polls the database for commits made by other
@@ -162,11 +179,61 @@ export class LibraryService implements OnDestroy {
       .then((off) => {
         this.#unlistenExternal = off;
       });
+
+    // Newly added files are copied into the managed library folder in
+    // the background, which rewrites their file_path. Patch the loaded
+    // rows in place rather than refreshing — a folder import emits one
+    // event per track.
+    void this.tauri
+      .listen<IngestCompleteRaw>('fs:ingest-complete', (e) => {
+        this.#applyIngestResult(e);
+      })
+      .then((off) => {
+        this.#unlistenIngest = off;
+      });
   }
 
   ngOnDestroy(): void {
     this.#unlistenExternal?.();
     this.#unlistenExternal = null;
+    this.#unlistenIngest?.();
+    this.#unlistenIngest = null;
+  }
+
+  /**
+   * Record an ingest result and fold it into the loaded rows.
+   *
+   * The event can beat the row into the list — both add flows queue the
+   * copy before their `invoke` resolves — so results are kept and
+   * re-applied whenever rows are (re)loaded, rather than dropped when
+   * no row matches yet.
+   */
+  #applyIngestResult(e: IngestCompleteRaw): void {
+    this.#ingested.set(e.track_id, e);
+    if (this.#ingested.size > MAX_TRACKED_INGESTS) {
+      // Map iterates in insertion order, so this evicts the oldest.
+      const oldest = this.#ingested.keys().next().value;
+      if (oldest !== undefined) this.#ingested.delete(oldest);
+    }
+    this.tracks.update((rows) => this.#withIngestResults(rows));
+  }
+
+  /**
+   * Point rows at the paths ingest gave them. Returns the input array
+   * untouched when nothing applies, so the signal does not notify.
+   */
+  #withIngestResults(rows: TrackRow[]): TrackRow[] {
+    if (this.#ingested.size === 0) return rows;
+    let changed = false;
+    const next = rows.map((row) => {
+      const e = this.#ingested.get(row.id);
+      if (!e) return row;
+      const artworkPath = e.artwork_path ?? null;
+      if (row.filePath === e.managed_path && row.artworkPath === artworkPath) return row;
+      changed = true;
+      return { ...row, filePath: e.managed_path, artworkPath };
+    });
+    return changed ? next : rows;
   }
 
   readonly stats = signal<LibraryStats | null>(null);
@@ -242,7 +309,7 @@ export class LibraryService implements OnDestroy {
       filters: this.filters(),
       sort: this.sort(),
     });
-    this.tracks.set(raws.map((raw) => mapTrack(raw)));
+    this.tracks.set(this.#withIngestResults(raws.map((raw) => mapTrack(raw))));
   }
 
   /**
@@ -278,7 +345,7 @@ export class LibraryService implements OnDestroy {
     if (sort.column !== DEFAULT_SORT.column || sort.descending !== DEFAULT_SORT.descending) {
       rows = sortTracks(rows, sort);
     }
-    this.tracks.set(rows);
+    this.tracks.set(this.#withIngestResults(rows));
     const count = raws.length;
     this.playlists.update((all) =>
       all.map((p) => (p.id === id && p.trackCount !== count ? { ...p, trackCount: count } : p)),
@@ -441,7 +508,7 @@ export class LibraryService implements OnDestroy {
     const raw = await this.tauri.invoke<TrackRowRaw | null>('pick_and_add_track');
     if (!raw) return null;
     const mapped = mapTrack(raw);
-    this.tracks.update((cur) => [mapped, ...cur]);
+    this.tracks.update((cur) => this.#withIngestResults([mapped, ...cur]));
     await this.refreshStats();
     return mapped;
   }

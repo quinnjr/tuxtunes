@@ -82,7 +82,29 @@ pub fn render(template: &str, t: &TrackFields<'_>) -> Result<PathBuf, PathRender
 /// If `candidate` (managed-root-absolute) exists, append ` (2)`, ` (3)`, …
 /// to the file stem until an unused name is found, capped at 999.
 pub fn resolve_collision(candidate: &Path) -> PathBuf {
-    if !candidate.exists() {
+    for n in 0..=COLLISION_ATTEMPTS {
+        let cand = collision_candidate(candidate, n);
+        if !cand.exists() {
+            return cand;
+        }
+    }
+    collision_candidate(candidate, COLLISION_ATTEMPTS + 1)
+}
+
+/// How many suffixed names [`collision_candidate`] offers before it
+/// falls back to a timestamp. Attempt 0 is the unsuffixed name.
+pub const COLLISION_ATTEMPTS: u32 = 998;
+
+/// The `n`th name to try for `candidate`: attempt 0 is the name itself,
+/// 1..=[`COLLISION_ATTEMPTS`] append ` (2)`, ` (3)`, …, and anything
+/// beyond that appends a millisecond timestamp.
+///
+/// Split out from [`resolve_collision`] so callers that need to check
+/// something other than the filesystem — the ingest worker also has to
+/// avoid a name another track row already claims — can walk the same
+/// sequence.
+pub fn collision_candidate(candidate: &Path, n: u32) -> PathBuf {
+    if n == 0 {
         return candidate.to_path_buf();
     }
     let parent = candidate.parent().unwrap_or_else(|| Path::new(""));
@@ -91,25 +113,18 @@ pub fn resolve_collision(candidate: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("file");
     let ext = candidate.extension().and_then(|s| s.to_str()).unwrap_or("");
-    for n in 2u32..=999 {
-        let name = if ext.is_empty() {
-            format!("{stem} ({n})")
-        } else {
-            format!("{stem} ({n}).{ext}")
-        };
-        let cand = parent.join(&name);
-        if !cand.exists() {
-            return cand;
-        }
-    }
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let name = if ext.is_empty() {
-        format!("{stem} ({ts})")
+    let discriminator = if n <= COLLISION_ATTEMPTS {
+        u128::from(n) + 1
     } else {
-        format!("{stem} ({ts}).{ext}")
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    };
+    let name = if ext.is_empty() {
+        format!("{stem} ({discriminator})")
+    } else {
+        format!("{stem} ({discriminator}).{ext}")
     };
     parent.join(name)
 }
