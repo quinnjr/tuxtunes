@@ -1,4 +1,4 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed, signal } from '@angular/core';
 import { toErrorMessage } from '../utils/errors';
 
 export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
@@ -74,6 +74,24 @@ export class UiService {
 
   /** Track-info (Get Info…) editor: null = closed. */
   readonly trackInfo = signal<{ trackId: number } | null>(null);
+
+  /**
+   * Whether any modal owns the screen. Keyboard shortcuts bound on
+   * document check this so a list-level key (Delete, ⌘A) does not fire
+   * behind an open dialog.
+   */
+  readonly anyModalOpen = computed(this.#computeAnyModalOpen.bind(this));
+
+  #computeAnyModalOpen(): boolean {
+    return (
+      this.importWizardOpen() ||
+      this.preferencesOpen() ||
+      this.smartEditor() !== null ||
+      this.namePrompt() !== null ||
+      this.confirm() !== null ||
+      this.trackInfo() !== null
+    );
+  }
 
   /**
    * Most recent user-facing failure (a backend command rejected, a

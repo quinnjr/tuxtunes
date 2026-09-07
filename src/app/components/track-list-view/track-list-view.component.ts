@@ -1,6 +1,7 @@
 import { ScrollingModule } from '@angular/cdk/scrolling';
 import {
   Component,
+  HostListener,
   OnInit,
   computed,
   inject,
@@ -173,6 +174,75 @@ export class TrackListViewComponent implements OnInit {
     this.anchorIndex = index;
   }
 
+  /** The selected rows, in list order. Empty when nothing is picked. */
+  protected selectedTracks(): TrackRow[] {
+    const ids = this.selection();
+    return ids.size === 0 ? [] : this.library.tracks().filter((t) => ids.has(t.id));
+  }
+
+  /**
+   * List-wide keyboard shortcuts. Bound on document so they work
+   * wherever focus sits inside the list, and suppressed while the user
+   * is typing or a modal owns the screen — Delete in a text field
+   * means "delete a character".
+   */
+  @HostListener('document:keydown', ['$event'])
+  onKeydown(event: KeyboardEvent): void {
+    if (this.isTypingTarget(event.target) || this.ui.anyModalOpen()) return;
+
+    const isMulti = event.ctrlKey || event.metaKey;
+    if (isMulti && (event.key === 'a' || event.key === 'A')) {
+      event.preventDefault();
+      this.selectAll();
+      return;
+    }
+    if (event.key === 'Escape' && this.selection().size > 0) {
+      event.preventDefault();
+      this.selection.set(new Set());
+      return;
+    }
+    if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+    const targets = this.selectedTracks();
+    if (targets.length === 0) return;
+    event.preventDefault();
+    // Shift bypasses the trash and takes the row out of the library
+    // only, leaving the file alone — the same split the context menu
+    // offers, and the one iTunes trained people to expect.
+    if (event.shiftKey) void this.removeTargets(targets, 'remove_track');
+    else this.confirmTrash(targets);
+  }
+
+  /** Whether the event's target is somewhere text is being entered. */
+  private isTypingTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el) return false;
+    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true;
+  }
+
+  protected selectAll(): void {
+    this.selection.set(new Set(this.library.tracks().map((t) => t.id)));
+    this.anchorIndex = null;
+  }
+
+  /**
+   * Ask before moving files to the trash: it reaches outside the
+   * library, and a range selection can be far larger than the row the
+   * user was looking at.
+   */
+  private confirmTrash(targets: TrackRow[]): void {
+    const n = targets.length;
+    const what = n === 1 ? `“${targets[0].title}”` : `${n} tracks`;
+    this.ui.confirm.set({
+      title: n === 1 ? 'Move to Trash' : 'Move Files to Trash',
+      message:
+        `Move ${what} to the trash? The file${n === 1 ? '' : 's'} leave${n === 1 ? 's' : ''} ` +
+        `the library and your disk.`,
+      confirmLabel: n === 1 ? 'Move to Trash' : `Move ${n} to Trash`,
+      destructive: true,
+      onConfirm: () => this.removeTargets(targets, 'trash_track'),
+    });
+  }
+
   /**
    * Right-click resolves a context-menu item set scoped to the
    * effective selection — the clicked row plus any prior multi-selection
@@ -236,8 +306,10 @@ export class TrackListViewComponent implements OnInit {
       {
         label: single ? 'Move to Trash' : `Move ${targets.length} to Trash`,
         destructive: true,
-        action: () => this.removeTargets(targets, 'trash_track'),
+        action: () => this.confirmTrash(targets),
       },
+      { label: '---' },
+      { label: 'Select All', action: () => this.selectAll() },
     ];
   }
 

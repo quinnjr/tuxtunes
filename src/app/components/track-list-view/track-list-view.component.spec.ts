@@ -33,6 +33,9 @@ interface ListInternals {
   closePicker(): void;
   onHeaderContextMenu(event: MouseEvent): void;
   onPickerBackdropContextMenu(event: MouseEvent): void;
+  onKeydown(event: KeyboardEvent): void;
+  selectAll(): void;
+  selectedTracks(): TrackRow[];
 }
 
 const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
@@ -73,6 +76,7 @@ function setup(
     library: TestBed.inject(LibraryService),
     playback: TestBed.inject(PlaybackService),
     ctx: TestBed.inject(ContextMenuService),
+    ui: TestBed.inject(UiService),
     tauri: TestBed.inject(TauriService),
     invoke: stub.invoke,
   };
@@ -195,7 +199,7 @@ describe('TrackListViewComponent', () => {
   });
 
   it('context-menu remove + trash actions', async () => {
-    const { cmp, ctx, library, invoke } = setup();
+    const { cmp, ctx, library, invoke, ui } = setup();
     library.tracks.set([TRACK(1)]);
     const showSpy = vi.spyOn(ctx, 'show');
     cmp.onRowContextMenu(TRACK(1), {
@@ -205,7 +209,12 @@ describe('TrackListViewComponent', () => {
     const items = (showSpy.mock.calls[0][1] ?? []) as ContextMenuItem[];
     await items.find((i) => i.label === 'Remove from Library')!.action?.();
     expect(invoke).toHaveBeenCalledWith('remove_track', { trackId: 1 });
+    // Trashing asks first — it takes the file off disk.
     await items.find((i) => i.label === 'Move to Trash')!.action?.();
+    expect(invoke).not.toHaveBeenCalledWith('trash_track', { trackId: 1 });
+    const req = ui.confirm();
+    expect(req?.destructive).toBe(true);
+    await req?.onConfirm();
     expect(invoke).toHaveBeenCalledWith('trash_track', { trackId: 1 });
   });
 
@@ -533,5 +542,93 @@ describe('TrackListViewComponent', () => {
     expect(cmp.selection().size).toBe(0);
     expect(invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
     expect(invoke).toHaveBeenCalledWith('get_library_stats');
+  });
+
+  describe('keyboard selection and deletion', () => {
+    const press = (key: string, mods: Partial<KeyboardEvent> = {}): KeyboardEvent =>
+      ({
+        key,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        target: document.body,
+        preventDefault: vi.fn(),
+        ...mods,
+      }) as unknown as KeyboardEvent;
+
+    it('ctrl+A selects every loaded track', () => {
+      const { cmp, library } = setup();
+      library.tracks.set([TRACK(1), TRACK(2), TRACK(3)]);
+      cmp.onKeydown(press('a', { ctrlKey: true }));
+      expect(cmp.selection()).toEqual(new Set([1, 2, 3]));
+    });
+
+    it('Escape clears the selection', () => {
+      const { cmp, library } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+      cmp.onKeydown(press('Escape'));
+      expect(cmp.selection().size).toBe(0);
+    });
+
+    it('Delete asks before trashing every selected track', async () => {
+      const { cmp, library, invoke, ui } = setup();
+      library.tracks.set([TRACK(1), TRACK(2), TRACK(3)]);
+      cmp.selection.set(new Set([1, 3]));
+
+      cmp.onKeydown(press('Delete'));
+      const req = ui.confirm();
+      expect(req?.confirmLabel).toBe('Move 2 to Trash');
+      expect(invoke).not.toHaveBeenCalledWith('trash_track', expect.anything());
+
+      await req?.onConfirm();
+      expect(invoke).toHaveBeenCalledWith('trash_track', { trackId: 1 });
+      expect(invoke).toHaveBeenCalledWith('trash_track', { trackId: 3 });
+      expect(invoke).not.toHaveBeenCalledWith('trash_track', { trackId: 2 });
+      expect(cmp.selection().size).toBe(0);
+    });
+
+    it('shift+Delete removes from the library without touching the files', async () => {
+      const { cmp, library, invoke, ui } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+
+      cmp.onKeydown(press('Delete', { shiftKey: true }));
+      // No file leaves the disk, so there is nothing to confirm.
+      expect(ui.confirm()).toBeNull();
+      await Promise.resolve();
+      expect(invoke).toHaveBeenCalledWith('remove_track', { trackId: 1 });
+    });
+
+    it('does nothing with an empty selection', () => {
+      const { cmp, library, ui } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.onKeydown(press('Delete'));
+      expect(ui.confirm()).toBeNull();
+    });
+
+    it('leaves Delete alone while the user is typing', () => {
+      const { cmp, library, ui } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+      cmp.onKeydown(press('Delete', { target: document.createElement('input') }));
+      expect(ui.confirm()).toBeNull();
+    });
+
+    it('leaves Delete alone while a modal owns the screen', () => {
+      const { cmp, library, ui } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+      ui.trackInfo.set({ trackId: 1 });
+      cmp.onKeydown(press('Delete'));
+      expect(ui.confirm()).toBeNull();
+    });
+
+    it('selectedTracks returns the selection in list order', () => {
+      const { cmp, library } = setup();
+      library.tracks.set([TRACK(1), TRACK(2), TRACK(3)]);
+      cmp.selection.set(new Set([3, 1]));
+      expect(cmp.selectedTracks().map((t) => t.id)).toEqual([1, 3]);
+    });
   });
 });
