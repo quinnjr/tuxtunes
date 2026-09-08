@@ -6,7 +6,6 @@ import {
   signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import {
   ConvertPrefs,
@@ -18,9 +17,24 @@ import { UiService } from '../../services/ui.service';
 import { Choice, ChoiceSelectComponent } from '../choice-select/choice-select.component';
 import { ConvertActivityComponent } from '../convert-activity/convert-activity.component';
 
+const SAMPLE_RATES: readonly Choice<number | null>[] = [
+  { value: null, label: 'Same as source' },
+  { value: 44_100, label: '44.1 kHz' },
+  { value: 48_000, label: '48 kHz' },
+  { value: 88_200, label: '88.2 kHz' },
+  { value: 96_000, label: '96 kHz' },
+  { value: 176_400, label: '176.4 kHz' },
+  { value: 192_000, label: '192 kHz' },
+];
+
+/** AAC's MPEG-4 table stops at 96 kHz; the encoder rejects anything above. */
+const AAC_SAMPLE_RATES: readonly Choice<number | null>[] = SAMPLE_RATES.filter(
+  (r) => r.value === null || r.value <= 96_000,
+);
+
 @Component({
   selector: 'app-settings-convert',
-  imports: [FormsModule, ChoiceSelectComponent, ConvertActivityComponent],
+  imports: [ChoiceSelectComponent, ConvertActivityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './settings-convert.component.html',
 })
@@ -36,15 +50,8 @@ export class SettingsConvertComponent implements OnInit {
     { value: 'aac', label: 'AAC (lossy)' },
   ] as const;
 
-  protected readonly sampleRates: readonly Choice<number | null>[] = [
-    { value: null, label: 'Same as source' },
-    { value: 44_100, label: '44.1 kHz' },
-    { value: 48_000, label: '48 kHz' },
-    { value: 88_200, label: '88.2 kHz' },
-    { value: 96_000, label: '96 kHz' },
-    { value: 176_400, label: '176.4 kHz' },
-    { value: 192_000, label: '192 kHz' },
-  ] as const;
+  protected readonly sampleRates = SAMPLE_RATES;
+  protected readonly aacSampleRates = AAC_SAMPLE_RATES;
 
   protected readonly flacDepths: readonly Choice<number | null>[] = [
     { value: null, label: 'Same as source' },
@@ -109,7 +116,9 @@ export class SettingsConvertComponent implements OnInit {
   private computeSummary(): string {
     const c = this.convert.lastComplete();
     if (!c) return '';
-    const parts = [`${c.converted} converted to ${c.format.toUpperCase()}`];
+    // A run of mixed formats has no single name to give.
+    const to = c.format.includes('+') ? '' : ` to ${c.format.toUpperCase()}`;
+    const parts = [`${c.converted} converted${to}`];
     if (c.addedToLibrary > 0) parts.push(`${c.addedToLibrary} added to the library`);
     if (c.failed > 0) parts.push(`${c.failed} failed`);
     if (c.cancelled) parts.push(`cancelled with ${c.total - c.converted - c.failed} left`);

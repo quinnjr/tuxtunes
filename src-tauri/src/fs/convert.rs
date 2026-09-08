@@ -5,17 +5,17 @@
 //! covers every input format the library can hold, and the whole
 //! encoder surface reduces to an argv this module can unit-test.
 //!
-//! Conversion never touches the `tracks` table: the output is a new
-//! file beside the source (or under `output_dir`), and the library row
-//! keeps pointing at the original. Adding the result to the library is
-//! the import path's job, not this one.
+//! Conversion never rewrites a library row: the output is a new file
+//! beside the source (or under `output_dir`), and the source's row keeps
+//! pointing at the original. With `add_to_library` the output gets a row
+//! of its own, in place — it is already where the user asked for it, so
+//! unlike a picked file it is not copied under the library root.
 
 use crate::db::tracks::{self, TrackRow};
 use crate::fs::events::{
     ConvertComplete, ConvertFailed, ConvertProgress, CONVERT_COMPLETE, CONVERT_FAILED,
     CONVERT_PROGRESS,
 };
-use crate::fs::ingest::IngestCommand;
 use crate::fs::path;
 use lofty::file::TaggedFileExt;
 use lofty::picture::MimeType;
@@ -30,6 +30,13 @@ use tauri::{AppHandle, Emitter, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::{mpsc, watch};
 
+/// Every rate the MPEG-4 AAC sampling-frequency table allows. ffmpeg's
+/// native encoder refuses any other explicit `-ar` outright.
+const AAC_SAMPLE_RATES: [u32; 13] = [
+    7_350, 8_000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 64_000, 88_200,
+    96_000,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ConvertFormat {
@@ -42,6 +49,16 @@ impl ConvertFormat {
         match self {
             ConvertFormat::Flac => "flac",
             ConvertFormat::M4a => "m4a",
+        }
+    }
+
+    /// ffmpeg muxer name. Passed explicitly because the scratch file it
+    /// writes to (see [`temp_path`]) does not end in the real extension.
+    /// `ipod` is what ffmpeg itself picks for `.m4a`.
+    fn muxer(self) -> &'static str {
+        match self {
+            ConvertFormat::Flac => "flac",
+            ConvertFormat::M4a => "ipod",
         }
     }
 }
@@ -59,6 +76,7 @@ pub enum M4aCodec {
 /// knob: level 12 (smallest file, same bit-exact audio) and the source's
 /// own rate and depth, since resampling or truncating can only lose.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FlacPrefs {
     /// 0–12. Compression only — every level decodes bit-identically.
     pub compression_level: u8,
@@ -81,6 +99,7 @@ impl Default for FlacPrefs {
 /// M4A settings. Defaults to ALAC so the out-of-the-box result is
 /// lossless; the AAC fields only matter once the codec is switched.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct M4aPrefs {
     pub codec: M4aCodec,
     /// ALAC only: output bit depth (16 or 24); `None` keeps the source's.
@@ -121,8 +140,8 @@ pub struct ConvertPrefs {
     /// Replace an existing output instead of writing ` (2)` beside it.
     #[serde(default)]
     pub overwrite: bool,
-    /// Add each converted file to the library as its own track, the
-    /// same way a picked file is added (probe, insert, copy-on-add).
+    /// Add each converted file to the library as its own track, in
+    /// place — it is not copied under the library root.
     #[serde(default = "default_true")]
     pub add_to_library: bool,
 }
@@ -154,7 +173,10 @@ impl ConvertPrefs {
         self.flac.sample_rate = self.flac.sample_rate.map(clamp_sample_rate);
         // ALAC has no 32-bit mode; offering one would just fail at encode.
         self.m4a.bit_depth = self.m4a.bit_depth.map(|d| if d <= 16 { 16 } else { 24 });
-        self.m4a.sample_rate = self.m4a.sample_rate.map(clamp_sample_rate);
+        self.m4a.sample_rate = self.m4a.sample_rate.map(match self.m4a.codec {
+            M4aCodec::Alac => clamp_sample_rate,
+            M4aCodec::Aac => nearest_aac_sample_rate,
+        });
         self.m4a.vbr_quality = self.m4a.vbr_quality.clamp(0.1, 2.0);
         self.m4a.bitrate_kbps = self.m4a.bitrate_kbps.clamp(8, 512);
         self
@@ -171,6 +193,15 @@ fn clamp_lossless_depth(d: u8) -> u8 {
 
 fn clamp_sample_rate(hz: u32) -> u32 {
     hz.clamp(8_000, 384_000)
+}
+
+/// Snap to the closest rate the AAC encoder accepts (ties go up).
+fn nearest_aac_sample_rate(hz: u32) -> u32 {
+    AAC_SAMPLE_RATES
+        .iter()
+        .copied()
+        .min_by_key(|&r| (r.abs_diff(hz), std::cmp::Reverse(r)))
+        .unwrap_or(48_000)
 }
 
 /// `-sample_fmt` (and friends) for a lossless bit depth. Neither FLAC
@@ -199,10 +230,15 @@ fn push_bit_depth(args: &mut Vec<OsString>, depth: u8, planar: bool) {
 /// whole conversion fails. Re-encoding to PNG is lossless and accepted
 /// by both, so it is the fallback for everything that is not already
 /// known-safe.
+///
+/// [`CoverPolicy::Drop`] is the last resort when the picture itself is
+/// broken (a tag that says JPEG over bytes that are not): the audio is
+/// intact and converting it without art beats failing the track.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoverPolicy {
     Copy,
     ReencodePng,
+    Drop,
 }
 
 /// Decide [`CoverPolicy`] from the source's tags. lofty reads the same
@@ -246,27 +282,31 @@ pub fn build_args(
         "-nostats".into(),
         "-progress".into(),
         "pipe:1".into(),
-        // The target name is already collision-resolved unless the user
-        // asked to overwrite, so -y is safe and -n turns a race into a
-        // clean failure rather than an interactive prompt.
-        if prefs.overwrite { "-y" } else { "-n" }.into(),
+        // `target` is this module's own scratch file (see `temp_path`),
+        // never a name the user or another track owns, so -y is safe.
+        "-y".into(),
         "-i".into(),
         source.into(),
-        // First audio stream only; the cover art (if any) rides along as
-        // an optional attached picture.
+        // First audio stream only.
         "-map".into(),
         "0:a:0".into(),
-        "-map".into(),
-        "0:v?".into(),
-        "-c:v".into(),
-        match cover {
-            CoverPolicy::Copy => "copy",
-            CoverPolicy::ReencodePng => "png",
-        }
-        .into(),
-        "-map_metadata".into(),
-        "0".into(),
     ];
+    match cover {
+        // The cover art (if any) rides along as an optional attached
+        // picture.
+        CoverPolicy::Copy | CoverPolicy::ReencodePng => args.extend([
+            "-map".into(),
+            "0:v?".into(),
+            "-c:v".into(),
+            OsString::from(if cover == CoverPolicy::Copy {
+                "copy"
+            } else {
+                "png"
+            }),
+        ]),
+        CoverPolicy::Drop => args.push("-vn".into()),
+    }
+    args.extend(["-map_metadata".into(), OsString::from("0")]);
 
     match format {
         ConvertFormat::Flac => {
@@ -317,8 +357,45 @@ pub fn build_args(
         }
     }
 
+    args.extend(["-f".into(), OsString::from(format.muxer())]);
     args.push(target.into());
     args
+}
+
+/// The one stderr line worth showing for a failed encode. ffmpeg logs
+/// decoder grumbles first (a cover whose JPEG header is off), the real
+/// cause next, then a fixed tail of generic lines about threads and
+/// nothing having been written — so take the last line that is not
+/// boilerplate.
+fn summarize_stderr(stderr: &str) -> String {
+    const GENERIC: [&str; 6] = [
+        "Nothing was written",
+        "Error sending frames",
+        "Task finished with error",
+        "Terminating thread",
+        "Could not write header",
+        "Conversion failed",
+    ];
+    stderr
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty() && !GENERIC.iter().any(|g| l.contains(g)))
+        .unwrap_or("no output")
+        .to_string()
+}
+
+/// Where ffmpeg writes while it works: a dot-file beside `target` with
+/// a non-audio extension, so nothing that watches the folder (external
+/// change detection, other players) takes a half-written file for a
+/// track. Renamed onto `target` only once ffmpeg has exited cleanly, so
+/// a failure or cancel never has to delete anything at `target` — which
+/// with `overwrite` may be a healthy file ffmpeg never opened.
+pub fn temp_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "convert".into());
+    target.with_file_name(format!(".{name}.part"))
 }
 
 /// Where the converted file for `source` should go.
@@ -383,14 +460,7 @@ impl ConvertWorker {
     /// batch per right-click in parallel would only make every batch
     /// slower while starving playback of cores.
     ///
-    /// `ingest_tx` is the ingest worker's own queue rather than the
-    /// whole [`crate::fs::coordinator::FsCoordinator`], which would be a
-    /// cycle — the coordinator owns this worker.
-    pub fn spawn<R: Runtime>(
-        engine: Arc<SqliteRawEngine>,
-        ingest_tx: mpsc::UnboundedSender<IngestCommand>,
-        app: AppHandle<R>,
-    ) -> Self {
+    pub fn spawn<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<ConvertCommand>();
         let (cancel, cancel_rx) = watch::channel(0u64);
         let task = tokio::spawn(async move {
@@ -404,7 +474,6 @@ impl ConvertWorker {
                     } => {
                         convert_batch(
                             &engine,
-                            &ingest_tx,
                             &app,
                             &track_ids,
                             format,
@@ -466,7 +535,6 @@ impl BatchCancel {
 
 async fn convert_batch<R: Runtime>(
     engine: &SqliteRawEngine,
-    ingest_tx: &mpsc::UnboundedSender<IngestCommand>,
     app: &AppHandle<R>,
     track_ids: &[i64],
     format: ConvertFormat,
@@ -484,11 +552,11 @@ async fn convert_batch<R: Runtime>(
             cancelled = true;
             break;
         }
-        let row: Option<TrackRow> = tracks::get(engine, track_id).await.ok();
-        let name = row
-            .as_ref()
-            .map(|r| r.title.clone())
-            .unwrap_or_else(|| format!("track {track_id}"));
+        let row = tracks::get_opt(engine, track_id).await;
+        let name = match &row {
+            Ok(Some(r)) => r.title.clone(),
+            _ => format!("track {track_id}"),
+        };
         let emit_progress = |percent: Option<u8>| {
             let _ = app.emit(
                 CONVERT_PROGRESS,
@@ -503,8 +571,13 @@ async fn convert_batch<R: Runtime>(
         emit_progress(Some(0));
 
         let outcome = match &row {
-            Some(row) => convert_one(row, format, prefs, &mut cancel, &emit_progress).await,
-            None => Err(anyhow::anyhow!("track is no longer in the library")),
+            Ok(Some(row)) => {
+                convert_prepared(engine, row, format, prefs, &mut cancel, &emit_progress).await
+            }
+            Ok(None) => Err(anyhow::anyhow!("track is no longer in the library")),
+            Err(e) => Err(anyhow::anyhow!(
+                "could not read the track from the library: {e}"
+            )),
         };
         match outcome {
             Ok(Converted::Cancelled) => {
@@ -515,12 +588,11 @@ async fn convert_batch<R: Runtime>(
                 converted += 1;
                 emit_progress(Some(100));
                 if prefs.add_to_library {
-                    match add_converted_to_library(engine, ingest_tx, &target).await {
-                        Ok(true) => added += 1,
+                    match crate::library::ingest::probe_and_add(engine, &target).await {
+                        Ok(_) => added += 1,
                         // The file is on disk and correct either way, so
                         // a library-add problem is worth a log line but
                         // not a failed conversion.
-                        Ok(false) => {}
                         Err(e) => log::warn!(
                             "converted {} but could not add it to the library: {e}",
                             target.display()
@@ -564,35 +636,38 @@ enum Converted {
     Cancelled,
 }
 
-/// Probe the converted file and insert it as its own track, then queue
-/// copy-on-add exactly as the file picker does. Returns whether a row
-/// was actually added — a file the library already references (a
-/// re-convert onto the same overwritten path) is left alone.
-async fn add_converted_to_library(
+/// Resolve the destination and refuse one that would clobber a file the
+/// library references, then convert. Only `overwrite` can produce such a
+/// destination — otherwise the name is collision-resolved to a fresh
+/// one — and `same_file` alone does not catch it: the file may belong to
+/// a *different* track, or be a previous conversion that has since been
+/// added to the library and whose row would silently go stale.
+async fn convert_prepared(
     engine: &SqliteRawEngine,
-    ingest_tx: &mpsc::UnboundedSender<IngestCommand>,
-    target: &Path,
-) -> anyhow::Result<bool> {
-    if crate::library::ingest::track_id_for_path(engine, target)
-        .await?
-        .is_some()
+    row: &TrackRow,
+    format: ConvertFormat,
+    prefs: &ConvertPrefs,
+    cancel: &mut BatchCancel,
+    emit_progress: &(dyn Fn(Option<u8>) + Sync),
+) -> anyhow::Result<Converted> {
+    let source = PathBuf::from(&row.file_path);
+    let target = target_path(&source, format, prefs);
+    if prefs.overwrite
+        && crate::library::ingest::track_id_for_path(engine, &target)
+            .await?
+            .is_some()
     {
-        return Ok(false);
+        anyhow::bail!(
+            "{} is a library track's file; turn off Overwrite or choose another output folder",
+            target.display()
+        );
     }
-    let id = crate::library::ingest::probe_and_add(engine, target).await?;
-    // Send rather than await: the ingest worker owns the copy, and a
-    // full library root must not stall the rest of the batch.
-    ingest_tx
-        .send(IngestCommand::CopyForTrack {
-            track_id: id,
-            source_path: target.to_path_buf(),
-        })
-        .map_err(|_| anyhow::anyhow!("ingest worker has exited"))?;
-    Ok(true)
+    convert_one(row, &target, format, prefs, cancel, emit_progress).await
 }
 
 async fn convert_one(
     row: &TrackRow,
+    target: &Path,
     format: ConvertFormat,
     prefs: &ConvertPrefs,
     cancel: &mut BatchCancel,
@@ -602,18 +677,74 @@ async fn convert_one(
     if !source.exists() {
         anyhow::bail!("source file is missing: {}", source.display());
     }
-    let target = target_path(&source, format, prefs);
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     // Converting a file onto itself would truncate the input mid-read.
-    if path::same_file(&source, &target) {
+    if path::same_file(&source, target) {
         anyhow::bail!("source and destination are the same file");
     }
+    let temp = temp_path(target);
 
-    let args = build_args(&source, &target, format, prefs, cover_policy(&source));
+    let mut policy = cover_policy(&source);
+    let outcome = loop {
+        let args = build_args(&source, &temp, format, prefs, policy);
+        match run_ffmpeg(&args, row.duration_ms, cancel, emit_progress).await? {
+            // The picture, not the audio, is what the muxer choked on
+            // more often than not — one more go without it.
+            Encode::Failed(detail) if policy != CoverPolicy::Drop => {
+                log::warn!(
+                    "convert of {} failed with cover art ({detail}); retrying without it",
+                    source.display()
+                );
+                policy = CoverPolicy::Drop;
+            }
+            other => break other,
+        }
+    };
+
+    match outcome {
+        Encode::Cancelled => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            Ok(Converted::Cancelled)
+        }
+        Encode::Failed(detail) => {
+            let _ = tokio::fs::remove_file(&temp).await;
+            anyhow::bail!("ffmpeg failed: {detail}");
+        }
+        Encode::Done => {
+            // The name was free when the batch started; a file that has
+            // appeared there since is not ours to replace.
+            if !prefs.overwrite && target.exists() {
+                let _ = tokio::fs::remove_file(&temp).await;
+                anyhow::bail!(
+                    "{} appeared while converting; not overwriting it",
+                    target.display()
+                );
+            }
+            tokio::fs::rename(&temp, target).await?;
+            Ok(Converted::File(target.to_path_buf()))
+        }
+    }
+}
+
+enum Encode {
+    Done,
+    Cancelled,
+    /// ffmpeg exited non-zero; the payload is its most useful stderr line.
+    Failed(String),
+}
+
+/// Run one ffmpeg invocation to completion, or until cancelled. Only a
+/// failure to launch is an `Err`; ffmpeg's own failures are data.
+async fn run_ffmpeg(
+    args: &[OsString],
+    duration_ms: i64,
+    cancel: &mut BatchCancel,
+    emit_progress: &(dyn Fn(Option<u8>) + Sync),
+) -> anyhow::Result<Encode> {
     let mut child = tokio::process::Command::new("ffmpeg")
-        .args(&args)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -641,35 +772,22 @@ async fn convert_one(
         buf
     });
 
-    let progress_cancelled =
-        pump_progress(&mut child, row.duration_ms, cancel, emit_progress).await;
-
-    if progress_cancelled {
+    if pump_progress(&mut child, duration_ms, cancel, emit_progress).await {
         // SIGKILL rather than a graceful stop: ffmpeg's own -t/q flow
         // would finalise the file, and a half-length track that looks
         // complete is worse than no file at all.
         let _ = child.kill().await;
         let _ = stderr_task.await;
-        let _ = tokio::fs::remove_file(&target).await;
-        return Ok(Converted::Cancelled);
+        return Ok(Encode::Cancelled);
     }
 
     let status = child.wait().await?;
     let stderr = stderr_task.await.unwrap_or_default();
-
-    if !status.success() {
-        // A failed encode can still have created a truncated file;
-        // leaving it behind would look like a successful conversion.
-        let _ = tokio::fs::remove_file(&target).await;
-        let detail = stderr
-            .trim()
-            .lines()
-            .last()
-            .unwrap_or("no output")
-            .to_string();
-        anyhow::bail!("ffmpeg failed: {detail}");
+    if status.success() {
+        return Ok(Encode::Done);
     }
-    Ok(Converted::File(target))
+    log::debug!("ffmpeg exited {status}: {stderr}");
+    Ok(Encode::Failed(summarize_stderr(&stderr)))
 }
 
 /// Read ffmpeg's `-progress` stream, emitting a percentage as it moves.
@@ -760,6 +878,9 @@ mod tests {
         assert_eq!(pair(&args, "-compression_level").as_deref(), Some("12"));
         // Progress must be machine-readable or the UI has nothing to show.
         assert_eq!(pair(&args, "-progress").as_deref(), Some("pipe:1"));
+        // The scratch file has no telling extension, so the muxer is
+        // named outright.
+        assert_eq!(pair(&args, "-f").as_deref(), Some("flac"));
         // No resample, no requantise unless asked.
         assert!(!args.iter().any(|a| a == "-ar"));
         assert!(!args.iter().any(|a| a == "-sample_fmt"));
@@ -788,6 +909,29 @@ mod tests {
         assert_eq!(pair(&args, "-c:a").as_deref(), Some("alac"));
         assert!(!args.iter().any(|a| a == "-b:a"));
         assert_eq!(pair(&args, "-movflags").as_deref(), Some("+faststart"));
+        assert_eq!(pair(&args, "-f").as_deref(), Some("ipod"));
+    }
+
+    #[test]
+    fn stderr_summary_skips_decoder_noise_and_the_generic_tail() {
+        let aac = "[aac @ 0x1] Specified sample rate 192000 is not supported by the aac encoder\n\
+                   [out#0/ipod @ 0x2] Nothing was written into output file, because at least one of its streams received no packets.\n";
+        assert!(summarize_stderr(aac).contains("192000 is not supported"));
+
+        let gif = "[flac @ 0x1] GIF image support is not implemented.\n\
+                   [out#0/flac @ 0x2] Could not write header (incorrect codec parameters ?): Not yet implemented\n\
+                   [af#0:0 @ 0x3] Error sending frames to consumers: Not yet implemented\n\
+                   [af#0:0 @ 0x3] Task finished with error code: -1 (Not yet implemented)\n\
+                   [af#0:0 @ 0x3] Terminating thread with return code -1\n\
+                   [out#0/flac @ 0x2] Nothing was written into output file\n";
+        assert!(summarize_stderr(gif).contains("GIF image support"));
+
+        // A decoder complaint about the cover precedes the real cause.
+        let noisy = "[mjpeg @ 0x1] No JPEG data found in image\n\
+                     [AVFormatContext @ 0x2] Unable to choose an output format for 'x.part'\n";
+        assert!(summarize_stderr(noisy).contains("Unable to choose"));
+
+        assert_eq!(summarize_stderr(""), "no output");
     }
 
     #[test]
@@ -933,6 +1077,69 @@ mod tests {
     ];
 
     #[test]
+    fn aac_sample_rates_snap_to_the_mpeg4_table_but_alac_keeps_any_rate() {
+        let aac = |hz: u32| ConvertPrefs {
+            m4a: M4aPrefs {
+                codec: M4aCodec::Aac,
+                sample_rate: Some(hz),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // 192 kHz and 176.4 kHz are offered for ALAC; AAC tops out at 96.
+        assert_eq!(aac(192_000).sanitized().m4a.sample_rate, Some(96_000));
+        assert_eq!(aac(176_400).sanitized().m4a.sample_rate, Some(96_000));
+        assert_eq!(aac(44_100).sanitized().m4a.sample_rate, Some(44_100));
+        assert_eq!(aac(50_000).sanitized().m4a.sample_rate, Some(48_000));
+
+        let alac = ConvertPrefs {
+            m4a: M4aPrefs {
+                sample_rate: Some(192_000),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(alac.sanitized().m4a.sample_rate, Some(192_000));
+    }
+
+    #[test]
+    fn dropping_the_cover_maps_no_video_at_all() {
+        let args: Vec<String> = build_args(
+            Path::new("/music/in.mp3"),
+            Path::new("/music/.out.flac.part"),
+            ConvertFormat::Flac,
+            &ConvertPrefs::default(),
+            CoverPolicy::Drop,
+        )
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+        assert!(args.iter().any(|a| a == "-vn"));
+        assert!(!args.iter().any(|a| a == "0:v?"));
+        assert!(!args.iter().any(|a| a == "-c:v"));
+    }
+
+    #[test]
+    fn temp_path_is_a_hidden_non_audio_name_beside_the_target() {
+        assert_eq!(
+            temp_path(Path::new("/music/Song.flac")),
+            Path::new("/music/.Song.flac.part")
+        );
+    }
+
+    #[test]
+    fn a_prefs_blob_missing_newer_sub_fields_still_loads() {
+        let old = serde_json::json!({
+            "flac": { "compression_level": 8 },
+            "m4a": { "codec": "aac" }
+        });
+        let prefs: ConvertPrefs = serde_json::from_value(old).unwrap();
+        assert_eq!(prefs.flac.compression_level, 8);
+        assert_eq!(prefs.m4a.codec, M4aCodec::Aac);
+        assert_eq!(prefs.m4a.bitrate_kbps, 256);
+    }
+
+    #[test]
     fn sanitize_clamps_out_of_range_webview_input() {
         let p = ConvertPrefs {
             flac: FlacPrefs {
@@ -1041,10 +1248,13 @@ mod tests {
         let seen = std::sync::Mutex::new(Vec::<Option<u8>>::new());
         let mut cancel = live_cancel();
 
+        let prefs = ConvertPrefs::default();
+        let target = target_path(&src, ConvertFormat::Flac, &prefs);
         let out = convert_one(
             &row_for(&src, 1000),
+            &target,
             ConvertFormat::Flac,
-            &ConvertPrefs::default(),
+            &prefs,
             &mut cancel,
             &|p| seen.lock().unwrap().push(p),
         )
@@ -1075,10 +1285,12 @@ mod tests {
 
         let mut cancel = live_cancel();
         for format in [ConvertFormat::Flac, ConvertFormat::M4a] {
+            let prefs = ConvertPrefs::default();
             let out = convert_one(
                 &row_for(&src, 1000),
+                &target_path(&src, format, &prefs),
                 format,
-                &ConvertPrefs::default(),
+                &prefs,
                 &mut cancel,
                 &|_| {},
             )
@@ -1089,6 +1301,122 @@ mod tests {
             };
             assert!(path.exists(), "{} was not written", path.display());
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_overwrite_leaves_the_existing_file_untouched() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        // A "source" ffmpeg cannot open, and a healthy file already at
+        // the destination the overwrite would replace.
+        let bad = dir.path().join("bad.mp3");
+        std::fs::write(&bad, b"this is not audio").unwrap();
+        let existing = dir.path().join("bad.flac");
+        std::fs::write(&existing, b"precious").unwrap();
+
+        let prefs = ConvertPrefs {
+            overwrite: true,
+            ..Default::default()
+        };
+        let target = target_path(&bad, ConvertFormat::Flac, &prefs);
+        assert_eq!(target, existing);
+        let mut cancel = live_cancel();
+        let err = convert_one(
+            &row_for(&bad, 1000),
+            &target,
+            ConvertFormat::Flac,
+            &prefs,
+            &mut cancel,
+            &|_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("ffmpeg failed"), "{err}");
+        assert_eq!(std::fs::read(&existing).unwrap(), b"precious");
+        assert!(!temp_path(&target).exists(), "scratch file left behind");
+    }
+
+    #[tokio::test]
+    async fn a_cover_whose_tag_lies_about_its_format_is_dropped_not_fatal() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        // Declared JPEG, actually GIF bytes: lofty says Copy, and both
+        // Copy and PNG re-encode make ffmpeg fail on the picture.
+        attach_pictures(&src, &[MimeType::Jpeg]);
+        assert_eq!(cover_policy(&src), CoverPolicy::Copy);
+
+        let prefs = ConvertPrefs::default();
+        let target = target_path(&src, ConvertFormat::M4a, &prefs);
+        let mut cancel = live_cancel();
+        let out = convert_one(
+            &row_for(&src, 1000),
+            &target,
+            ConvertFormat::M4a,
+            &prefs,
+            &mut cancel,
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        assert!(matches!(out, Converted::File(_)));
+        assert!(target.exists());
+    }
+
+    #[tokio::test]
+    async fn overwrite_refuses_a_destination_the_library_references() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        // Another library track already lives at the name the overwrite
+        // would produce.
+        let other = dir.path().join("tone.m4a");
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(&src)
+            .args(["-c:a", "alac"])
+            .arg(&other)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "could not build the other track");
+        let before = std::fs::metadata(&other).unwrap().len();
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = crate::db::client::Db::open(tmp_db.path()).await.unwrap();
+        crate::library::ingest::probe_and_add(&db.engine, &other)
+            .await
+            .unwrap();
+
+        let prefs = ConvertPrefs {
+            overwrite: true,
+            ..Default::default()
+        };
+        let mut cancel = live_cancel();
+        let err = convert_prepared(
+            &db.engine,
+            &row_for(&src, 1000),
+            ConvertFormat::M4a,
+            &prefs,
+            &mut cancel,
+            &|_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("library track's file"), "{err}");
+        assert_eq!(
+            std::fs::metadata(&other).unwrap().len(),
+            before,
+            "the other track's file was touched"
+        );
     }
 
     #[tokio::test]
@@ -1104,10 +1432,13 @@ mod tests {
         // kill path rather than racing a one-second encode.
         let mut cancel = BatchCancel::new(watch::channel(1u64).1, 1);
 
+        let prefs = ConvertPrefs::default();
+        let target = target_path(&src, ConvertFormat::Flac, &prefs);
         let out = convert_one(
             &row_for(&src, 1000),
+            &target,
             ConvertFormat::Flac,
-            &ConvertPrefs::default(),
+            &prefs,
             &mut cancel,
             &|_| {},
         )
@@ -1116,8 +1447,7 @@ mod tests {
 
         assert!(matches!(out, Converted::Cancelled));
         assert!(
-            !dir.path().join("tone (2).flac").exists()
-                && !dir.path().join("tone.flac.part").exists(),
+            !target.exists() && !temp_path(&target).exists(),
             "a cancelled encode left a file behind"
         );
     }
@@ -1127,6 +1457,7 @@ mod tests {
         let mut cancel = live_cancel();
         let err = convert_one(
             &row_for(std::path::Path::new("/nonexistent/x.wav"), 1000),
+            Path::new("/nonexistent/x.flac"),
             ConvertFormat::Flac,
             &ConvertPrefs::default(),
             &mut cancel,

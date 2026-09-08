@@ -65,6 +65,8 @@ pub async fn convert_tracks(
     if args.track_ids.is_empty() {
         return Err("no tracks selected".into());
     }
+    // Before the await: the UI may show Cancel as soon as it has asked.
+    let generation = state.fs.reserve_convert_generation();
     let prefs = match args.prefs {
         Some(p) => p.sanitized(),
         None => preferences::get::<ConvertPrefs>(&state.db.engine, KEY_CONVERT_PREFS)
@@ -73,5 +75,7 @@ pub async fn convert_tracks(
             .unwrap_or_default()
             .sanitized(),
     };
-    state.fs.convert_tracks(args.track_ids, args.format, prefs)
+    state
+        .fs
+        .convert_tracks(args.track_ids, args.format, prefs, generation)
 }

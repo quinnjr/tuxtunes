@@ -55,13 +55,6 @@ export interface ConvertFailure {
   error: string;
 }
 
-/**
- * Where a batch is in its life. `running` covers the gap between
- * `convert()` resolving and the worker's first progress event, which a
- * "progress but no completion yet" check would miss.
- */
-export type ConvertPhase = 'idle' | 'running' | 'done';
-
 /** Highest-quality defaults, matching the Rust `Default` impls. */
 export const DEFAULT_CONVERT_PREFS: ConvertPrefs = {
   flac: { compression_level: 12, sample_rate: null, bit_depth: null },
@@ -78,6 +71,19 @@ export const DEFAULT_CONVERT_PREFS: ConvertPrefs = {
   add_to_library: true,
 };
 
+/** Tally of two batches from one run. `format` becomes "a+b" if they differ. */
+export function mergeComplete(a: ConvertComplete, b: ConvertComplete): ConvertComplete {
+  const formats = new Set([...a.format.split('+'), b.format]);
+  return {
+    total: a.total + b.total,
+    converted: a.converted + b.converted,
+    failed: a.failed + b.failed,
+    addedToLibrary: a.addedToLibrary + b.addedToLibrary,
+    cancelled: a.cancelled || b.cancelled,
+    format: [...formats].join('+'),
+  };
+}
+
 @Injectable({ providedIn: 'root' })
 export class ConvertService implements OnDestroy {
   private readonly tauri = inject(TauriService);
@@ -87,14 +93,21 @@ export class ConvertService implements OnDestroy {
   readonly prefs = signal<ConvertPrefs>(DEFAULT_CONVERT_PREFS);
   readonly progress = signal<ConvertProgress | null>(null);
   readonly lastComplete = signal<ConvertComplete | null>(null);
-  /** Per-file failures from the batch in flight; cleared on each start. */
+  /** Per-file failures from the current run; cleared when a run starts. */
   readonly failures = signal<ConvertFailure[]>([]);
-  readonly phase = signal<ConvertPhase>('idle');
+  /**
+   * Batches the backend has accepted and not yet reported complete. The
+   * worker emits exactly one complete event per batch, cancelled or not,
+   * so this counts down to idle on its own. Counting rather than a flag
+   * covers the gap before a batch's first progress event and a second
+   * batch queued behind the first.
+   */
+  readonly pending = signal(0);
 
   readonly running = computed(this.#computeRunning.bind(this));
 
   #computeRunning(): boolean {
-    return this.phase() === 'running';
+    return this.pending() > 0;
   }
 
   private readonly unlisteners: UnlistenFn[] = [];
@@ -110,12 +123,9 @@ export class ConvertService implements OnDestroy {
 
   private async subscribe(): Promise<void> {
     this.unlisteners.push(
-      // A progress event also marks the phase: a batch queued behind
-      // one that just completed starts here, not through `convert()`.
-      await this.tauri.listen<ConvertProgress>('fs:convert-progress', (raw) => {
-        this.progress.set(raw);
-        this.phase.set('running');
-      }),
+      await this.tauri.listen<ConvertProgress>('fs:convert-progress', (raw) =>
+        this.progress.set(raw),
+      ),
       await this.tauri.listen<{
         total: number;
         converted: number;
@@ -124,15 +134,18 @@ export class ConvertService implements OnDestroy {
         cancelled: boolean;
         format: string;
       }>('fs:convert-complete', (raw) => {
-        this.lastComplete.set({
+        const done: ConvertComplete = {
           total: raw.total,
           converted: raw.converted,
           failed: raw.failed,
           addedToLibrary: raw.added_to_library,
           cancelled: raw.cancelled,
           format: raw.format,
-        });
-        this.phase.set('done');
+        };
+        // Batches queued back to back are one run to the user: the
+        // summary is their sum, not whichever finished last.
+        this.lastComplete.update((prev) => (prev ? mergeComplete(prev, done) : done));
+        this.pending.update((n) => Math.max(0, n - 1));
       }),
       await this.tauri.listen<{ track_id: number; title: string; error: string }>(
         'fs:convert-failed',
@@ -163,15 +176,22 @@ export class ConvertService implements OnDestroy {
     this.prefs.set(await this.tauri.invoke<ConvertPrefs>('set_convert_prefs', { prefs }));
   }
 
-  /** Queue a batch using the saved prefs. Resolves once it is queued. */
+  /**
+   * Queue a batch using the saved prefs. Resolves once it is queued.
+   * State changes only after the backend has accepted the batch: a
+   * rejected queue (bad prefs blob, worker gone) must not leave a
+   * phantom "running" with a Cancel button and no event to clear it.
+   */
   async convert(trackIds: number[], format: ConvertFormat): Promise<void> {
-    this.progress.set(null);
-    this.lastComplete.set(null);
-    this.failures.set([]);
-    this.phase.set('running');
     await this.tauri.invoke<void>('convert_tracks', {
       args: { track_ids: trackIds, format },
     });
+    if (this.pending() === 0) {
+      this.progress.set(null);
+      this.lastComplete.set(null);
+      this.failures.set([]);
+    }
+    this.pending.update((n) => n + 1);
   }
 
   /**

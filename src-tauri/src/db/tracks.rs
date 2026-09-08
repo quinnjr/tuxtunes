@@ -158,6 +158,21 @@ pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksEr
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
+/// Like [`get`], but a missing row is `Ok(None)` rather than an error,
+/// so callers can tell "gone" from "the database is unwell".
+pub async fn get_opt(engine: &SqliteRawEngine, id: i64) -> Result<Option<TrackRow>, TracksError> {
+    let sql = format!("SELECT {TRACK_ROW_COLUMNS} FROM tracks WHERE id = ?");
+    let params = vec![prax_query::filter::FilterValue::Int(id)];
+    let json_row = match engine.raw_sql_optional(&sql, &params).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(TracksError::Query(anyhow::Error::from(e))),
+    };
+    serde_json::from_value(json_row.into_json())
+        .map(Some)
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+}
+
 async fn bump_counter(
     engine: &SqliteRawEngine,
     id: i64,

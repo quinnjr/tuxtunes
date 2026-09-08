@@ -52,11 +52,15 @@ library that keeps working after iTunes is gone.
   FLAC compression level, sample rate, bit depth; ALAC/AAC, VBR quality or CBR
   bitrate. The defaults are lossless and source-native — nothing is resampled or
   requantised unless you ask.
-- Tags and cover art are carried across; the original file is left untouched.
-  Converted files are added to the library as their own tracks by default (switch
-  it off in the same tab).
+- Tags and cover art are carried across (a cover the containers cannot hold is
+  re-encoded to PNG, a broken one dropped rather than failing the track); the
+  original file is left untouched. Converted files are added to the library as
+  their own tracks, in place, by default (switch it off in the same tab).
+- Output is written to a hidden scratch file and renamed into place only when the
+  encoder finishes, so a failure, a cancel, or a crash never leaves a half-written
+  track behind, and **Overwrite** refuses to replace a file the library references.
 - Live per-file percentage in the status bar, and a **Cancel** that stops the
-  batch and cleans up the half-written file. Requires `ffmpeg` on PATH.
+  batch. Requires `ffmpeg` on PATH.
 
 **Smart playlists**
 

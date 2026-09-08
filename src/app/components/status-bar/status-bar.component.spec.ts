@@ -79,7 +79,8 @@ describe('StatusBarComponent', () => {
   });
 
   it('shows convert progress with its percentage, outranking the sync label', async () => {
-    const { fixture, stub, sync, el } = await setup();
+    const { fixture, stub, sync, el, convert } = await setup();
+    await convert.convert([1, 2, 3, 4], 'flac');
     sync.progress.set({
       sourceId: 1,
       phase: 'decoding',
@@ -94,7 +95,8 @@ describe('StatusBarComponent', () => {
   });
 
   it('omits the percentage when the track duration is unknown', async () => {
-    const { fixture, stub, el } = await setup();
+    const { fixture, stub, el, convert } = await setup();
+    await convert.convert([1], 'flac');
     stub.emit('fs:convert-progress', { current: 0, total: 1, title: 'Song', percent: null });
     fixture.detectChanges();
     expect(el.textContent).toContain('Converting 1 of 1');
@@ -102,8 +104,9 @@ describe('StatusBarComponent', () => {
   });
 
   it('offers a cancel button only while a conversion is running', async () => {
-    const { fixture, el, stub } = await setup();
+    const { fixture, el, stub, convert } = await setup();
     expect(el.querySelector('button')).toBeNull();
+    await convert.convert([1, 2, 3], 'flac');
 
     stub.emit('fs:convert-progress', { current: 0, total: 3, title: 'Song', percent: 10 });
     fixture.detectChanges();

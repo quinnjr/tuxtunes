@@ -17,11 +17,10 @@ pub struct FsCoordinator {
 impl FsCoordinator {
     pub fn new<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
         let ingest = IngestWorker::spawn(Arc::clone(&engine), app.clone());
-        let ingest_tx = ingest.tx.clone();
         Self {
             ingest,
             organize: OrganizeWorker::spawn(Arc::clone(&engine), app.clone()),
-            convert: ConvertWorker::spawn(engine, ingest_tx, app),
+            convert: ConvertWorker::spawn(engine, app),
         }
     }
 
@@ -60,6 +59,13 @@ impl FsCoordinator {
         self.convert.cancel_all()
     }
 
+    /// Number a batch before anything about it is awaited, so a Cancel
+    /// the user clicks while its preferences are still loading covers
+    /// it. A generation that is reserved but never queued is harmless.
+    pub fn reserve_convert_generation(&self) -> u64 {
+        self.convert.next_generation()
+    }
+
     /// Queue a transcode batch. Progress arrives on
     /// `fs:convert-progress`, per-file errors on `fs:convert-failed`,
     /// and the tally on `fs:convert-complete`.
@@ -68,6 +74,7 @@ impl FsCoordinator {
         track_ids: Vec<i64>,
         format: ConvertFormat,
         prefs: ConvertPrefs,
+        generation: u64,
     ) -> Result<(), String> {
         self.convert
             .tx
@@ -75,7 +82,7 @@ impl FsCoordinator {
                 track_ids,
                 format,
                 prefs,
-                generation: self.convert.next_generation(),
+                generation,
             })
             .map_err(|_| "convert worker has exited".to_string())
     }

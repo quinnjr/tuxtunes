@@ -1,6 +1,10 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
-import { ConvertPrefs, DEFAULT_CONVERT_PREFS } from '../../services/convert.service';
+import {
+  ConvertPrefs,
+  ConvertService,
+  DEFAULT_CONVERT_PREFS,
+} from '../../services/convert.service';
 import { appProviders, defaultInvoke, tauriStub } from '../../test-helpers';
 import { SettingsConvertComponent } from './settings-convert.component';
 
@@ -97,6 +101,7 @@ describe('SettingsConvertComponent', () => {
     const el = fixture.nativeElement as HTMLElement;
     expect(el.textContent).not.toContain('Converting');
 
+    await TestBed.inject(ConvertService).convert([1, 2], 'flac');
     stub.emit('fs:convert-progress', { current: 0, total: 2, title: 'Song', percent: 40 });
     fixture.detectChanges();
     expect(el.textContent).toContain('Converting 1 of 2: Song · 40%');
