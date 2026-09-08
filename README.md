@@ -243,6 +243,13 @@ is gated behind `TUXTUNES_NO_XDG_OPEN`.
 Pre-1.0 and under active development on the `develop` branch. The core loop — import,
 browse, play, organize, sync — works; expect rough edges elsewhere.
 
+## Wanted: an icon
+
+The current icon (`src-tauri/icons/icon.svg`) is a placeholder that leans far too hard on
+Apple Music's look. TuxTunes needs an original one. If you'd like to draw it: open a PR or
+an issue with an SVG that is your own work, licensed openly (CC0, CC BY, MIT, or the
+project's dual Apache-2.0/MIT), and still readable at 256×256. Credit goes in Credits below.
+
 ## License
 
 Licensed under either of

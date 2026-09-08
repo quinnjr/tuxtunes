@@ -30,6 +30,15 @@ pub fn run() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
 
     tauri::Builder::default()
+        // Must be registered first, per the plugin's contract: a second
+        // launch has to be intercepted before the rest of the app sets
+        // itself up. One process owns the SQLite library and the mpv
+        // instance; a second would fight the first over both, and the
+        // user would be looking at two windows disagreeing about what
+        // is playing.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            integration::tray::reveal_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
