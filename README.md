@@ -248,7 +248,7 @@ browse, play, organize, sync — works; expect rough edges elsewhere.
 The current icon (`src-tauri/icons/icon.svg`) is a placeholder that leans far too hard on
 Apple Music's look. TuxTunes needs an original one. If you'd like to draw it: open a PR or
 an issue with an SVG that is your own work, licensed openly (CC0, CC BY, MIT, or the
-project's dual Apache-2.0/MIT), and still readable at 32×32. Credit goes in Credits below.
+project's dual Apache-2.0/MIT), and still readable at 256×256. Credit goes in Credits below.
 
 ## License
 
