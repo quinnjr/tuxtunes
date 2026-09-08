@@ -1,5 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
+import { ConvertService } from '../../services/convert.service';
 import { LibraryService } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
 import { SyncService } from '../../services/sync.service';
@@ -17,7 +18,9 @@ function setup() {
   return {
     fixture,
     el: fixture.nativeElement as HTMLElement,
+    convert: TestBed.inject(ConvertService),
     library: TestBed.inject(LibraryService),
+    stub,
     sync: TestBed.inject(SyncService),
     ui: TestBed.inject(UiService),
   };
@@ -69,6 +72,53 @@ describe('StatusBarComponent', () => {
     sync.lastError.set({ sourceId: 1, error: 'x' });
     fixture.detectChanges();
     expect(el.textContent).toContain('Sync error');
+  });
+
+  it('shows convert progress with its percentage, outranking the sync label', () => {
+    const { fixture, convert, sync, el } = setup();
+    sync.progress.set({
+      sourceId: 1,
+      phase: 'decoding',
+      current: 0,
+      total: 0,
+      message: '',
+    });
+    convert.progress.set({ current: 1, total: 4, trackId: 2, title: 'Song', percent: 63 });
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Converting 2 of 4 · 63%');
+    expect(el.textContent).not.toContain('Syncing');
+  });
+
+  it('omits the percentage when the track duration is unknown', () => {
+    const { fixture, convert, el } = setup();
+    convert.progress.set({ current: 0, total: 1, trackId: 2, title: 'Song', percent: null });
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Converting 1 of 1');
+    expect(el.textContent).not.toContain('%');
+  });
+
+  it('offers a cancel button only while a conversion is running', () => {
+    const { fixture, convert, el, stub } = setup();
+    expect(el.querySelector('button')).toBeNull();
+
+    convert.progress.set({ current: 0, total: 3, trackId: 1, title: 'Song', percent: 10 });
+    fixture.detectChanges();
+    const button = el.querySelector('button');
+    expect(button?.textContent).toContain('Cancel');
+
+    button?.click();
+    expect(stub.invoke).toHaveBeenCalledWith('cancel_convert');
+
+    convert.lastComplete.set({
+      total: 3,
+      converted: 1,
+      failed: 0,
+      addedToLibrary: 0,
+      cancelled: true,
+      format: 'flac',
+    });
+    fixture.detectChanges();
+    expect(el.querySelector('button')).toBeNull();
   });
 
   it('shows the last playback error as an alert, taking precedence over the sync label', () => {

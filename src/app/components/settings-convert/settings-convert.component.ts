@@ -111,6 +111,10 @@ export class SettingsConvertComponent implements OnInit {
     if (typeof picked === 'string') void this.patch({ output_dir: picked });
   }
 
+  protected async cancel(): Promise<void> {
+    await this.ui.guard(this.convert.cancel());
+  }
+
   protected resetDefaults(): void {
     void this.patch(DEFAULT_CONVERT_PREFS);
   }
@@ -119,7 +123,9 @@ export class SettingsConvertComponent implements OnInit {
     const c = this.convert.lastComplete();
     if (!c) return '';
     const parts = [`${c.converted} converted to ${c.format.toUpperCase()}`];
+    if (c.addedToLibrary > 0) parts.push(`${c.addedToLibrary} added to the library`);
     if (c.failed > 0) parts.push(`${c.failed} failed`);
+    if (c.cancelled) parts.push(`cancelled with ${c.total - c.converted - c.failed} left`);
     return parts.join(', ');
   }
 }

@@ -183,9 +183,18 @@
       />
       <span>Overwrite an existing file instead of writing a numbered copy</span>
     </label>
+    <label class="flex cursor-pointer items-center gap-3 text-body text-text-primary">
+      <input
+        type="checkbox"
+        class="accent-accent"
+        [checked]="draft().add_to_library"
+        (change)="patch({ add_to_library: $any($event.target).checked })"
+      />
+      <span>Add each converted file to the library</span>
+    </label>
     <p class="text-footnote text-text-muted">
-      Converted files are written as new files; the library keeps playing the originals. Add the
-      results with File → Add to Library if you want them in the library too.
+      Conversion writes new files and never touches the originals — the tracks you converted keep
+      playing the files they already had.
     </p>
   </div>
 
@@ -196,7 +205,13 @@
     @if (convert.running() && convert.progress(); as p) {
       <span class="text-footnote text-text-muted">
         Converting {{ p.current + 1 }} / {{ p.total }}: {{ p.title }}
+        @if (p.percent !== null) {
+          <span class="tnum"> — {{ p.percent }}%</span>
+        }
       </span>
+      <button type="button" (click)="cancel()" class="mac-btn h-8 px-3 bg-bg-elevated">
+        Cancel
+      </button>
     } @else if (summary(); as s) {
       <span class="text-footnote text-text-secondary">{{ s }}</span>
     }

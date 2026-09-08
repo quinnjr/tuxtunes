@@ -16,10 +16,12 @@ pub struct FsCoordinator {
 
 impl FsCoordinator {
     pub fn new<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
+        let ingest = IngestWorker::spawn(Arc::clone(&engine), app.clone());
+        let ingest_tx = ingest.tx.clone();
         Self {
-            ingest: IngestWorker::spawn(Arc::clone(&engine), app.clone()),
+            ingest,
             organize: OrganizeWorker::spawn(Arc::clone(&engine), app.clone()),
-            convert: ConvertWorker::spawn(engine, app),
+            convert: ConvertWorker::spawn(engine, ingest_tx, app),
         }
     }
 
@@ -52,6 +54,16 @@ impl FsCoordinator {
             .map_err(|_| "ingest worker has exited".to_string())
     }
 
+    /// Stop the batch in flight and drop everything queued behind it.
+    /// The flag stays set until the next [`Self::convert_tracks`], so a
+    /// cancel cannot leak into a batch the user asks for afterwards.
+    pub fn cancel_convert(&self) -> Result<(), String> {
+        self.convert
+            .cancel
+            .send(true)
+            .map_err(|_| "convert worker has exited".to_string())
+    }
+
     /// Queue a transcode batch. Progress arrives on
     /// `fs:convert-progress`, per-file errors on `fs:convert-failed`,
     /// and the tally on `fs:convert-complete`.
@@ -61,6 +73,12 @@ impl FsCoordinator {
         format: ConvertFormat,
         prefs: ConvertPrefs,
     ) -> Result<(), String> {
+        // Clear any cancel left over from a previous batch before this
+        // one is visible to the worker.
+        self.convert
+            .cancel
+            .send(false)
+            .map_err(|_| "convert worker has exited".to_string())?;
         self.convert
             .tx
             .send(ConvertCommand::Tracks {

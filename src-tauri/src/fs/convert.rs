@@ -15,14 +15,17 @@ use crate::fs::events::{
     ConvertComplete, ConvertFailed, ConvertProgress, CONVERT_COMPLETE, CONVERT_FAILED,
     CONVERT_PROGRESS,
 };
+use crate::fs::ingest::IngestCommand;
 use crate::fs::path;
 use prax_sqlite::raw::SqliteRawEngine;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Runtime};
-use tokio::sync::mpsc;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::{mpsc, watch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -103,7 +106,7 @@ impl Default for M4aPrefs {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConvertPrefs {
     #[serde(default)]
     pub flac: FlacPrefs,
@@ -115,6 +118,26 @@ pub struct ConvertPrefs {
     /// Replace an existing output instead of writing ` (2)` beside it.
     #[serde(default)]
     pub overwrite: bool,
+    /// Add each converted file to the library as its own track, the
+    /// same way a picked file is added (probe, insert, copy-on-add).
+    #[serde(default = "default_true")]
+    pub add_to_library: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ConvertPrefs {
+    fn default() -> Self {
+        Self {
+            flac: FlacPrefs::default(),
+            m4a: M4aPrefs::default(),
+            output_dir: None,
+            overwrite: false,
+            add_to_library: true,
+        }
+    }
 }
 
 impl ConvertPrefs {
@@ -170,6 +193,11 @@ pub fn build_args(
         "-nostdin".into(),
         "-loglevel".into(),
         "error".into(),
+        // Machine-readable progress on stdout instead of the ANSI
+        // status line, so `pump_progress` can report a percentage.
+        "-nostats".into(),
+        "-progress".into(),
+        "pipe:1".into(),
         // The target name is already collision-resolved unless the user
         // asked to overwrite, so -y is safe and -n turns a race into a
         // clean failure rather than an interactive prompt.
@@ -292,6 +320,10 @@ pub enum ConvertCommand {
 
 pub struct ConvertWorker {
     pub tx: mpsc::UnboundedSender<ConvertCommand>,
+    /// Cancellation flag for the batch in flight *and* everything still
+    /// queued behind it. Cleared by the coordinator when a new batch is
+    /// requested, so a cancel never leaks into the user's next request.
+    pub cancel: watch::Sender<bool>,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -299,8 +331,17 @@ impl ConvertWorker {
     /// One worker, one queue: transcoding is CPU-bound, and running a
     /// batch per right-click in parallel would only make every batch
     /// slower while starving playback of cores.
-    pub fn spawn<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
+    ///
+    /// `ingest_tx` is the ingest worker's own queue rather than the
+    /// whole [`crate::fs::coordinator::FsCoordinator`], which would be a
+    /// cycle — the coordinator owns this worker.
+    pub fn spawn<R: Runtime>(
+        engine: Arc<SqliteRawEngine>,
+        ingest_tx: mpsc::UnboundedSender<IngestCommand>,
+        app: AppHandle<R>,
+    ) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<ConvertCommand>();
+        let (cancel, cancel_rx) = watch::channel(false);
         let task = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
@@ -309,44 +350,90 @@ impl ConvertWorker {
                         format,
                         prefs,
                     } => {
-                        convert_batch(&engine, &app, &track_ids, format, &prefs).await;
+                        convert_batch(
+                            &engine,
+                            &ingest_tx,
+                            &app,
+                            &track_ids,
+                            format,
+                            &prefs,
+                            cancel_rx.clone(),
+                        )
+                        .await;
                     }
                 }
             }
         });
-        Self { tx, _task: task }
+        Self {
+            tx,
+            cancel,
+            _task: task,
+        }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn convert_batch<R: Runtime>(
     engine: &SqliteRawEngine,
+    ingest_tx: &mpsc::UnboundedSender<IngestCommand>,
     app: &AppHandle<R>,
     track_ids: &[i64],
     format: ConvertFormat,
     prefs: &ConvertPrefs,
+    mut cancel: watch::Receiver<bool>,
 ) {
     let total = track_ids.len() as u64;
     let mut converted = 0u64;
     let mut failed = 0u64;
+    let mut added = 0u64;
+    let mut cancelled = false;
 
     for (idx, &track_id) in track_ids.iter().enumerate() {
+        if *cancel.borrow() {
+            cancelled = true;
+            break;
+        }
         let row: Option<TrackRow> = tracks::get(engine, track_id).await.ok();
         let name = row
             .as_ref()
             .map(|r| r.title.clone())
             .unwrap_or_else(|| format!("track {track_id}"));
-        let _ = app.emit(
-            CONVERT_PROGRESS,
-            ConvertProgress {
-                current: idx as u64,
-                total,
-                track_id,
-                title: name.clone(),
-            },
-        );
+        let emit_progress = |percent: Option<u8>| {
+            let _ = app.emit(
+                CONVERT_PROGRESS,
+                ConvertProgress {
+                    current: idx as u64,
+                    total,
+                    track_id,
+                    title: name.clone(),
+                    percent,
+                },
+            );
+        };
+        emit_progress(Some(0));
 
-        match convert_one(row, format, prefs).await {
-            Ok(_) => converted += 1,
+        match convert_one(row, format, prefs, &mut cancel, &emit_progress).await {
+            Ok(Converted::Cancelled) => {
+                cancelled = true;
+                break;
+            }
+            Ok(Converted::File(target)) => {
+                converted += 1;
+                emit_progress(Some(100));
+                if prefs.add_to_library {
+                    match add_converted_to_library(engine, ingest_tx, &target).await {
+                        Ok(true) => added += 1,
+                        // The file is on disk and correct either way, so
+                        // a library-add problem is worth a log line but
+                        // not a failed conversion.
+                        Ok(false) => {}
+                        Err(e) => log::warn!(
+                            "converted {} but could not add it to the library: {e}",
+                            target.display()
+                        ),
+                    }
+                }
+            }
             Err(e) => {
                 failed += 1;
                 log::warn!("convert failed for track {track_id}: {e}");
@@ -354,7 +441,7 @@ async fn convert_batch<R: Runtime>(
                     CONVERT_FAILED,
                     ConvertFailed {
                         track_id,
-                        title: name,
+                        title: name.clone(),
                         error: e.to_string(),
                     },
                 );
@@ -368,16 +455,55 @@ async fn convert_batch<R: Runtime>(
             total,
             converted,
             failed,
+            added_to_library: added,
+            cancelled,
             format: format.extension().to_string(),
         },
     );
+}
+
+/// Outcome of one file: either it was written, or the user cancelled
+/// partway through. A cancel is not an error — nothing went wrong.
+#[derive(Debug)]
+enum Converted {
+    File(PathBuf),
+    Cancelled,
+}
+
+/// Probe the converted file and insert it as its own track, then queue
+/// copy-on-add exactly as the file picker does. Returns whether a row
+/// was actually added — a file the library already references (a
+/// re-convert onto the same overwritten path) is left alone.
+async fn add_converted_to_library(
+    engine: &SqliteRawEngine,
+    ingest_tx: &mpsc::UnboundedSender<IngestCommand>,
+    target: &Path,
+) -> anyhow::Result<bool> {
+    if crate::library::ingest::track_id_for_path(engine, target)
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    let id = crate::library::ingest::probe_and_add(engine, target).await?;
+    // Send rather than await: the ingest worker owns the copy, and a
+    // full library root must not stall the rest of the batch.
+    ingest_tx
+        .send(IngestCommand::CopyForTrack {
+            track_id: id,
+            source_path: target.to_path_buf(),
+        })
+        .map_err(|_| anyhow::anyhow!("ingest worker has exited"))?;
+    Ok(true)
 }
 
 async fn convert_one(
     row: Option<TrackRow>,
     format: ConvertFormat,
     prefs: &ConvertPrefs,
-) -> anyhow::Result<PathBuf> {
+    cancel: &mut watch::Receiver<bool>,
+    emit_progress: &(dyn Fn(Option<u8>) + Sync),
+) -> anyhow::Result<Converted> {
     let row = row.ok_or_else(|| anyhow::anyhow!("track is no longer in the library"))?;
     let source = PathBuf::from(&row.file_path);
     if !source.exists() {
@@ -393,10 +519,12 @@ async fn convert_one(
     }
 
     let args = build_args(&source, &target, format, prefs);
-    let output = tokio::process::Command::new("ffmpeg")
+    let mut child = tokio::process::Command::new("ffmpeg")
         .args(&args)
-        .output()
-        .await
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => {
                 anyhow::anyhow!("ffmpeg was not found on PATH — install it to convert files")
@@ -404,11 +532,42 @@ async fn convert_one(
             _ => anyhow::Error::from(e),
         })?;
 
-    if !output.status.success() {
+    // stderr is drained on its own task: `-loglevel error` normally
+    // says nothing, but a chatty failure that filled the pipe while we
+    // are blocked reading stdout would deadlock the child.
+    let stderr = child.stderr.take();
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = String::new();
+        if let Some(stderr) = stderr {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                buf.push_str(&line);
+                buf.push('\n');
+            }
+        }
+        buf
+    });
+
+    let progress_cancelled =
+        pump_progress(&mut child, row.duration_ms, cancel, emit_progress).await;
+
+    if progress_cancelled {
+        // SIGKILL rather than a graceful stop: ffmpeg's own -t/q flow
+        // would finalise the file, and a half-length track that looks
+        // complete is worse than no file at all.
+        let _ = child.kill().await;
+        let _ = stderr_task.await;
+        let _ = tokio::fs::remove_file(&target).await;
+        return Ok(Converted::Cancelled);
+    }
+
+    let status = child.wait().await?;
+    let stderr = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
         // A failed encode can still have created a truncated file;
         // leaving it behind would look like a successful conversion.
         let _ = tokio::fs::remove_file(&target).await;
-        let stderr = String::from_utf8_lossy(&output.stderr);
         let detail = stderr
             .trim()
             .lines()
@@ -417,7 +576,65 @@ async fn convert_one(
             .to_string();
         anyhow::bail!("ffmpeg failed: {detail}");
     }
-    Ok(target)
+    Ok(Converted::File(target))
+}
+
+/// Read ffmpeg's `-progress` stream, emitting a percentage as it moves.
+/// Returns true if the user cancelled before the stream ended.
+async fn pump_progress(
+    child: &mut tokio::process::Child,
+    duration_ms: i64,
+    cancel: &mut watch::Receiver<bool>,
+    emit_progress: &(dyn Fn(Option<u8>) + Sync),
+) -> bool {
+    let Some(stdout) = child.stdout.take() else {
+        return false;
+    };
+    let mut lines = BufReader::new(stdout).lines();
+    let mut last_percent: Option<u8> = None;
+
+    loop {
+        tokio::select! {
+            // Biased so a cancel that arrives together with a progress
+            // line is acted on immediately rather than one line later.
+            biased;
+            _ = cancel.wait_for(|c| *c) => return true,
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => {
+                    let Some(percent) = percent_from_progress_line(&line, duration_ms) else {
+                        continue;
+                    };
+                    // One emit per whole percent: a 3-minute track
+                    // produces a progress block every few hundred ms,
+                    // and the UI cannot show more than this anyway.
+                    if last_percent != Some(percent) {
+                        last_percent = Some(percent);
+                        emit_progress(Some(percent));
+                    }
+                }
+                // EOF or an unreadable pipe: the child is done talking,
+                // let the caller reap its exit status.
+                _ => return false,
+            },
+        }
+    }
+}
+
+/// Percentage for one `key=value` line of ffmpeg's `-progress` output,
+/// or `None` for every line that is not a usable time marker.
+///
+/// A track whose duration the library does not know (`0`) yields no
+/// percentage at all rather than a made-up one.
+pub fn percent_from_progress_line(line: &str, duration_ms: i64) -> Option<u8> {
+    if duration_ms <= 0 {
+        return None;
+    }
+    let us: i64 = line.strip_prefix("out_time_us=")?.trim().parse().ok()?;
+    if us < 0 {
+        return None;
+    }
+    let percent = (us / 1000).saturating_mul(100) / duration_ms;
+    Some(percent.clamp(0, 100) as u8)
 }
 
 #[cfg(test)]
@@ -447,6 +664,8 @@ mod tests {
         let args = args_of(ConvertFormat::Flac, &ConvertPrefs::default());
         assert_eq!(pair(&args, "-c:a").as_deref(), Some("flac"));
         assert_eq!(pair(&args, "-compression_level").as_deref(), Some("12"));
+        // Progress must be machine-readable or the UI has nothing to show.
+        assert_eq!(pair(&args, "-progress").as_deref(), Some("pipe:1"));
         // No resample, no requantise unless asked.
         assert!(!args.iter().any(|a| a == "-ar"));
         assert!(!args.iter().any(|a| a == "-sample_fmt"));
@@ -530,6 +749,131 @@ mod tests {
         assert_eq!(p.m4a.bitrate_kbps, 512);
     }
 
+    /// Build a one-second test tone with ffmpeg itself, so the
+    /// ffmpeg-gated tests do not need a fixture in the repo.
+    fn make_source(dir: &std::path::Path) -> PathBuf {
+        let src = dir.join("tone.flac");
+        let ok = std::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+            ])
+            .arg("sine=frequency=440:duration=1:sample_rate=44100")
+            .arg(&src)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "could not build the test tone");
+        src
+    }
+
+    fn row_for(path: &std::path::Path, duration_ms: i64) -> TrackRow {
+        TrackRow {
+            id: 1,
+            title: "Tone".into(),
+            artist: None,
+            album: None,
+            album_artist: None,
+            genre: None,
+            year: None,
+            track_number: None,
+            disc_number: None,
+            duration_ms,
+            file_path: path.display().to_string(),
+            file_hash: None,
+            sample_rate: None,
+            bit_depth: None,
+            kind: None,
+            play_count: 0,
+            skip_count: 0,
+            import_status: "ok".into(),
+            artwork_path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn encodes_a_real_file_and_reports_progress() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        let seen = std::sync::Mutex::new(Vec::<Option<u8>>::new());
+        let (_tx, mut cancel) = watch::channel(false);
+
+        let out = convert_one(
+            Some(row_for(&src, 1000)),
+            ConvertFormat::Flac,
+            &ConvertPrefs::default(),
+            &mut cancel,
+            &|p| seen.lock().unwrap().push(p),
+        )
+        .await
+        .unwrap();
+
+        let Converted::File(path) = out else {
+            panic!("expected a converted file");
+        };
+        assert!(path.exists(), "{} was not written", path.display());
+        let seen = seen.into_inner().unwrap();
+        assert!(
+            seen.iter().any(|p| matches!(p, Some(n) if *n > 0)),
+            "no non-zero progress was reported: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_encode_leaves_no_partial_file() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        // Already cancelled when the encode starts: the select is
+        // biased on the cancel arm, so this deterministically takes the
+        // kill path rather than racing a one-second encode.
+        let (_tx, mut cancel) = watch::channel(true);
+
+        let out = convert_one(
+            Some(row_for(&src, 1000)),
+            ConvertFormat::Flac,
+            &ConvertPrefs::default(),
+            &mut cancel,
+            &|_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(out, Converted::Cancelled));
+        assert!(
+            !dir.path().join("tone (2).flac").exists()
+                && !dir.path().join("tone.flac.part").exists(),
+            "a cancelled encode left a file behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_source_fails_before_spawning_ffmpeg() {
+        let (_tx, mut cancel) = watch::channel(false);
+        let err = convert_one(
+            Some(row_for(std::path::Path::new("/nonexistent/x.wav"), 1000)),
+            ConvertFormat::Flac,
+            &ConvertPrefs::default(),
+            &mut cancel,
+            &|_| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("source file is missing"), "{err}");
+    }
+
     #[test]
     fn overwrite_off_never_reuses_an_existing_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -547,6 +891,54 @@ mod tests {
         };
         let t = target_path(&source, ConvertFormat::Flac, &overwriting);
         assert_eq!(t.file_name().unwrap(), "song.flac");
+    }
+
+    #[test]
+    fn percent_needs_a_time_line_and_a_known_duration() {
+        // 30s in, out of a 60s track.
+        assert_eq!(
+            percent_from_progress_line("out_time_us=30000000", 60_000),
+            Some(50)
+        );
+        assert_eq!(percent_from_progress_line("out_time_us=0", 60_000), Some(0));
+        // ffmpeg's last block can overshoot the container's duration.
+        assert_eq!(
+            percent_from_progress_line("out_time_us=61000000", 60_000),
+            Some(100)
+        );
+        // Every other line of the progress block is not a time marker.
+        assert_eq!(percent_from_progress_line("speed= 555x", 60_000), None);
+        assert_eq!(percent_from_progress_line("out_time_us=N/A", 60_000), None);
+        // A track the library has no duration for gets no percentage
+        // rather than a fabricated one.
+        assert_eq!(percent_from_progress_line("out_time_us=30000000", 0), None);
+    }
+
+    #[test]
+    fn percent_does_not_overflow_on_a_long_track() {
+        // (us/1000) * 100 overflows an i64 only past ~29 million hours,
+        // but a saturating multiply keeps a corrupt value from wrapping
+        // negative and clamping to 0%.
+        assert_eq!(
+            percent_from_progress_line(&format!("out_time_us={}", i64::MAX), 60_000),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn prefs_stored_before_add_to_library_existed_default_to_adding() {
+        let old = serde_json::json!({
+            "flac": { "compression_level": 8, "sample_rate": null, "bit_depth": null },
+            "m4a": {
+                "codec": "alac", "bit_depth": null, "sample_rate": null,
+                "vbr": false, "vbr_quality": 2.0, "bitrate_kbps": 256
+            },
+            "output_dir": null,
+            "overwrite": false
+        });
+        let prefs: ConvertPrefs = serde_json::from_value(old).unwrap();
+        assert!(prefs.add_to_library);
+        assert_eq!(prefs.flac.compression_level, 8);
     }
 
     #[test]

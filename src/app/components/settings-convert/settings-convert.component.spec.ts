@@ -6,6 +6,8 @@ import { SettingsConvertComponent } from './settings-convert.component';
 
 interface ConvertInternals {
   draft: { (): ConvertPrefs };
+  cancel(): Promise<void>;
+  patch(change: Partial<ConvertPrefs>): Promise<void>;
   patchFlac(change: Partial<ConvertPrefs['flac']>): void;
   patchM4a(change: Partial<ConvertPrefs['m4a']>): void;
   toNullableNumber(raw: string): number | null;
@@ -74,6 +76,32 @@ describe('SettingsConvertComponent', () => {
     await settle();
 
     expect(cmp.draft().m4a.bitrate_kbps).toBe(512);
+  });
+
+  it('the add-to-library toggle is on by default and persists when switched off', async () => {
+    let lastSaved: unknown;
+    const { cmp } = setup(async (cmd, args) => {
+      if (cmd === 'set_convert_prefs') lastSaved = args?.['prefs'];
+      return defaultInvoke(cmd);
+    });
+    await settle();
+    expect(cmp.draft().add_to_library).toBe(true);
+
+    cmp.patch({ add_to_library: false });
+    await settle();
+
+    expect((lastSaved as ConvertPrefs).add_to_library).toBe(false);
+  });
+
+  it('cancel() reaches the backend', async () => {
+    const calls: string[] = [];
+    const { cmp } = setup(async (cmd) => {
+      calls.push(cmd);
+      return defaultInvoke(cmd);
+    });
+    await settle();
+    await cmp.cancel();
+    expect(calls).toContain('cancel_convert');
   });
 
   it('maps the empty select option to "same as source"', () => {

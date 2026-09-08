@@ -181,6 +181,7 @@ export class LibraryService implements OnDestroy {
   #unlistenExternal: (() => void) | null = null;
   #unlistenIngest: (() => void) | null = null;
   #unlistenConsolidate: (() => void) | null = null;
+  #unlistenConvert: (() => void) | null = null;
   /** Ingest results seen this session, newest last. See #applyIngestResult. */
   readonly #ingested = new Map<number, IngestCompleteRaw>();
 
@@ -223,6 +224,19 @@ export class LibraryService implements OnDestroy {
       .then((off) => {
         this.#unlistenIngest = off;
       });
+
+    // A conversion batch can insert brand-new track rows. Unlike an
+    // ingest result there is nothing to patch — the rows are not in the
+    // list at all — so this one needs a real reload.
+    void this.tauri
+      .listen<{ added_to_library: number }>('fs:convert-complete', (e) => {
+        if (e.added_to_library > 0) {
+          void Promise.allSettled([this.refreshTracks(), this.refreshStats()]);
+        }
+      })
+      .then((off) => {
+        this.#unlistenConvert = off;
+      });
   }
 
   ngOnDestroy(): void {
@@ -232,6 +246,8 @@ export class LibraryService implements OnDestroy {
     this.#unlistenIngest = null;
     this.#unlistenConsolidate?.();
     this.#unlistenConsolidate = null;
+    this.#unlistenConvert?.();
+    this.#unlistenConvert = null;
   }
 
   /**

@@ -39,13 +39,71 @@ describe('ConvertService', () => {
     await ready;
     expect(svc.running()).toBe(false);
 
-    emit('fs:convert-progress', { current: 0, total: 2, track_id: 7, title: 'Song' });
+    emit('fs:convert-progress', {
+      current: 0,
+      total: 2,
+      track_id: 7,
+      title: 'Song',
+      percent: 40,
+    });
     expect(svc.running()).toBe(true);
-    expect(svc.progress()).toEqual({ current: 0, total: 2, trackId: 7, title: 'Song' });
+    expect(svc.progress()).toEqual({
+      current: 0,
+      total: 2,
+      trackId: 7,
+      title: 'Song',
+      percent: 40,
+    });
 
-    emit('fs:convert-complete', { total: 2, converted: 2, failed: 0, format: 'flac' });
+    emit('fs:convert-complete', {
+      total: 2,
+      converted: 2,
+      failed: 0,
+      added_to_library: 2,
+      cancelled: false,
+      format: 'flac',
+    });
     expect(svc.running()).toBe(false);
     expect(svc.lastComplete()?.converted).toBe(2);
+    expect(svc.lastComplete()?.addedToLibrary).toBe(2);
+    expect(svc.lastComplete()?.cancelled).toBe(false);
+  });
+
+  it('carries a null percent through for a track of unknown duration', async () => {
+    const { svc, ready, emit } = build();
+    await ready;
+    emit('fs:convert-progress', {
+      current: 0,
+      total: 1,
+      track_id: 1,
+      title: 'Song',
+      percent: null,
+    });
+    expect(svc.progress()?.percent).toBeNull();
+  });
+
+  it('cancel() invokes the backend and leaves the complete event to clear the run', async () => {
+    const { svc, invoke, ready, emit } = build();
+    await ready;
+    emit('fs:convert-progress', { current: 0, total: 9, track_id: 1, title: 'A', percent: 5 });
+
+    await svc.cancel();
+
+    expect(invoke).toHaveBeenCalledWith('cancel_convert');
+    // Still running: only the worker's own complete event ends a batch,
+    // so a cancel that loses a race cannot leave the UI lying.
+    expect(svc.running()).toBe(true);
+
+    emit('fs:convert-complete', {
+      total: 9,
+      converted: 1,
+      failed: 0,
+      added_to_library: 1,
+      cancelled: true,
+      format: 'flac',
+    });
+    expect(svc.running()).toBe(false);
+    expect(svc.lastComplete()?.cancelled).toBe(true);
   });
 
   it('collects per-file failures', async () => {
@@ -58,7 +116,14 @@ describe('ConvertService', () => {
   it('convert() clears the previous batch and passes snake_case args', async () => {
     const { svc, invoke, ready, emit } = build();
     await ready;
-    emit('fs:convert-complete', { total: 1, converted: 1, failed: 0, format: 'm4a' });
+    emit('fs:convert-complete', {
+      total: 1,
+      converted: 1,
+      failed: 0,
+      added_to_library: 0,
+      cancelled: false,
+      format: 'm4a',
+    });
     emit('fs:convert-failed', { track_id: 1, title: 'Old', error: 'x' });
 
     await svc.convert([4, 5], 'flac');

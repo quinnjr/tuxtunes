@@ -29,6 +29,7 @@ export interface ConvertPrefs {
   m4a: M4aPrefs;
   output_dir: string | null;
   overwrite: boolean;
+  add_to_library: boolean;
 }
 
 export interface ConvertProgress {
@@ -36,12 +37,16 @@ export interface ConvertProgress {
   total: number;
   trackId: number;
   title: string;
+  /** Progress through the current file, or null when its duration is unknown. */
+  percent: number | null;
 }
 
 export interface ConvertComplete {
   total: number;
   converted: number;
   failed: number;
+  addedToLibrary: number;
+  cancelled: boolean;
   format: string;
 }
 
@@ -64,6 +69,7 @@ export const DEFAULT_CONVERT_PREFS: ConvertPrefs = {
   },
   output_dir: null,
   overwrite: false,
+  add_to_library: true,
 };
 
 @Injectable({ providedIn: 'root' })
@@ -102,16 +108,32 @@ export class ConvertService implements OnDestroy {
         total: number;
         track_id: number;
         title: string;
+        percent: number | null;
       }>('fs:convert-progress', (raw) =>
         this.progress.set({
           current: raw.current,
           total: raw.total,
           trackId: raw.track_id,
           title: raw.title,
+          percent: raw.percent,
         }),
       ),
-      await this.tauri.listen<ConvertComplete>('fs:convert-complete', (raw) =>
-        this.lastComplete.set(raw),
+      await this.tauri.listen<{
+        total: number;
+        converted: number;
+        failed: number;
+        added_to_library: number;
+        cancelled: boolean;
+        format: string;
+      }>('fs:convert-complete', (raw) =>
+        this.lastComplete.set({
+          total: raw.total,
+          converted: raw.converted,
+          failed: raw.failed,
+          addedToLibrary: raw.added_to_library,
+          cancelled: raw.cancelled,
+          format: raw.format,
+        }),
       ),
       await this.tauri.listen<{ track_id: number; title: string; error: string }>(
         'fs:convert-failed',
@@ -150,5 +172,14 @@ export class ConvertService implements OnDestroy {
     await this.tauri.invoke<void>('convert_tracks', {
       args: { track_ids: trackIds, format },
     });
+  }
+
+  /**
+   * Stop the batch in flight. The worker emits its own complete event
+   * with `cancelled: true`, so the running state clears from there
+   * rather than being guessed at here.
+   */
+  async cancel(): Promise<void> {
+    await this.tauri.invoke<void>('cancel_convert');
   }
 }

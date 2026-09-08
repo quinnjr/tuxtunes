@@ -49,6 +49,12 @@ pub struct ConvertTracksArgs {
     pub prefs: Option<ConvertPrefs>,
 }
 
+/// Stop the conversion batch in flight, and anything queued behind it.
+#[tauri::command]
+pub async fn cancel_convert(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.fs.cancel_convert()
+}
+
 /// Queue a conversion batch. Returns as soon as it is queued; the
 /// outcome arrives on the `fs:convert-*` events.
 #[tauri::command]

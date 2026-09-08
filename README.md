@@ -53,7 +53,10 @@ library that keeps working after iTunes is gone.
   bitrate. The defaults are lossless and source-native — nothing is resampled or
   requantised unless you ask.
 - Tags and cover art are carried across; the original file is left untouched.
-  Requires `ffmpeg` on PATH.
+  Converted files are added to the library as their own tracks by default (switch
+  it off in the same tab).
+- Live per-file percentage in the status bar, and a **Cancel** that stops the
+  batch and cleans up the half-written file. Requires `ffmpeg` on PATH.
 
 **Smart playlists**
 

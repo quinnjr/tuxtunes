@@ -131,6 +131,10 @@ pub struct ConvertProgress {
     pub total: u64,
     pub track_id: i64,
     pub title: String,
+    /// How far through this file the encoder is, or `None` when the
+    /// library does not know the track's duration and there is nothing
+    /// to measure against.
+    pub percent: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,6 +142,10 @@ pub struct ConvertComplete {
     pub total: u64,
     pub converted: u64,
     pub failed: u64,
+    /// Converted files that were also added to the library as tracks.
+    pub added_to_library: u64,
+    /// Whether the batch stopped early because the user cancelled.
+    pub cancelled: bool,
     /// Target extension, so a UI showing several batches can label them.
     pub format: String,
 }

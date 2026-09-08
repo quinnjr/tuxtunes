@@ -75,6 +75,7 @@ pub fn run() {
             commands::convert::get_convert_prefs,
             commands::convert::set_convert_prefs,
             commands::convert::convert_tracks,
+            commands::convert::cancel_convert,
             commands::window::host_os,
             commands::window::quit_app,
             commands::sync::list_sync_sources,

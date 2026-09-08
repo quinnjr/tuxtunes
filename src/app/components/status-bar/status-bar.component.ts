@@ -18,6 +18,10 @@ export class StatusBarComponent {
   protected readonly ui = inject(UiService);
 
   protected readonly summary = computed(this.#computeSummary.bind(this));
+
+  protected async cancelConvert(): Promise<void> {
+    await this.ui.guard(this.convert.cancel());
+  }
   protected readonly activityLabel = computed(this.#computeActivityLabel.bind(this));
 
   #computeSummary() {
@@ -38,7 +42,8 @@ export class StatusBarComponent {
     // for it.
     const convert = this.convert.progress();
     if (convert && this.convert.running()) {
-      return `Converting ${convert.current + 1} of ${convert.total}…`;
+      const pct = convert.percent === null ? '' : ` · ${convert.percent}%`;
+      return `Converting ${convert.current + 1} of ${convert.total}${pct}`;
     }
     const state = this.sync.runState();
     if (state === 'running') return 'Syncing…';
