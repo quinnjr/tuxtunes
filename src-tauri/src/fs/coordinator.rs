@@ -54,14 +54,10 @@ impl FsCoordinator {
             .map_err(|_| "ingest worker has exited".to_string())
     }
 
-    /// Stop the batch in flight and drop everything queued behind it.
-    /// The flag stays set until the next [`Self::convert_tracks`], so a
-    /// cancel cannot leak into a batch the user asks for afterwards.
+    /// Stop the batch in flight and drop everything queued behind it. A
+    /// batch requested after this call is unaffected.
     pub fn cancel_convert(&self) -> Result<(), String> {
-        self.convert
-            .cancel
-            .send(true)
-            .map_err(|_| "convert worker has exited".to_string())
+        self.convert.cancel_all()
     }
 
     /// Queue a transcode batch. Progress arrives on
@@ -73,18 +69,13 @@ impl FsCoordinator {
         format: ConvertFormat,
         prefs: ConvertPrefs,
     ) -> Result<(), String> {
-        // Clear any cancel left over from a previous batch before this
-        // one is visible to the worker.
-        self.convert
-            .cancel
-            .send(false)
-            .map_err(|_| "convert worker has exited".to_string())?;
         self.convert
             .tx
             .send(ConvertCommand::Tracks {
                 track_ids,
                 format,
                 prefs,
+                generation: self.convert.next_generation(),
             })
             .map_err(|_| "convert worker has exited".to_string())
     }

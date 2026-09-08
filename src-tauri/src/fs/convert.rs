@@ -17,11 +17,14 @@ use crate::fs::events::{
 };
 use crate::fs::ingest::IngestCommand;
 use crate::fs::path;
+use lofty::file::TaggedFileExt;
+use lofty::picture::MimeType;
 use prax_sqlite::raw::SqliteRawEngine;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -187,6 +190,41 @@ fn push_bit_depth(args: &mut Vec<OsString>, depth: u8, planar: bool) {
     }
 }
 
+/// How the source's embedded pictures travel to the output.
+///
+/// ffmpeg exposes cover art as a video stream, and `-c:v copy` only
+/// works when the destination container speaks that picture codec.
+/// FLAC and MP4 both take JPEG and PNG; a GIF cover (common on old
+/// MP3 rips) makes either muxer refuse to write its header and the
+/// whole conversion fails. Re-encoding to PNG is lossless and accepted
+/// by both, so it is the fallback for everything that is not already
+/// known-safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverPolicy {
+    Copy,
+    ReencodePng,
+}
+
+/// Decide [`CoverPolicy`] from the source's tags. lofty reads the same
+/// APIC / PICTURE blocks ffmpeg turns into attached pictures; if it
+/// cannot read the file at all, re-encoding is the choice that cannot
+/// make things worse.
+pub fn cover_policy(source: &Path) -> CoverPolicy {
+    let Ok(tagged) = lofty::read_from_path(source) else {
+        return CoverPolicy::ReencodePng;
+    };
+    let all_safe = tagged
+        .tags()
+        .iter()
+        .flat_map(|t| t.pictures())
+        .all(|p| matches!(p.mime_type(), Some(MimeType::Jpeg | MimeType::Png)));
+    if all_safe {
+        CoverPolicy::Copy
+    } else {
+        CoverPolicy::ReencodePng
+    }
+}
+
 /// The full ffmpeg argv for one file, minus the program name.
 ///
 /// Kept pure and separate from the spawn so the encoder settings are
@@ -196,6 +234,7 @@ pub fn build_args(
     target: &Path,
     format: ConvertFormat,
     prefs: &ConvertPrefs,
+    cover: CoverPolicy,
 ) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![
         "-hide_banner".into(),
@@ -220,7 +259,11 @@ pub fn build_args(
         "-map".into(),
         "0:v?".into(),
         "-c:v".into(),
-        "copy".into(),
+        match cover {
+            CoverPolicy::Copy => "copy",
+            CoverPolicy::ReencodePng => "png",
+        }
+        .into(),
         "-map_metadata".into(),
         "0".into(),
     ];
@@ -315,15 +358,23 @@ pub enum ConvertCommand {
         track_ids: Vec<i64>,
         format: ConvertFormat,
         prefs: ConvertPrefs,
+        /// From [`ConvertWorker::next_generation`]; see
+        /// [`ConvertWorker::cancel`] for what it buys.
+        generation: u64,
     },
 }
 
 pub struct ConvertWorker {
     pub tx: mpsc::UnboundedSender<ConvertCommand>,
-    /// Cancellation flag for the batch in flight *and* everything still
-    /// queued behind it. Cleared by the coordinator when a new batch is
-    /// requested, so a cancel never leaks into the user's next request.
-    pub cancel: watch::Sender<bool>,
+    /// Highest batch generation that has been cancelled. A batch is
+    /// cancelled when its own generation is `<=` this, which covers the
+    /// batch in flight and everything queued behind it at the time of
+    /// the cancel — but not a batch requested afterwards, since that one
+    /// is numbered above the cancel. A plain shared flag would need a
+    /// reset on the next request, and a cancel-then-reconvert click pair
+    /// could reset it before the worker had looked.
+    pub cancel: watch::Sender<u64>,
+    last_generation: AtomicU64,
     _task: tokio::task::JoinHandle<()>,
 }
 
@@ -341,7 +392,7 @@ impl ConvertWorker {
         app: AppHandle<R>,
     ) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<ConvertCommand>();
-        let (cancel, cancel_rx) = watch::channel(false);
+        let (cancel, cancel_rx) = watch::channel(0u64);
         let task = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
                 match cmd {
@@ -349,6 +400,7 @@ impl ConvertWorker {
                         track_ids,
                         format,
                         prefs,
+                        generation,
                     } => {
                         convert_batch(
                             &engine,
@@ -357,7 +409,7 @@ impl ConvertWorker {
                             &track_ids,
                             format,
                             &prefs,
-                            cancel_rx.clone(),
+                            BatchCancel::new(cancel_rx.clone(), generation),
                         )
                         .await;
                     }
@@ -367,8 +419,48 @@ impl ConvertWorker {
         Self {
             tx,
             cancel,
+            last_generation: AtomicU64::new(0),
             _task: task,
         }
+    }
+
+    /// Number for the next batch. Generations start at 1 so a fresh
+    /// worker (cancelled generation 0) has nothing cancelled.
+    pub fn next_generation(&self) -> u64 {
+        self.last_generation.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Cancel the batch in flight and everything queued so far.
+    pub fn cancel_all(&self) -> Result<(), String> {
+        self.cancel
+            .send(self.last_generation.load(Ordering::Relaxed))
+            .map_err(|_| "convert worker has exited".to_string())
+    }
+}
+
+/// One batch's view of the cancel channel: "has my generation been
+/// cancelled yet", which is what the encode loop actually asks.
+pub struct BatchCancel {
+    rx: watch::Receiver<u64>,
+    generation: u64,
+}
+
+impl BatchCancel {
+    pub fn new(rx: watch::Receiver<u64>, generation: u64) -> Self {
+        Self { rx, generation }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        *self.rx.borrow() >= self.generation
+    }
+
+    /// Resolves once this batch is cancelled; pends forever otherwise
+    /// (the caller races it against the encoder's progress stream).
+    async fn cancelled(&mut self) {
+        let generation = self.generation;
+        // A closed channel means the worker is being torn down, which
+        // is as good a reason to stop as a cancel.
+        let _ = self.rx.wait_for(|c| *c >= generation).await;
     }
 }
 
@@ -379,7 +471,7 @@ async fn convert_batch<R: Runtime>(
     track_ids: &[i64],
     format: ConvertFormat,
     prefs: &ConvertPrefs,
-    mut cancel: watch::Receiver<bool>,
+    mut cancel: BatchCancel,
 ) {
     let total = track_ids.len() as u64;
     let mut converted = 0u64;
@@ -388,7 +480,7 @@ async fn convert_batch<R: Runtime>(
     let mut cancelled = false;
 
     for (idx, &track_id) in track_ids.iter().enumerate() {
-        if *cancel.borrow() {
+        if cancel.is_cancelled() {
             cancelled = true;
             break;
         }
@@ -503,7 +595,7 @@ async fn convert_one(
     row: &TrackRow,
     format: ConvertFormat,
     prefs: &ConvertPrefs,
-    cancel: &mut watch::Receiver<bool>,
+    cancel: &mut BatchCancel,
     emit_progress: &(dyn Fn(Option<u8>) + Sync),
 ) -> anyhow::Result<Converted> {
     let source = PathBuf::from(&row.file_path);
@@ -519,7 +611,7 @@ async fn convert_one(
         anyhow::bail!("source and destination are the same file");
     }
 
-    let args = build_args(&source, &target, format, prefs);
+    let args = build_args(&source, &target, format, prefs, cover_policy(&source));
     let mut child = tokio::process::Command::new("ffmpeg")
         .args(&args)
         .stdin(Stdio::null())
@@ -585,7 +677,7 @@ async fn convert_one(
 async fn pump_progress(
     child: &mut tokio::process::Child,
     duration_ms: i64,
-    cancel: &mut watch::Receiver<bool>,
+    cancel: &mut BatchCancel,
     emit_progress: &(dyn Fn(Option<u8>) + Sync),
 ) -> bool {
     let Some(stdout) = child.stdout.take() else {
@@ -599,7 +691,7 @@ async fn pump_progress(
             // Biased so a cancel that arrives together with a progress
             // line is acted on immediately rather than one line later.
             biased;
-            _ = cancel.wait_for(|c| *c) => return true,
+            _ = cancel.cancelled() => return true,
             line = lines.next_line() => match line {
                 Ok(Some(line)) => {
                     let Some(percent) = percent_from_progress_line(&line, duration_ms) else {
@@ -648,6 +740,7 @@ mod tests {
             Path::new("/music/out.x"),
             format,
             prefs,
+            CoverPolicy::Copy,
         )
         .into_iter()
         .map(|a| a.to_string_lossy().into_owned())
@@ -762,6 +855,84 @@ mod tests {
     }
 
     #[test]
+    fn cover_is_copied_or_re_encoded_to_png_per_policy() {
+        let copied = args_of(ConvertFormat::Flac, &ConvertPrefs::default());
+        assert_eq!(pair(&copied, "-c:v").as_deref(), Some("copy"));
+
+        let reencoded: Vec<String> = build_args(
+            Path::new("/music/in.mp3"),
+            Path::new("/music/out.m4a"),
+            ConvertFormat::M4a,
+            &ConvertPrefs::default(),
+            CoverPolicy::ReencodePng,
+        )
+        .into_iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+        assert_eq!(pair(&reencoded, "-c:v").as_deref(), Some("png"));
+        // The picture map stays optional either way: a source with no
+        // art must not fail on a missing stream.
+        assert_eq!(pair(&reencoded, "-map").as_deref(), Some("0:a:0"));
+        assert!(reencoded.iter().any(|a| a == "0:v?"));
+    }
+
+    #[test]
+    fn an_unreadable_source_gets_the_safe_cover_policy() {
+        assert_eq!(
+            cover_policy(Path::new("/nonexistent/x.mp3")),
+            CoverPolicy::ReencodePng
+        );
+    }
+
+    #[test]
+    fn gif_covers_are_re_encoded_and_jpeg_png_are_copied() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        assert_eq!(cover_policy(&src), CoverPolicy::Copy);
+
+        attach_pictures(&src, &[MimeType::Png]);
+        assert_eq!(cover_policy(&src), CoverPolicy::Copy);
+
+        // One bad picture among good ones is enough: `-map 0:v?` takes
+        // them all, and the muxer rejects the header for any one it
+        // cannot write.
+        attach_pictures(&src, &[MimeType::Jpeg, MimeType::Gif]);
+        assert_eq!(cover_policy(&src), CoverPolicy::ReencodePng);
+    }
+
+    /// Replace the pictures on `path` with one per MIME type. The payload
+    /// is always the tiny GIF: lofty stores the MIME it is told, and the
+    /// end-to-end test needs bytes ffmpeg can actually decode.
+    fn attach_pictures(path: &Path, mimes: &[MimeType]) {
+        use lofty::config::WriteOptions;
+        use lofty::picture::{Picture, PictureType};
+        use lofty::tag::{Tag, TagExt, TagType};
+
+        let mut tag = Tag::new(TagType::VorbisComments);
+        for mime in mimes {
+            tag.push_picture(Picture::new_unchecked(
+                PictureType::CoverFront,
+                Some(mime.clone()),
+                None,
+                TINY_GIF.to_vec(),
+            ));
+        }
+        tag.save_to_path(path, WriteOptions::default()).unwrap();
+    }
+
+    /// A 1×1 GIF89a. ffmpeg decodes it, which is all the end-to-end
+    /// test below needs from it.
+    const TINY_GIF: &[u8] = &[
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xff, 0xff, 0xff, 0x21, 0xf9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3b,
+    ];
+
+    #[test]
     fn sanitize_clamps_out_of_range_webview_input() {
         let p = ConvertPrefs {
             flac: FlacPrefs {
@@ -809,6 +980,32 @@ mod tests {
         src
     }
 
+    /// A batch (generation 1) that nobody has cancelled. The sender is
+    /// leaked on purpose: dropping it would read as a teardown-cancel.
+    fn live_cancel() -> BatchCancel {
+        let (tx, rx) = watch::channel(0u64);
+        std::mem::forget(tx);
+        BatchCancel::new(rx, 1)
+    }
+
+    #[test]
+    fn a_cancel_covers_earlier_generations_but_not_later_ones() {
+        let (tx, rx) = watch::channel(0u64);
+        let first = BatchCancel::new(rx.clone(), 1);
+        let second = BatchCancel::new(rx.clone(), 2);
+        assert!(!first.is_cancelled());
+
+        // Cancel issued while generation 2 is the newest batch: both
+        // the in-flight and the queued batch stop...
+        tx.send(2).unwrap();
+        assert!(first.is_cancelled());
+        assert!(second.is_cancelled());
+        // ...but a batch requested after the cancel is untouched, with
+        // no reset needed.
+        let third = BatchCancel::new(rx, 3);
+        assert!(!third.is_cancelled());
+    }
+
     fn row_for(path: &std::path::Path, duration_ms: i64) -> TrackRow {
         TrackRow {
             id: 1,
@@ -842,7 +1039,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let src = make_source(dir.path());
         let seen = std::sync::Mutex::new(Vec::<Option<u8>>::new());
-        let (_tx, mut cancel) = watch::channel(false);
+        let mut cancel = live_cancel();
 
         let out = convert_one(
             &row_for(&src, 1000),
@@ -866,6 +1063,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_gif_cover_does_not_sink_the_conversion() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        attach_pictures(&src, &[MimeType::Gif]);
+        assert_eq!(cover_policy(&src), CoverPolicy::ReencodePng);
+
+        let mut cancel = live_cancel();
+        for format in [ConvertFormat::Flac, ConvertFormat::M4a] {
+            let out = convert_one(
+                &row_for(&src, 1000),
+                format,
+                &ConvertPrefs::default(),
+                &mut cancel,
+                &|_| {},
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{format:?} conversion failed: {e}"));
+            let Converted::File(path) = out else {
+                panic!("expected a converted file");
+            };
+            assert!(path.exists(), "{} was not written", path.display());
+        }
+    }
+
+    #[tokio::test]
     async fn a_cancelled_encode_leaves_no_partial_file() {
         if !ffmpeg_available() {
             eprintln!("skipping: no ffmpeg on PATH");
@@ -876,7 +1102,7 @@ mod tests {
         // Already cancelled when the encode starts: the select is
         // biased on the cancel arm, so this deterministically takes the
         // kill path rather than racing a one-second encode.
-        let (_tx, mut cancel) = watch::channel(true);
+        let mut cancel = BatchCancel::new(watch::channel(1u64).1, 1);
 
         let out = convert_one(
             &row_for(&src, 1000),
@@ -898,7 +1124,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_missing_source_fails_before_spawning_ffmpeg() {
-        let (_tx, mut cancel) = watch::channel(false);
+        let mut cancel = live_cancel();
         let err = convert_one(
             &row_for(std::path::Path::new("/nonexistent/x.wav"), 1000),
             ConvertFormat::Flac,
