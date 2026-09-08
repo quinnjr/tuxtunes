@@ -35,7 +35,6 @@ export interface ConvertPrefs {
 export interface ConvertProgress {
   current: number;
   total: number;
-  trackId: number;
   title: string;
   /** Progress through the current file, or null when its duration is unknown. */
   percent: number | null;
@@ -55,6 +54,13 @@ export interface ConvertFailure {
   title: string;
   error: string;
 }
+
+/**
+ * Where a batch is in its life. `running` covers the gap between
+ * `convert()` resolving and the worker's first progress event, which a
+ * "progress but no completion yet" check would miss.
+ */
+export type ConvertPhase = 'idle' | 'running' | 'done';
 
 /** Highest-quality defaults, matching the Rust `Default` impls. */
 export const DEFAULT_CONVERT_PREFS: ConvertPrefs = {
@@ -83,11 +89,12 @@ export class ConvertService implements OnDestroy {
   readonly lastComplete = signal<ConvertComplete | null>(null);
   /** Per-file failures from the batch in flight; cleared on each start. */
   readonly failures = signal<ConvertFailure[]>([]);
+  readonly phase = signal<ConvertPhase>('idle');
 
   readonly running = computed(this.#computeRunning.bind(this));
 
   #computeRunning(): boolean {
-    return this.progress() !== null && this.lastComplete() === null;
+    return this.phase() === 'running';
   }
 
   private readonly unlisteners: UnlistenFn[] = [];
@@ -103,21 +110,12 @@ export class ConvertService implements OnDestroy {
 
   private async subscribe(): Promise<void> {
     this.unlisteners.push(
-      await this.tauri.listen<{
-        current: number;
-        total: number;
-        track_id: number;
-        title: string;
-        percent: number | null;
-      }>('fs:convert-progress', (raw) =>
-        this.progress.set({
-          current: raw.current,
-          total: raw.total,
-          trackId: raw.track_id,
-          title: raw.title,
-          percent: raw.percent,
-        }),
-      ),
+      // A progress event also marks the phase: a batch queued behind
+      // one that just completed starts here, not through `convert()`.
+      await this.tauri.listen<ConvertProgress>('fs:convert-progress', (raw) => {
+        this.progress.set(raw);
+        this.phase.set('running');
+      }),
       await this.tauri.listen<{
         total: number;
         converted: number;
@@ -125,7 +123,7 @@ export class ConvertService implements OnDestroy {
         added_to_library: number;
         cancelled: boolean;
         format: string;
-      }>('fs:convert-complete', (raw) =>
+      }>('fs:convert-complete', (raw) => {
         this.lastComplete.set({
           total: raw.total,
           converted: raw.converted,
@@ -133,8 +131,9 @@ export class ConvertService implements OnDestroy {
           addedToLibrary: raw.added_to_library,
           cancelled: raw.cancelled,
           format: raw.format,
-        }),
-      ),
+        });
+        this.phase.set('done');
+      }),
       await this.tauri.listen<{ track_id: number; title: string; error: string }>(
         'fs:convert-failed',
         (raw) =>
@@ -169,6 +168,7 @@ export class ConvertService implements OnDestroy {
     this.progress.set(null);
     this.lastComplete.set(null);
     this.failures.set([]);
+    this.phase.set('running');
     await this.tauri.invoke<void>('convert_tracks', {
       args: { track_ids: trackIds, format },
     });

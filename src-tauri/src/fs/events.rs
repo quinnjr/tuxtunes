@@ -129,7 +129,6 @@ pub struct VerifyFailed {
 pub struct ConvertProgress {
     pub current: u64,
     pub total: u64,
-    pub track_id: i64,
     pub title: String,
     /// How far through this file the encoder is, or `None` when the
     /// library does not know the track's duration and there is nothing

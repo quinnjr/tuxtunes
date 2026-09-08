@@ -170,12 +170,21 @@ fn clamp_sample_rate(hz: u32) -> u32 {
     hz.clamp(8_000, 384_000)
 }
 
-/// `-q:a` wants a plain decimal. `{}` on an f32 would render 1.4 as
-/// "1.4" but 2.0 as "2", which ffmpeg reads the same — trimming the
-/// trailing zero keeps the argv stable and readable in logs.
-fn format_quality(q: f32) -> String {
-    let s = format!("{q:.1}");
-    s.strip_suffix(".0").map(str::to_string).unwrap_or(s)
+/// `-sample_fmt` (and friends) for a lossless bit depth. Neither FLAC
+/// nor ALAC has a 24-bit sample format: both take s32 and narrow it via
+/// `bits_per_raw_sample`, which for ALAC also silences its "encoding as
+/// 24 bits-per-sample" warning. ALAC wants the planar variants.
+fn push_bit_depth(args: &mut Vec<OsString>, depth: u8, planar: bool) {
+    let fmt = match (depth == 16, planar) {
+        (true, false) => "s16",
+        (true, true) => "s16p",
+        (false, false) => "s32",
+        (false, true) => "s32p",
+    };
+    args.extend(["-sample_fmt".into(), OsString::from(fmt)]);
+    if depth == 24 {
+        args.extend(["-bits_per_raw_sample".into(), OsString::from("24")]);
+    }
 }
 
 /// The full ffmpeg argv for one file, minus the program name.
@@ -224,15 +233,7 @@ pub fn build_args(
                 OsString::from(prefs.flac.compression_level.to_string()),
             ]);
             if let Some(depth) = prefs.flac.bit_depth {
-                // FLAC encodes 24-bit in an s32 sample format narrowed by
-                // bits_per_raw_sample; there is no s24.
-                args.extend([
-                    "-sample_fmt".into(),
-                    OsString::from(if depth == 16 { "s16" } else { "s32" }),
-                ]);
-                if depth == 24 {
-                    args.extend(["-bits_per_raw_sample".into(), OsString::from("24")]);
-                }
+                push_bit_depth(&mut args, depth, false);
             }
             if let Some(rate) = prefs.flac.sample_rate {
                 args.extend(["-ar".into(), OsString::from(rate.to_string())]);
@@ -243,18 +244,17 @@ pub fn build_args(
                 M4aCodec::Alac => {
                     args.extend(["-c:a".into(), OsString::from("alac")]);
                     if let Some(depth) = prefs.m4a.bit_depth {
-                        args.extend([
-                            "-sample_fmt".into(),
-                            OsString::from(if depth == 16 { "s16p" } else { "s32p" }),
-                        ]);
+                        push_bit_depth(&mut args, depth, true);
                     }
                 }
                 M4aCodec::Aac => {
                     args.extend(["-c:a".into(), OsString::from("aac")]);
                     if prefs.m4a.vbr {
+                        // One decimal: the encoder's scale is 0.1-stepped
+                        // and a float's shortest repr can be far longer.
                         args.extend([
                             "-q:a".into(),
-                            OsString::from(format_quality(prefs.m4a.vbr_quality)),
+                            OsString::from(format!("{:.1}", prefs.m4a.vbr_quality)),
                         ]);
                     } else {
                         args.extend([
@@ -372,7 +372,6 @@ impl ConvertWorker {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn convert_batch<R: Runtime>(
     engine: &SqliteRawEngine,
     ingest_tx: &mpsc::UnboundedSender<IngestCommand>,
@@ -404,7 +403,6 @@ async fn convert_batch<R: Runtime>(
                 ConvertProgress {
                     current: idx as u64,
                     total,
-                    track_id,
                     title: name.clone(),
                     percent,
                 },
@@ -412,7 +410,11 @@ async fn convert_batch<R: Runtime>(
         };
         emit_progress(Some(0));
 
-        match convert_one(row, format, prefs, &mut cancel, &emit_progress).await {
+        let outcome = match &row {
+            Some(row) => convert_one(row, format, prefs, &mut cancel, &emit_progress).await,
+            None => Err(anyhow::anyhow!("track is no longer in the library")),
+        };
+        match outcome {
             Ok(Converted::Cancelled) => {
                 cancelled = true;
                 break;
@@ -498,13 +500,12 @@ async fn add_converted_to_library(
 }
 
 async fn convert_one(
-    row: Option<TrackRow>,
+    row: &TrackRow,
     format: ConvertFormat,
     prefs: &ConvertPrefs,
     cancel: &mut watch::Receiver<bool>,
     emit_progress: &(dyn Fn(Option<u8>) + Sync),
 ) -> anyhow::Result<Converted> {
-    let row = row.ok_or_else(|| anyhow::anyhow!("track is no longer in the library"))?;
     let source = PathBuf::from(&row.file_path);
     if !source.exists() {
         anyhow::bail!("source file is missing: {}", source.display());
@@ -697,6 +698,31 @@ mod tests {
     }
 
     #[test]
+    fn alac_24_bit_is_planar_s32_narrowed_like_flac() {
+        let prefs = ConvertPrefs {
+            m4a: M4aPrefs {
+                bit_depth: Some(24),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let args = args_of(ConvertFormat::M4a, &prefs);
+        assert_eq!(pair(&args, "-sample_fmt").as_deref(), Some("s32p"));
+        assert_eq!(pair(&args, "-bits_per_raw_sample").as_deref(), Some("24"));
+
+        let sixteen = ConvertPrefs {
+            m4a: M4aPrefs {
+                bit_depth: Some(16),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let args = args_of(ConvertFormat::M4a, &sixteen);
+        assert_eq!(pair(&args, "-sample_fmt").as_deref(), Some("s16p"));
+        assert!(!args.iter().any(|a| a == "-bits_per_raw_sample"));
+    }
+
+    #[test]
     fn aac_picks_cbr_or_vbr_but_never_both() {
         let cbr = ConvertPrefs {
             m4a: M4aPrefs {
@@ -722,6 +748,17 @@ mod tests {
         let args = args_of(ConvertFormat::M4a, &vbr);
         assert_eq!(pair(&args, "-q:a").as_deref(), Some("1.4"));
         assert!(!args.iter().any(|a| a == "-b:a"));
+
+        let default_vbr = ConvertPrefs {
+            m4a: M4aPrefs {
+                codec: M4aCodec::Aac,
+                vbr: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let args = args_of(ConvertFormat::M4a, &default_vbr);
+        assert_eq!(pair(&args, "-q:a").as_deref(), Some("2.0"));
     }
 
     #[test]
@@ -808,7 +845,7 @@ mod tests {
         let (_tx, mut cancel) = watch::channel(false);
 
         let out = convert_one(
-            Some(row_for(&src, 1000)),
+            &row_for(&src, 1000),
             ConvertFormat::Flac,
             &ConvertPrefs::default(),
             &mut cancel,
@@ -842,7 +879,7 @@ mod tests {
         let (_tx, mut cancel) = watch::channel(true);
 
         let out = convert_one(
-            Some(row_for(&src, 1000)),
+            &row_for(&src, 1000),
             ConvertFormat::Flac,
             &ConvertPrefs::default(),
             &mut cancel,
@@ -863,7 +900,7 @@ mod tests {
     async fn a_missing_source_fails_before_spawning_ffmpeg() {
         let (_tx, mut cancel) = watch::channel(false);
         let err = convert_one(
-            Some(row_for(std::path::Path::new("/nonexistent/x.wav"), 1000)),
+            &row_for(std::path::Path::new("/nonexistent/x.wav"), 1000),
             ConvertFormat::Flac,
             &ConvertPrefs::default(),
             &mut cancel,

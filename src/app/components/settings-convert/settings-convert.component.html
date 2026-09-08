@@ -44,31 +44,19 @@
       }}</span>
     </label>
 
-    <label class="flex items-center gap-3 text-body text-text-primary">
-      <span class="w-40 shrink-0">Sample rate</span>
-      <select
-        class="mac-btn h-8 flex-1 bg-bg-elevated px-2"
-        [value]="draft().flac.sample_rate ?? ''"
-        (change)="patchFlac({ sample_rate: toNullableNumber($any($event.target).value) })"
-      >
-        @for (r of sampleRates; track r.label) {
-          <option [value]="r.value ?? ''">{{ r.label }}</option>
-        }
-      </select>
-    </label>
+    <app-choice-select
+      label="Sample rate"
+      [choices]="sampleRates"
+      [value]="draft().flac.sample_rate"
+      (changed)="patchFlac({ sample_rate: $event })"
+    />
 
-    <label class="flex items-center gap-3 text-body text-text-primary">
-      <span class="w-40 shrink-0">Bit depth</span>
-      <select
-        class="mac-btn h-8 flex-1 bg-bg-elevated px-2"
-        [value]="draft().flac.bit_depth ?? ''"
-        (change)="patchFlac({ bit_depth: toNullableNumber($any($event.target).value) })"
-      >
-        @for (d of flacDepths; track d.label) {
-          <option [value]="d.value ?? ''">{{ d.label }}</option>
-        }
-      </select>
-    </label>
+    <app-choice-select
+      label="Bit depth"
+      [choices]="flacDepths"
+      [value]="draft().flac.bit_depth"
+      (changed)="patchFlac({ bit_depth: $event })"
+    />
   </div>
 
   <!-- M4A -->
@@ -92,18 +80,12 @@
     </div>
 
     @if (draft().m4a.codec === 'alac') {
-      <label class="flex items-center gap-3 text-body text-text-primary">
-        <span class="w-40 shrink-0">Bit depth</span>
-        <select
-          class="mac-btn h-8 flex-1 bg-bg-elevated px-2"
-          [value]="draft().m4a.bit_depth ?? ''"
-          (change)="patchM4a({ bit_depth: toNullableNumber($any($event.target).value) })"
-        >
-          @for (d of alacDepths; track d.label) {
-            <option [value]="d.value ?? ''">{{ d.label }}</option>
-          }
-        </select>
-      </label>
+      <app-choice-select
+        label="Bit depth"
+        [choices]="alacDepths"
+        [value]="draft().m4a.bit_depth"
+        (changed)="patchM4a({ bit_depth: $event })"
+      />
     } @else {
       <label class="flex cursor-pointer items-center gap-3 text-body text-text-primary">
         <span class="w-40 shrink-0">Variable bitrate</span>
@@ -130,33 +112,21 @@
           <span class="tnum w-8 text-right text-text-secondary">{{ draft().m4a.vbr_quality }}</span>
         </label>
       } @else {
-        <label class="flex items-center gap-3 text-body text-text-primary">
-          <span class="w-40 shrink-0">Bitrate</span>
-          <select
-            class="mac-btn h-8 flex-1 bg-bg-elevated px-2"
-            [value]="draft().m4a.bitrate_kbps"
-            (change)="patchM4a({ bitrate_kbps: +$any($event.target).value })"
-          >
-            @for (b of aacBitrates; track b.value) {
-              <option [value]="b.value">{{ b.label }}</option>
-            }
-          </select>
-        </label>
+        <app-choice-select
+          label="Bitrate"
+          [choices]="aacBitrates"
+          [value]="draft().m4a.bitrate_kbps"
+          (changed)="patchM4a({ bitrate_kbps: $event ?? 256 })"
+        />
       }
     }
 
-    <label class="flex items-center gap-3 text-body text-text-primary">
-      <span class="w-40 shrink-0">Sample rate</span>
-      <select
-        class="mac-btn h-8 flex-1 bg-bg-elevated px-2"
-        [value]="draft().m4a.sample_rate ?? ''"
-        (change)="patchM4a({ sample_rate: toNullableNumber($any($event.target).value) })"
-      >
-        @for (r of sampleRates; track r.label) {
-          <option [value]="r.value ?? ''">{{ r.label }}</option>
-        }
-      </select>
-    </label>
+    <app-choice-select
+      label="Sample rate"
+      [choices]="sampleRates"
+      [value]="draft().m4a.sample_rate"
+      (changed)="patchM4a({ sample_rate: $event })"
+    />
   </div>
 
   <!-- Output -->
@@ -202,16 +172,11 @@
     <button type="button" (click)="resetDefaults()" class="mac-btn h-8 px-3 bg-bg-elevated">
       Restore highest-quality defaults
     </button>
-    @if (convert.running() && convert.progress(); as p) {
-      <span class="text-footnote text-text-muted">
-        Converting {{ p.current + 1 }} / {{ p.total }}: {{ p.title }}
-        @if (p.percent !== null) {
-          <span class="tnum"> — {{ p.percent }}%</span>
-        }
-      </span>
-      <button type="button" (click)="cancel()" class="mac-btn h-8 px-3 bg-bg-elevated">
-        Cancel
-      </button>
+    @if (convert.running()) {
+      <app-convert-activity
+        class="flex items-center gap-2 text-footnote text-text-muted"
+        [showTitle]="true"
+      />
     } @else if (summary(); as s) {
       <span class="text-footnote text-text-secondary">{{ s }}</span>
     }

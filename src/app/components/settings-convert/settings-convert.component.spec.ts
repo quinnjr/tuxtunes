@@ -6,11 +6,9 @@ import { SettingsConvertComponent } from './settings-convert.component';
 
 interface ConvertInternals {
   draft: { (): ConvertPrefs };
-  cancel(): Promise<void>;
   patch(change: Partial<ConvertPrefs>): Promise<void>;
   patchFlac(change: Partial<ConvertPrefs['flac']>): void;
   patchM4a(change: Partial<ConvertPrefs['m4a']>): void;
-  toNullableNumber(raw: string): number | null;
   resetDefaults(): void;
 }
 
@@ -93,21 +91,20 @@ describe('SettingsConvertComponent', () => {
     expect((lastSaved as ConvertPrefs).add_to_library).toBe(false);
   });
 
-  it('cancel() reaches the backend', async () => {
-    const calls: string[] = [];
-    const { cmp } = setup(async (cmd) => {
-      calls.push(cmd);
-      return defaultInvoke(cmd);
-    });
+  it('shows the activity line with a cancel button only while converting', async () => {
+    const { fixture, stub } = setup(defaultInvoke);
     await settle();
-    await cmp.cancel();
-    expect(calls).toContain('cancel_convert');
-  });
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).not.toContain('Converting');
 
-  it('maps the empty select option to "same as source"', () => {
-    const { cmp } = setup(defaultInvoke);
-    expect(cmp.toNullableNumber('')).toBeNull();
-    expect(cmp.toNullableNumber('96000')).toBe(96_000);
+    stub.emit('fs:convert-progress', { current: 0, total: 2, title: 'Song', percent: 40 });
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Converting 1 of 2: Song · 40%');
+    const cancel = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Cancel'),
+    );
+    cancel?.click();
+    expect(stub.invoke).toHaveBeenCalledWith('cancel_convert');
   });
 
   it('resetDefaults() persists the highest-quality preset', async () => {

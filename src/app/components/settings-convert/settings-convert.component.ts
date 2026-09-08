@@ -15,16 +15,12 @@ import {
   M4aCodec,
 } from '../../services/convert.service';
 import { UiService } from '../../services/ui.service';
-
-/** `null` means "keep the source's" — the highest-quality choice. */
-interface Choice<T> {
-  value: T;
-  label: string;
-}
+import { Choice, ChoiceSelectComponent } from '../choice-select/choice-select.component';
+import { ConvertActivityComponent } from '../convert-activity/convert-activity.component';
 
 @Component({
   selector: 'app-settings-convert',
-  imports: [FormsModule],
+  imports: [FormsModule, ChoiceSelectComponent, ConvertActivityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './settings-convert.component.html',
 })
@@ -101,18 +97,9 @@ export class SettingsConvertComponent implements OnInit {
     void this.patch({ m4a: { ...this.draft().m4a, ...change } });
   }
 
-  /** `<select>` values are strings; '' is the "same as source" option. */
-  protected toNullableNumber(raw: string): number | null {
-    return raw === '' ? null : Number(raw);
-  }
-
   protected async pickOutputDir(): Promise<void> {
     const picked = await this.ui.guard(dialogOpen({ directory: true, multiple: false }));
     if (typeof picked === 'string') void this.patch({ output_dir: picked });
-  }
-
-  protected async cancel(): Promise<void> {
-    await this.ui.guard(this.convert.cancel());
   }
 
   protected resetDefaults(): void {

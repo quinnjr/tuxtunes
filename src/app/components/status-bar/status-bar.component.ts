@@ -4,10 +4,11 @@ import { LibraryService } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { UiService } from '../../services/ui.service';
 import { formatByteSize, formatTotalDuration } from '../../utils/format';
+import { ConvertActivityComponent } from '../convert-activity/convert-activity.component';
 
 @Component({
   selector: 'app-status-bar',
-  imports: [],
+  imports: [ConvertActivityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './status-bar.component.html',
 })
@@ -18,10 +19,6 @@ export class StatusBarComponent {
   protected readonly ui = inject(UiService);
 
   protected readonly summary = computed(this.#computeSummary.bind(this));
-
-  protected async cancelConvert(): Promise<void> {
-    await this.ui.guard(this.convert.cancel());
-  }
   protected readonly activityLabel = computed(this.#computeActivityLabel.bind(this));
 
   #computeSummary() {
@@ -36,15 +33,6 @@ export class StatusBarComponent {
   }
 
   #computeActivityLabel(): string | null {
-    // Conversion is started from a context menu anywhere in the app, so
-    // the status bar is the only place its progress is guaranteed to be
-    // visible. It outranks the sync label because the user just asked
-    // for it.
-    const convert = this.convert.progress();
-    if (convert && this.convert.running()) {
-      const pct = convert.percent === null ? '' : ` · ${convert.percent}%`;
-      return `Converting ${convert.current + 1} of ${convert.total}${pct}`;
-    }
     const state = this.sync.runState();
     if (state === 'running') return 'Syncing…';
     if (state === 'error') return 'Sync error';

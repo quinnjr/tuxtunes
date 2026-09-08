@@ -42,7 +42,6 @@ describe('ConvertService', () => {
     emit('fs:convert-progress', {
       current: 0,
       total: 2,
-      track_id: 7,
       title: 'Song',
       percent: 40,
     });
@@ -50,7 +49,6 @@ describe('ConvertService', () => {
     expect(svc.progress()).toEqual({
       current: 0,
       total: 2,
-      trackId: 7,
       title: 'Song',
       percent: 40,
     });
@@ -75,7 +73,6 @@ describe('ConvertService', () => {
     emit('fs:convert-progress', {
       current: 0,
       total: 1,
-      track_id: 1,
       title: 'Song',
       percent: null,
     });
@@ -85,7 +82,7 @@ describe('ConvertService', () => {
   it('cancel() invokes the backend and leaves the complete event to clear the run', async () => {
     const { svc, invoke, ready, emit } = build();
     await ready;
-    emit('fs:convert-progress', { current: 0, total: 9, track_id: 1, title: 'A', percent: 5 });
+    emit('fs:convert-progress', { current: 0, total: 9, title: 'A', percent: 5 });
 
     await svc.cancel();
 
@@ -133,6 +130,28 @@ describe('ConvertService', () => {
     expect(invoke).toHaveBeenCalledWith('convert_tracks', {
       args: { track_ids: [4, 5], format: 'flac' },
     });
+  });
+
+  it('is running from the moment a batch is queued, before any progress arrives', async () => {
+    const { svc, ready, emit } = build();
+    await ready;
+    await svc.convert([1], 'm4a');
+    expect(svc.running()).toBe(true);
+    expect(svc.progress()).toBeNull();
+
+    // A second batch queued behind the first starts with a progress
+    // event, not a convert() call, and must read as running again.
+    emit('fs:convert-complete', {
+      total: 1,
+      converted: 1,
+      failed: 0,
+      added_to_library: 0,
+      cancelled: false,
+      format: 'm4a',
+    });
+    expect(svc.running()).toBe(false);
+    emit('fs:convert-progress', { current: 0, total: 3, title: 'B', percent: 0 });
+    expect(svc.running()).toBe(true);
   });
 
   it('adopts the clamped prefs the backend returns rather than the draft sent', async () => {
