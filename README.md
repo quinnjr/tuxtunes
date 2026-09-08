@@ -45,6 +45,16 @@ library that keeps working after iTunes is gone.
   a finished track counts as a play, an early skip counts as a skip.
 - Volume persisted across launches.
 
+**File conversion**
+
+- Convert any track to **FLAC** or **M4A** (ALAC or AAC) from the track list's
+  right-click menu, with every encoder knob exposed in Settings → Conversion:
+  FLAC compression level, sample rate, bit depth; ALAC/AAC, VBR quality or CBR
+  bitrate. The defaults are lossless and source-native — nothing is resampled or
+  requantised unless you ask.
+- Tags and cover art are carried across; the original file is left untouched.
+  Requires `ffmpeg` on PATH.
+
 **Smart playlists**
 
 - Full rule engine over 26 fields (text / int / bool / date) with iTunes' operator set:
@@ -127,6 +137,8 @@ TUXTUNES_SRC=file:///path/to/tuxtunes makepkg -si
 
 `webkit2gtk-4.1` · `gtk3` · `libayatana-appindicator` · `mpv` · `sqlite` · `dbus` ·
 `openssl` · `xdg-utils`
+
+Optional: `ffmpeg` — required only for file conversion (FLAC / M4A).
 
 ## Build from source
 

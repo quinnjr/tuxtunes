@@ -19,6 +19,7 @@ pkgbase = tuxtunes-git
 	depends = dbus
 	depends = openssl
 	depends = xdg-utils
+	optdepends = ffmpeg: convert library files to FLAC or M4A
 	provides = tuxtunes
 	conflicts = tuxtunes
 	source = tuxtunes-git::git+https://github.com/quinnjr/tuxtunes.git#branch=develop

@@ -24,6 +24,9 @@ depends=(
   'openssl'
   'xdg-utils'
 )
+optdepends=(
+  'ffmpeg: convert library files to FLAC or M4A'
+)
 makedepends=(
   'git'
   'cargo'

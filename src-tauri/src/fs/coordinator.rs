@@ -1,5 +1,6 @@
 //! Handle for file-management workers. Held in AppState.
 
+use crate::fs::convert::{ConvertCommand, ConvertFormat, ConvertPrefs, ConvertWorker};
 use crate::fs::ingest::{IngestCommand, IngestWorker};
 use crate::fs::organize::{OrganizeCommand, OrganizeWorker};
 use prax_sqlite::raw::SqliteRawEngine;
@@ -10,13 +11,15 @@ use tauri::{AppHandle, Runtime};
 pub struct FsCoordinator {
     ingest: IngestWorker,
     organize: OrganizeWorker,
+    convert: ConvertWorker,
 }
 
 impl FsCoordinator {
     pub fn new<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
         Self {
             ingest: IngestWorker::spawn(Arc::clone(&engine), app.clone()),
-            organize: OrganizeWorker::spawn(engine, app),
+            organize: OrganizeWorker::spawn(Arc::clone(&engine), app.clone()),
+            convert: ConvertWorker::spawn(engine, app),
         }
     }
 
@@ -47,6 +50,25 @@ impl FsCoordinator {
             .tx
             .send(IngestCommand::ReclaimOriginals)
             .map_err(|_| "ingest worker has exited".to_string())
+    }
+
+    /// Queue a transcode batch. Progress arrives on
+    /// `fs:convert-progress`, per-file errors on `fs:convert-failed`,
+    /// and the tally on `fs:convert-complete`.
+    pub fn convert_tracks(
+        &self,
+        track_ids: Vec<i64>,
+        format: ConvertFormat,
+        prefs: ConvertPrefs,
+    ) -> Result<(), String> {
+        self.convert
+            .tx
+            .send(ConvertCommand::Tracks {
+                track_ids,
+                format,
+                prefs,
+            })
+            .map_err(|_| "convert worker has exited".to_string())
     }
 
     pub fn reorganize_track(&self, track_id: i64) -> Result<(), String> {
