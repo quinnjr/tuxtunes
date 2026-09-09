@@ -79,8 +79,8 @@ describe('StatusBarComponent', () => {
   });
 
   it('shows convert progress with its percentage, outranking the sync label', async () => {
-    const { fixture, stub, sync, el, convert } = await setup();
-    await convert.convert([1, 2, 3, 4], 'flac');
+    const { fixture, stub, sync, el } = await setup();
+    stub.emit('fs:convert-started', { generation: 1, total: 4 });
     sync.progress.set({
       sourceId: 1,
       phase: 'decoding',
@@ -95,8 +95,8 @@ describe('StatusBarComponent', () => {
   });
 
   it('omits the percentage when the track duration is unknown', async () => {
-    const { fixture, stub, el, convert } = await setup();
-    await convert.convert([1], 'flac');
+    const { fixture, stub, el } = await setup();
+    stub.emit('fs:convert-started', { generation: 1, total: 1 });
     stub.emit('fs:convert-progress', { current: 0, total: 1, title: 'Song', percent: null });
     fixture.detectChanges();
     expect(el.textContent).toContain('Converting 1 of 1');
@@ -104,9 +104,9 @@ describe('StatusBarComponent', () => {
   });
 
   it('offers a cancel button only while a conversion is running', async () => {
-    const { fixture, el, stub, convert } = await setup();
+    const { fixture, el, stub } = await setup();
     expect(el.querySelector('button')).toBeNull();
-    await convert.convert([1, 2, 3], 'flac');
+    stub.emit('fs:convert-started', { generation: 1, total: 3 });
 
     stub.emit('fs:convert-progress', { current: 0, total: 3, title: 'Song', percent: 10 });
     fixture.detectChanges();
@@ -117,6 +117,7 @@ describe('StatusBarComponent', () => {
     expect(stub.invoke).toHaveBeenCalledWith('cancel_convert');
 
     stub.emit('fs:convert-complete', {
+      generation: 1,
       total: 3,
       converted: 1,
       failed: 0,
@@ -126,6 +127,37 @@ describe('StatusBarComponent', () => {
     });
     fixture.detectChanges();
     expect(el.querySelector('button')).toBeNull();
+  });
+
+  it('keeps a failure tally on screen after a batch that lost files', async () => {
+    const { fixture, el, stub } = await setup();
+    stub.emit('fs:convert-started', { generation: 1, total: 20 });
+    stub.emit('fs:convert-complete', {
+      generation: 1,
+      total: 20,
+      converted: 14,
+      failed: 6,
+      added_to_library: 14,
+      cancelled: false,
+      format: 'flac',
+    });
+    fixture.detectChanges();
+    expect(el.textContent).toContain('6 failed');
+    expect(el.textContent).not.toContain('Converting');
+
+    // A clean run shows nothing: the idle bar is the success signal.
+    stub.emit('fs:convert-started', { generation: 2, total: 1 });
+    stub.emit('fs:convert-complete', {
+      generation: 2,
+      total: 1,
+      converted: 1,
+      failed: 0,
+      added_to_library: 1,
+      cancelled: false,
+      format: 'flac',
+    });
+    fixture.detectChanges();
+    expect(el.textContent).not.toContain('failed');
   });
 
   it('shows the last playback error as an alert, taking precedence over the sync label', async () => {

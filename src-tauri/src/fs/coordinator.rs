@@ -16,9 +16,8 @@ pub struct FsCoordinator {
 
 impl FsCoordinator {
     pub fn new<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
-        let ingest = IngestWorker::spawn(Arc::clone(&engine), app.clone());
         Self {
-            ingest,
+            ingest: IngestWorker::spawn(Arc::clone(&engine), app.clone()),
             organize: OrganizeWorker::spawn(Arc::clone(&engine), app.clone()),
             convert: ConvertWorker::spawn(engine, app),
         }

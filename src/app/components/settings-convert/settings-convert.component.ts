@@ -1,12 +1,4 @@
-import {
-  Component,
-  OnInit,
-  computed,
-  inject,
-  signal,
-  ChangeDetectionStrategy,
-} from '@angular/core';
-import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
+import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import {
   ConvertPrefs,
   ConvertService,
@@ -44,6 +36,12 @@ export class SettingsConvertComponent implements OnInit {
 
   /** Editable copy of the stored prefs; every edit persists immediately. */
   protected readonly draft = signal<ConvertPrefs>(DEFAULT_CONVERT_PREFS);
+  /**
+   * False until the stored prefs have been read. The form is disabled
+   * meanwhile: an edit made against the defaults would be saved as the
+   * whole blob and silently replace everything the user had set.
+   */
+  protected readonly loaded = signal(false);
 
   protected readonly codecs: readonly Choice<M4aCodec>[] = [
     { value: 'alac', label: 'ALAC (lossless)' },
@@ -76,24 +74,30 @@ export class SettingsConvertComponent implements OnInit {
     { value: 320, label: '320 kbps' },
   ] as const;
 
-  protected readonly summary = computed(this.computeSummary.bind(this));
-
   ngOnInit(): void {
-    void this.ui.guard(this.convert.refresh()).then((ok) => {
-      if (ok !== null) this.draft.set(this.convert.prefs());
-    });
+    void this.reload();
+  }
+
+  protected async reload(): Promise<void> {
+    const ok = await this.ui.guard(this.convert.refresh());
+    if (ok === null) return;
+    this.draft.set(this.convert.prefs());
+    this.loaded.set(true);
   }
 
   /**
    * Apply a patch to the draft and persist it. The backend clamps the
-   * values and returns what it stored, so the draft re-seeds from that
-   * — an out-of-range number typed into a box snaps back visibly.
+   * values and returns what it stored, so the draft re-seeds from this
+   * call's own reply — an out-of-range number typed into a box snaps
+   * back visibly. A failed save rolls the draft back, so the form never
+   * claims a setting the backend does not have.
    */
   protected async patch(change: Partial<ConvertPrefs>): Promise<void> {
-    const next = { ...this.draft(), ...change };
+    const before = this.draft();
+    const next = { ...before, ...change };
     this.draft.set(next);
-    const ok = await this.ui.guard(this.convert.savePrefs(next));
-    if (ok !== null) this.draft.set(this.convert.prefs());
+    const stored = await this.ui.guard(this.convert.savePrefs(next));
+    this.draft.set(stored ?? before);
   }
 
   protected patchFlac(change: Partial<ConvertPrefs['flac']>): void {
@@ -105,23 +109,11 @@ export class SettingsConvertComponent implements OnInit {
   }
 
   protected async pickOutputDir(): Promise<void> {
-    const picked = await this.ui.guard(dialogOpen({ directory: true, multiple: false }));
-    if (typeof picked === 'string') void this.patch({ output_dir: picked });
+    const picked = await this.ui.pickDirectory();
+    if (picked !== null) void this.patch({ output_dir: picked });
   }
 
   protected resetDefaults(): void {
     void this.patch(DEFAULT_CONVERT_PREFS);
-  }
-
-  private computeSummary(): string {
-    const c = this.convert.lastComplete();
-    if (!c) return '';
-    // A run of mixed formats has no single name to give.
-    const to = c.format.includes('+') ? '' : ` to ${c.format.toUpperCase()}`;
-    const parts = [`${c.converted} converted${to}`];
-    if (c.addedToLibrary > 0) parts.push(`${c.addedToLibrary} added to the library`);
-    if (c.failed > 0) parts.push(`${c.failed} failed`);
-    if (c.cancelled) parts.push(`cancelled with ${c.total - c.converted - c.failed} left`);
-    return parts.join(', ');
   }
 }

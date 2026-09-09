@@ -1,188 +1,194 @@
 <section class="flex h-full flex-col gap-6 bg-bg-primary p-6">
-  <div>
-    <h2 class="mb-1 text-body font-semibold uppercase tracking-wide text-text-muted">
-      File Conversion
-    </h2>
-    <p class="text-footnote text-text-muted">
-      Convert tracks to FLAC or M4A from the track list's right-click menu. These settings control
-      the quality of every conversion. The defaults are the highest-quality choices: nothing is
-      resampled, requantised, or thrown away.
-    </p>
-  </div>
+  <!-- Everything editable lives inside the fieldset so a page that could
+       not load the stored prefs cannot save the defaults over them. -->
+  <fieldset class="contents" [disabled]="!loaded()">
+    <div>
+      <h2 class="mb-1 text-body font-semibold uppercase tracking-wide text-text-muted">
+        File Conversion
+      </h2>
+      <p class="text-footnote text-text-muted">
+        Convert tracks to FLAC or M4A from the track list's right-click menu. These settings control
+        the quality of every conversion. The defaults are the highest-quality choices: nothing is
+        resampled, requantised, or thrown away.
+      </p>
+    </div>
 
-  @if (convert.available() === false) {
-    <p
-      role="alert"
-      class="rounded-lg border border-border bg-bg-surface p-3 text-footnote text-accent"
-    >
-      <code>ffmpeg</code> was not found on your PATH. Install it to convert files — TuxTunes uses it
-      as the encoder.
-    </p>
-  }
+    @if (convert.available() === false) {
+      <p
+        role="alert"
+        class="rounded-lg border border-border bg-bg-surface p-3 text-footnote text-accent"
+      >
+        <code>ffmpeg</code> was not found on your PATH. Install it to convert files — TuxTunes uses
+        it as the encoder.
+      </p>
+    }
 
-  <!-- FLAC -->
-  <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
-    <h3 class="text-body font-medium text-text-primary">FLAC</h3>
-    <p class="text-footnote text-text-muted">
-      Lossless. Compression level trades encoding time for file size only — every level decodes to
-      bit-identical audio, so 12 is free quality-wise.
-    </p>
+    <!-- FLAC -->
+    <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
+      <h3 class="text-body font-medium text-text-primary">FLAC</h3>
+      <p class="text-footnote text-text-muted">
+        Lossless. Compression level trades encoding time for file size only — every level decodes to
+        bit-identical audio, so 12 is free quality-wise.
+      </p>
 
-    <label class="flex items-center gap-3 text-body text-text-primary">
-      <span class="w-40 shrink-0">Compression level</span>
-      <input
-        type="range"
-        min="0"
-        max="12"
-        step="1"
-        class="flex-1 accent-accent"
-        [value]="draft().flac.compression_level"
-        (change)="patchFlac({ compression_level: +$any($event.target).value })"
+      <label class="flex items-center gap-3 text-body text-text-primary">
+        <span class="w-40 shrink-0">Compression level</span>
+        <input
+          type="range"
+          min="0"
+          max="12"
+          step="1"
+          class="flex-1 accent-accent"
+          [value]="draft().flac.compression_level"
+          (change)="patchFlac({ compression_level: +$any($event.target).value })"
+        />
+        <span class="tnum w-8 text-right text-text-secondary">{{
+          draft().flac.compression_level
+        }}</span>
+      </label>
+
+      <app-choice-select
+        label="Sample rate"
+        [choices]="sampleRates"
+        [value]="draft().flac.sample_rate"
+        (changed)="patchFlac({ sample_rate: $event })"
       />
-      <span class="tnum w-8 text-right text-text-secondary">{{
-        draft().flac.compression_level
-      }}</span>
-    </label>
 
-    <app-choice-select
-      label="Sample rate"
-      [choices]="sampleRates"
-      [value]="draft().flac.sample_rate"
-      (changed)="patchFlac({ sample_rate: $event })"
-    />
-
-    <app-choice-select
-      label="Bit depth"
-      [choices]="flacDepths"
-      [value]="draft().flac.bit_depth"
-      (changed)="patchFlac({ bit_depth: $event })"
-    />
-  </div>
-
-  <!-- M4A -->
-  <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
-    <h3 class="text-body font-medium text-text-primary">M4A</h3>
-    <p class="text-footnote text-text-muted">
-      ALAC is lossless and plays everywhere an M4A does. AAC is smaller but discards audio; pick it
-      only when size matters more than fidelity.
-    </p>
-
-    <app-choice-select
-      label="Codec"
-      [choices]="codecs"
-      [value]="draft().m4a.codec"
-      (changed)="patchM4a({ codec: $event })"
-    />
-
-    @if (draft().m4a.codec === 'alac') {
       <app-choice-select
         label="Bit depth"
-        [choices]="alacDepths"
-        [value]="draft().m4a.bit_depth"
-        (changed)="patchM4a({ bit_depth: $event })"
+        [choices]="flacDepths"
+        [value]="draft().flac.bit_depth"
+        (changed)="patchFlac({ bit_depth: $event })"
       />
-    } @else {
+    </div>
+
+    <!-- M4A -->
+    <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
+      <h3 class="text-body font-medium text-text-primary">M4A</h3>
+      <p class="text-footnote text-text-muted">
+        ALAC is lossless and plays everywhere an M4A does. AAC is smaller but discards audio; pick
+        it only when size matters more than fidelity.
+      </p>
+
+      <app-choice-select
+        label="Codec"
+        [choices]="codecs"
+        [value]="draft().m4a.codec"
+        (changed)="patchM4a({ codec: $event })"
+      />
+
+      @if (draft().m4a.codec === 'alac') {
+        <app-choice-select
+          label="Bit depth"
+          [choices]="alacDepths"
+          [value]="draft().m4a.bit_depth"
+          (changed)="patchM4a({ bit_depth: $event })"
+        />
+      } @else {
+        <label class="flex cursor-pointer items-center gap-3 text-body text-text-primary">
+          <span class="w-40 shrink-0">Variable bitrate</span>
+          <input
+            type="checkbox"
+            class="accent-accent"
+            [checked]="draft().m4a.vbr"
+            (change)="patchM4a({ vbr: $any($event.target).checked })"
+          />
+        </label>
+
+        @if (draft().m4a.vbr) {
+          <label class="flex items-center gap-3 text-body text-text-primary">
+            <span class="w-40 shrink-0">Quality</span>
+            <input
+              type="range"
+              min="0.1"
+              max="2"
+              step="0.1"
+              class="flex-1 accent-accent"
+              [value]="draft().m4a.vbr_quality"
+              (change)="patchM4a({ vbr_quality: +$any($event.target).value })"
+            />
+            <span class="tnum w-8 text-right text-text-secondary">{{
+              draft().m4a.vbr_quality
+            }}</span>
+          </label>
+        } @else {
+          <app-choice-select
+            label="Bitrate"
+            [choices]="aacBitrates"
+            [value]="draft().m4a.bitrate_kbps"
+            (changed)="patchM4a({ bitrate_kbps: $event })"
+          />
+        }
+      }
+
+      <app-choice-select
+        label="Sample rate"
+        [choices]="draft().m4a.codec === 'aac' ? aacSampleRates : sampleRates"
+        [value]="draft().m4a.sample_rate"
+        (changed)="patchM4a({ sample_rate: $event })"
+      />
+    </div>
+
+    <!-- Output -->
+    <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
+      <h3 class="text-body font-medium text-text-primary">Output</h3>
+      <div class="flex items-center gap-2">
+        <!-- Committed on blur / Enter, not per keystroke: each save is a
+           round-trip that re-seeds the draft, and out-of-order replies
+           would fight the text being typed. -->
+        <input
+          type="text"
+          class="mac-btn h-8 flex-1 bg-bg-elevated px-2 text-body"
+          placeholder="Beside the original file"
+          [value]="draft().output_dir ?? ''"
+          (change)="patch({ output_dir: $any($event.target).value || null })"
+        />
+        <button type="button" (click)="pickOutputDir()" class="mac-btn h-8 px-3 bg-bg-elevated">
+          Choose…
+        </button>
+      </div>
       <label class="flex cursor-pointer items-center gap-3 text-body text-text-primary">
-        <span class="w-40 shrink-0">Variable bitrate</span>
         <input
           type="checkbox"
           class="accent-accent"
-          [checked]="draft().m4a.vbr"
-          (change)="patchM4a({ vbr: $any($event.target).checked })"
+          [checked]="draft().overwrite"
+          (change)="patch({ overwrite: $any($event.target).checked })"
         />
+        <span>Overwrite an existing file instead of writing a numbered copy</span>
       </label>
-
-      @if (draft().m4a.vbr) {
-        <label class="flex items-center gap-3 text-body text-text-primary">
-          <span class="w-40 shrink-0">Quality</span>
-          <input
-            type="range"
-            min="0.1"
-            max="2"
-            step="0.1"
-            class="flex-1 accent-accent"
-            [value]="draft().m4a.vbr_quality"
-            (change)="patchM4a({ vbr_quality: +$any($event.target).value })"
-          />
-          <span class="tnum w-8 text-right text-text-secondary">{{ draft().m4a.vbr_quality }}</span>
-        </label>
-      } @else {
-        <app-choice-select
-          label="Bitrate"
-          [choices]="aacBitrates"
-          [value]="draft().m4a.bitrate_kbps"
-          (changed)="patchM4a({ bitrate_kbps: $event })"
+      <label class="flex cursor-pointer items-center gap-3 text-body text-text-primary">
+        <input
+          type="checkbox"
+          class="accent-accent"
+          [checked]="draft().add_to_library"
+          (change)="patch({ add_to_library: $any($event.target).checked })"
         />
-      }
-    }
-
-    <app-choice-select
-      label="Sample rate"
-      [choices]="draft().m4a.codec === 'aac' ? aacSampleRates : sampleRates"
-      [value]="draft().m4a.sample_rate"
-      (changed)="patchM4a({ sample_rate: $event })"
-    />
-  </div>
-
-  <!-- Output -->
-  <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
-    <h3 class="text-body font-medium text-text-primary">Output</h3>
-    <div class="flex items-center gap-2">
-      <!-- Committed on blur / Enter, not per keystroke: each save is a
-           round-trip that re-seeds the draft, and out-of-order replies
-           would fight the text being typed. -->
-      <input
-        type="text"
-        class="mac-btn h-8 flex-1 bg-bg-elevated px-2 text-body"
-        placeholder="Beside the original file"
-        [value]="draft().output_dir ?? ''"
-        (change)="patch({ output_dir: $any($event.target).value || null })"
-      />
-      <button type="button" (click)="pickOutputDir()" class="mac-btn h-8 px-3 bg-bg-elevated">
-        Choose…
-      </button>
+        <span>Add each converted file to the library</span>
+      </label>
+      <p class="text-footnote text-text-muted">
+        Conversion writes new files and never touches the originals — the tracks you converted keep
+        playing the files they already had.
+      </p>
     </div>
-    <label class="flex cursor-pointer items-center gap-3 text-body text-text-primary">
-      <input
-        type="checkbox"
-        class="accent-accent"
-        [checked]="draft().overwrite"
-        (change)="patch({ overwrite: $any($event.target).checked })"
-      />
-      <span>Overwrite an existing file instead of writing a numbered copy</span>
-    </label>
-    <label class="flex cursor-pointer items-center gap-3 text-body text-text-primary">
-      <input
-        type="checkbox"
-        class="accent-accent"
-        [checked]="draft().add_to_library"
-        (change)="patch({ add_to_library: $any($event.target).checked })"
-      />
-      <span>Add each converted file to the library</span>
-    </label>
-    <p class="text-footnote text-text-muted">
-      Conversion writes new files and never touches the originals — the tracks you converted keep
-      playing the files they already had.
-    </p>
-  </div>
 
-  <div class="flex items-center gap-3">
-    <button type="button" (click)="resetDefaults()" class="mac-btn h-8 px-3 bg-bg-elevated">
-      Restore highest-quality defaults
-    </button>
-    @if (convert.running()) {
-      <app-convert-activity
-        class="flex items-center gap-2 text-footnote text-text-muted"
-        [showTitle]="true"
-      />
-    } @else if (summary(); as s) {
-      <span class="text-footnote text-text-secondary">{{ s }}</span>
-    }
-  </div>
+    <div class="flex items-center gap-3">
+      <button type="button" (click)="resetDefaults()" class="mac-btn h-8 px-3 bg-bg-elevated">
+        Restore highest-quality defaults
+      </button>
+      @if (convert.running()) {
+        <app-convert-activity
+          class="flex items-center gap-2 text-footnote text-text-muted"
+          [showTitle]="true"
+        />
+      } @else if (convert.summary(); as s) {
+        <span class="text-footnote text-text-secondary">{{ s }}</span>
+      }
+    </div>
+  </fieldset>
 
   @if (convert.failures().length > 0) {
     <ul class="flex flex-col gap-1 text-footnote text-accent">
-      @for (f of convert.failures(); track f.trackId) {
+      @for (f of convert.failures(); track $index) {
         <li>{{ f.title }}: {{ f.error }}</li>
       }
     </ul>

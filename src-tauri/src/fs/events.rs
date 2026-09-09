@@ -8,13 +8,14 @@ use serde::Serialize;
 /// the constant so consumers don't have to be rewired when it lands.
 /// Remove or wire up once a batched/throttled progress design exists
 /// for bulk imports.
+pub const INGEST_PROGRESS: &str = "fs:ingest-progress";
+pub const INGEST_COMPLETE: &str = "fs:ingest-complete";
+pub const INGEST_FAILED: &str = "fs:ingest-failed";
+
 /// Rows appeared or changed outside the UI's own actions: the DB watcher
 /// fires it on any foreign commit, and workers that insert rows nudge it
 /// directly so the list does not wait out the poll interval.
 pub const LIBRARY_CHANGED: &str = "library:external-change";
-pub const INGEST_PROGRESS: &str = "fs:ingest-progress";
-pub const INGEST_COMPLETE: &str = "fs:ingest-complete";
-pub const INGEST_FAILED: &str = "fs:ingest-failed";
 pub const ORGANIZE_APPLIED: &str = "fs:organize-applied";
 pub const ORGANIZE_FAILED: &str = "fs:organize-failed";
 pub const CONSOLIDATE_PROGRESS: &str = "fs:consolidate-progress";
@@ -24,6 +25,11 @@ pub const RECLAIM_COMPLETE: &str = "fs:reclaim-complete";
 pub const VERIFY_PROGRESS: &str = "fs:verify-progress";
 pub const VERIFY_COMPLETE: &str = "fs:verify-complete";
 pub const VERIFY_FAILED: &str = "fs:verify-failed";
+/// The worker picked a batch up. Emitted before any of its progress or
+/// its complete, so the UI learns of a batch from the same ordered
+/// stream that ends it — never from the invoke response, which can
+/// arrive after a fast-failing batch has already finished.
+pub const CONVERT_STARTED: &str = "fs:convert-started";
 pub const CONVERT_PROGRESS: &str = "fs:convert-progress";
 pub const CONVERT_COMPLETE: &str = "fs:convert-complete";
 pub const CONVERT_FAILED: &str = "fs:convert-failed";
@@ -141,7 +147,15 @@ pub struct ConvertProgress {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ConvertStarted {
+    pub generation: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ConvertComplete {
+    /// Matches the [`ConvertStarted`] this closes.
+    pub generation: u64,
     pub total: u64,
     pub converted: u64,
     pub failed: u64,
@@ -181,5 +195,7 @@ mod tests {
         assert_eq!(CONVERT_PROGRESS, "fs:convert-progress");
         assert_eq!(CONVERT_COMPLETE, "fs:convert-complete");
         assert_eq!(CONVERT_FAILED, "fs:convert-failed");
+        assert_eq!(CONVERT_STARTED, "fs:convert-started");
+        assert_eq!(LIBRARY_CHANGED, "library:external-change");
     }
 }

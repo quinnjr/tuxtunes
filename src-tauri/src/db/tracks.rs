@@ -148,14 +148,9 @@ pub async fn list(
 }
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
-    let sql = format!("SELECT {TRACK_ROW_COLUMNS} FROM tracks WHERE id = ?");
-    let params = vec![prax_query::filter::FilterValue::Int(id)];
-    let json_row = engine
-        .raw_sql_first(&sql, &params)
-        .await
-        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
-    serde_json::from_value(json_row.into_json())
-        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
+    get_opt(engine, id)
+        .await?
+        .ok_or_else(|| TracksError::Query(anyhow::anyhow!("track {id} not found")))
 }
 
 /// Like [`get`], but a missing row is `Ok(None)` rather than an error,

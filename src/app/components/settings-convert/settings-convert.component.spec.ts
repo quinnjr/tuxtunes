@@ -1,15 +1,12 @@
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
-import {
-  ConvertPrefs,
-  ConvertService,
-  DEFAULT_CONVERT_PREFS,
-} from '../../services/convert.service';
+import { ConvertPrefs, DEFAULT_CONVERT_PREFS } from '../../services/convert.service';
 import { appProviders, defaultInvoke, tauriStub } from '../../test-helpers';
 import { SettingsConvertComponent } from './settings-convert.component';
 
 interface ConvertInternals {
   draft: { (): ConvertPrefs };
+  reload(): Promise<void>;
   patch(change: Partial<ConvertPrefs>): Promise<void>;
   patchFlac(change: Partial<ConvertPrefs['flac']>): void;
   patchM4a(change: Partial<ConvertPrefs['m4a']>): void;
@@ -62,6 +59,33 @@ describe('SettingsConvertComponent', () => {
     expect(prefs.m4a).toEqual(DEFAULT_CONVERT_PREFS.m4a);
   });
 
+  it('keeps the form disabled until the stored prefs have loaded, and rolls a failed save back', async () => {
+    let failLoad = true;
+    let failSave = false;
+    const { fixture, cmp } = setup(async (cmd) => {
+      if (cmd === 'get_convert_prefs' && failLoad) throw new Error('db locked');
+      if (cmd === 'set_convert_prefs' && failSave) throw new Error('db locked');
+      return defaultInvoke(cmd);
+    });
+    await settle();
+    fixture.detectChanges();
+    const fieldset = (fixture.nativeElement as HTMLElement).querySelector('fieldset')!;
+    // Load failed: nothing editable, so the defaults cannot be saved over
+    // whatever is really stored.
+    expect(fieldset.disabled).toBe(true);
+
+    failLoad = false;
+    await cmp.reload();
+    await settle();
+    fixture.detectChanges();
+    expect(fieldset.disabled).toBe(false);
+
+    failSave = true;
+    await cmp.patch({ overwrite: true });
+    await settle();
+    expect(cmp.draft().overwrite).toBe(false);
+  });
+
   it('shows the clamped values the backend stored, not the draft that was sent', async () => {
     const { cmp } = setup(async (cmd) => {
       if (cmd === 'set_convert_prefs') {
@@ -101,7 +125,7 @@ describe('SettingsConvertComponent', () => {
     const el = fixture.nativeElement as HTMLElement;
     expect(el.textContent).not.toContain('Converting');
 
-    await TestBed.inject(ConvertService).convert([1, 2], 'flac');
+    stub.emit('fs:convert-started', { generation: 1, total: 2 });
     stub.emit('fs:convert-progress', { current: 0, total: 2, title: 'Song', percent: 40 });
     fixture.detectChanges();
     expect(el.textContent).toContain('Converting 1 of 2: Song · 40%');

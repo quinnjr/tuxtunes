@@ -206,7 +206,7 @@ async fn copy_into_library(
     ideal: &std::path::Path,
     source_hash: u64,
 ) -> anyhow::Result<(PathBuf, u64)> {
-    let target_abs = free_target(engine, ideal).await?;
+    let target_abs = free_target(engine, ideal, &Default::default()).await?;
 
     if let Some(parent) = target_abs.parent() {
         let parent = parent.to_path_buf();
@@ -256,14 +256,23 @@ async fn copy_into_library(
     Ok((target_abs, target_hash))
 }
 
-/// First candidate name at or beside `ideal` that is free both on disk
-/// and in the `tracks` table. `file_path` is UNIQUE, so a name another
-/// row still claims — typically one whose file the user deleted behind
-/// the app's back — would fail the write *after* the copy landed.
-async fn free_target(engine: &SqliteRawEngine, ideal: &std::path::Path) -> anyhow::Result<PathBuf> {
+/// First candidate name at or beside `ideal` that is free on disk, in
+/// the `tracks` table, and not in `also_taken` (names a caller has
+/// already promised to other files in the same batch but not written
+/// yet). `file_path` is UNIQUE, so a name another row still claims —
+/// typically one whose file the user deleted behind the app's back —
+/// would fail the write *after* the copy landed.
+pub(crate) async fn free_target(
+    engine: &SqliteRawEngine,
+    ideal: &std::path::Path,
+    also_taken: &std::collections::HashSet<PathBuf>,
+) -> anyhow::Result<PathBuf> {
     for n in 0..=path::COLLISION_ATTEMPTS {
         let cand = path::collision_candidate(ideal, n);
-        if !cand.exists() && !tracks::path_in_use(engine, &cand.display().to_string()).await? {
+        if !also_taken.contains(&cand)
+            && !cand.exists()
+            && !tracks::path_in_use(engine, &cand.display().to_string()).await?
+        {
             return Ok(cand);
         }
     }

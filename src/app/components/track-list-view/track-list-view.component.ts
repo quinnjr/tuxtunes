@@ -362,9 +362,20 @@ export class TrackListViewComponent implements OnInit {
       },
       {
         label: single ? 'Convert To' : `Convert ${targets.length} To`,
+        // Greyed out, not hidden, when ffmpeg is missing: the item still
+        // tells the user the feature exists.
+        disabled: this.convert.available() === false,
         children: [
-          { label: 'FLAC (lossless)', action: () => this.convertTo(targets, 'flac') },
-          { label: 'M4A', action: () => this.convertTo(targets, 'm4a') },
+          {
+            label: 'FLAC (lossless)',
+            disabled: this.convert.available() === false,
+            action: () => this.convertTo(targets, 'flac'),
+          },
+          {
+            label: 'M4A',
+            disabled: this.convert.available() === false,
+            action: () => this.convertTo(targets, 'm4a'),
+          },
         ],
       },
       {
@@ -392,8 +403,8 @@ export class TrackListViewComponent implements OnInit {
 
   /**
    * Queue a transcode of the selection. Quality comes from Settings →
-   * Conversion; the outcome shows in the status bar rather than here,
-   * because a large batch outlives this view.
+   * Conversion. Progress, and a failure tally if there is one, show in
+   * the status bar; per-file errors are listed on that settings tab.
    */
   private async convertTo(targets: TrackRow[], format: ConvertFormat): Promise<void> {
     await this.ui.guard(

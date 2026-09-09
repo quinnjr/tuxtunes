@@ -4,9 +4,9 @@ use crate::db::preferences::{self, KEY_CONVERT_PREFS};
 use crate::fs::convert::{ConvertFormat, ConvertPrefs};
 use crate::runtime::AppState;
 
-/// Whether conversion is usable at all. The settings tab greys itself
-/// out on `false` rather than letting every conversion fail one by one
-/// with the same "ffmpeg not found".
+/// Whether conversion is usable at all. On `false` the settings tab
+/// shows an install hint, the context menu disables its Convert items,
+/// and `convert_tracks` refuses a batch outright.
 #[tauri::command]
 pub async fn convert_available() -> Result<bool, String> {
     tokio::task::spawn_blocking(crate::fs::convert::ffmpeg_available)
@@ -41,10 +41,6 @@ pub async fn set_convert_prefs(
 pub struct ConvertTracksArgs {
     pub track_ids: Vec<i64>,
     pub format: ConvertFormat,
-    /// One-off overrides for this batch. Omitted means "use the saved
-    /// preferences", which is what the context menu sends.
-    #[serde(default)]
-    pub prefs: Option<ConvertPrefs>,
 }
 
 /// Stop the conversion batch in flight, and anything queued behind it.
@@ -63,15 +59,20 @@ pub async fn convert_tracks(
     if args.track_ids.is_empty() {
         return Err("no tracks selected".into());
     }
-    // Before the await: the UI may show Cancel as soon as it has asked.
+    // Refuse the whole batch once rather than spawning a doomed ffmpeg
+    // per track; the settings page shows the same message.
+    let has_ffmpeg = tokio::task::spawn_blocking(crate::fs::convert::ffmpeg_available)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !has_ffmpeg {
+        return Err("ffmpeg was not found on PATH — install it to convert files".into());
+    }
+    // Before the await: a Cancel that lands while prefs load covers it.
     let generation = state.fs.reserve_convert_generation();
-    let prefs = match args.prefs {
-        Some(p) => p,
-        None => preferences::get::<ConvertPrefs>(&state.db.engine, KEY_CONVERT_PREFS)
-            .await
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default(),
-    };
+    let prefs = preferences::get::<ConvertPrefs>(&state.db.engine, KEY_CONVERT_PREFS)
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
     state
         .fs
         .convert_tracks(args.track_ids, args.format, prefs, generation)

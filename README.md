@@ -59,8 +59,10 @@ library that keeps working after iTunes is gone.
 - Output is written to a hidden scratch file and renamed into place only when the
   encoder finishes, so a failure, a cancel, or a crash never leaves a half-written
   track behind, and **Overwrite** refuses to replace a file the library references.
-- Live per-file percentage in the status bar, and a **Cancel** that stops the
-  batch. Requires `ffmpeg` on PATH.
+- Live per-file percentage in the status bar, a **Cancel** that stops the
+  batch, and a failure tally left in the bar when a batch lost files (the
+  per-file reasons are on the settings tab). Requires `ffmpeg` on PATH; without
+  it the Convert menu items are greyed out.
 
 **Smart playlists**
 

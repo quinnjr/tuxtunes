@@ -13,14 +13,15 @@
 
 use crate::db::tracks::{self, TrackRow};
 use crate::fs::events::{
-    ConvertComplete, ConvertFailed, ConvertProgress, CONVERT_COMPLETE, CONVERT_FAILED,
-    CONVERT_PROGRESS, LIBRARY_CHANGED,
+    ConvertComplete, ConvertFailed, ConvertProgress, ConvertStarted, CONVERT_COMPLETE,
+    CONVERT_FAILED, CONVERT_PROGRESS, CONVERT_STARTED, LIBRARY_CHANGED,
 };
 use crate::fs::path;
 use lofty::file::TaggedFileExt;
 use lofty::picture::MimeType;
 use prax_sqlite::raw::SqliteRawEngine;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -208,8 +209,32 @@ impl ConvertPrefs {
         });
         self.m4a.vbr_quality = self.m4a.vbr_quality.clamp(0.1, 2.0);
         self.m4a.bitrate_kbps = self.m4a.bitrate_kbps.clamp(8, 512);
+        self.output_dir = self.output_dir.as_deref().and_then(normalize_output_dir);
         self
     }
+}
+
+/// The output folder is free text. Trim it, expand a leading `~`, and
+/// insist on an absolute path — a relative one would resolve against
+/// whatever the process's working directory happens to be (often `/`
+/// for a desktop launch) and end up in `tracks.file_path`. Anything
+/// unusable falls back to "beside the source", which the settings page
+/// shows because it re-seeds from what was stored.
+fn normalize_output_dir(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let expanded: PathBuf = if trimmed == "~" {
+        dirs::home_dir()?
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        dirs::home_dir()?.join(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+    expanded
+        .is_absolute()
+        .then(|| expanded.display().to_string())
 }
 
 fn clamp_lossless_depth(d: u8) -> u8 {
@@ -236,7 +261,10 @@ fn nearest_aac_sample_rate(hz: u32) -> u32 {
 /// `-sample_fmt` (and friends) for a lossless bit depth. Neither FLAC
 /// nor ALAC has a 24-bit sample format: both take s32 and narrow it via
 /// `bits_per_raw_sample`, which for ALAC also silences its "encoding as
-/// 24 bits-per-sample" warning. ALAC wants the planar variants.
+/// 24 bits-per-sample" warning. ALAC wants the planar variants. A bare
+/// s32 is *also* written as 24-bit by the FLAC encoder; real 32-bit
+/// output needs the depth stated and the encoder's experimental gate
+/// opened (ALAC never gets here with 32 — `sanitized` caps it at 24).
 fn push_bit_depth(args: &mut Vec<OsString>, depth: u8, planar: bool) {
     let fmt = match (depth == 16, planar) {
         (true, false) => "s16",
@@ -245,8 +273,15 @@ fn push_bit_depth(args: &mut Vec<OsString>, depth: u8, planar: bool) {
         (false, true) => "s32p",
     };
     args.extend(["-sample_fmt".into(), OsString::from(fmt)]);
-    if depth == 24 {
-        args.extend(["-bits_per_raw_sample".into(), OsString::from("24")]);
+    match depth {
+        24 => args.extend(["-bits_per_raw_sample".into(), OsString::from("24")]),
+        32 => args.extend([
+            "-bits_per_raw_sample".into(),
+            OsString::from("32"),
+            "-strict".into(),
+            OsString::from("experimental"),
+        ]),
+        _ => {}
     }
 }
 
@@ -271,19 +306,20 @@ pub enum CoverPolicy {
 }
 
 /// Decide [`CoverPolicy`] from the source's tags. lofty reads the same
-/// APIC / PICTURE blocks ffmpeg turns into attached pictures; if it
-/// cannot read the file at all, re-encoding is the choice that cannot
-/// make things worse.
+/// APIC / PICTURE blocks ffmpeg turns into attached pictures. A source
+/// with no pictures gets [`CoverPolicy::Drop`] outright: there is
+/// nothing to carry, and it also tells the caller a failure cannot be
+/// the cover's fault. If lofty cannot read the file at all, ffmpeg may
+/// still find a picture, so re-encoding is the guess.
 pub fn cover_policy(source: &Path) -> CoverPolicy {
     let Ok(tagged) = lofty::read_from_path(source) else {
         return CoverPolicy::ReencodePng;
     };
-    let all_safe = tagged
-        .tags()
-        .iter()
-        .flat_map(|t| t.pictures())
-        .all(|p| matches!(p.mime_type(), Some(MimeType::Jpeg | MimeType::Png)));
-    if all_safe {
+    let mut pictures = tagged.tags().iter().flat_map(|t| t.pictures()).peekable();
+    if pictures.peek().is_none() {
+        return CoverPolicy::Drop;
+    }
+    if pictures.all(|p| matches!(p.mime_type(), Some(MimeType::Jpeg | MimeType::Png))) {
         CoverPolicy::Copy
     } else {
         CoverPolicy::ReencodePng
@@ -381,8 +417,14 @@ pub fn build_args(
             }
             // Without faststart the moov atom lands at the end of the
             // file, which makes the result slow to open over a network
-            // share and unplayable while still being written.
-            args.extend(["-movflags".into(), OsString::from("+faststart")]);
+            // share and unplayable while still being written. Without
+            // use_metadata_tags the muxer silently drops every tag
+            // outside its small MP4 table — ReplayGain and MusicBrainz
+            // IDs included.
+            args.extend([
+                "-movflags".into(),
+                OsString::from("+faststart+use_metadata_tags"),
+            ]);
         }
     }
 
@@ -397,12 +439,14 @@ pub fn build_args(
 /// nothing having been written — so take the last line that is not
 /// boilerplate.
 fn summarize_stderr(stderr: &str) -> String {
-    const GENERIC: [&str; 6] = [
+    const GENERIC: [&str; 8] = [
         "Nothing was written",
         "Error sending frames",
         "Task finished with error",
         "Terminating thread",
         "Could not write header",
+        "Could not open encoder",
+        "Error while opening encoder",
         "Conversion failed",
     ];
     stderr
@@ -427,24 +471,90 @@ pub fn temp_path(target: &Path) -> PathBuf {
     target.with_file_name(format!(".{name}.part"))
 }
 
-/// Where the converted file for `source` should go.
+/// The name the converted file for `source` would ideally take, before
+/// collisions are resolved (see `resolve_target`).
 pub fn target_path(source: &Path, format: ConvertFormat, prefs: &ConvertPrefs) -> PathBuf {
     let dir = prefs
         .output_dir
         .as_deref()
-        .filter(|d| !d.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| source.parent().unwrap_or(Path::new(".")).to_path_buf());
     let stem = source
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("track");
-    let ideal = dir.join(format!("{stem}.{}", format.extension()));
-    if prefs.overwrite {
-        ideal
-    } else {
-        path::resolve_collision(&ideal)
+    dir.join(format!("{stem}.{}", format.extension()))
+}
+
+/// What `resolve_target` decided about the destination.
+struct Destination {
+    path: PathBuf,
+    /// A library row whose file *is* the destination — an earlier export
+    /// of the same source, being re-done in place. Re-probed afterwards
+    /// so the row does not describe bytes that no longer exist.
+    refresh_row: Option<i64>,
+}
+
+/// Turn the ideal name into one that is safe to write, or refuse.
+///
+/// The folder is created and canonicalised first so a `.`, `..` or
+/// symlinked spelling typed into the output box compares equal to the
+/// paths the library stores. Without `overwrite` the name is walked to
+/// one free both on disk *and* in the `tracks` table — a row whose file
+/// went missing still owns its name, and landing on it would make that
+/// row play unrelated audio. With `overwrite` the name is kept unless it
+/// belongs to a library row: a row for the same path is a previous
+/// export and is refreshed; any other match (a different track, or the
+/// managed copy's `original_path`) is refused. Names claimed earlier in
+/// the same batch are never reused, overwrite or not.
+async fn resolve_target(
+    engine: &SqliteRawEngine,
+    source: &Path,
+    format: ConvertFormat,
+    prefs: &ConvertPrefs,
+    claimed: &mut HashSet<PathBuf>,
+) -> anyhow::Result<Destination> {
+    let ideal = target_path(source, format, prefs);
+    let dir = ideal.parent().unwrap_or(Path::new("."));
+    tokio::fs::create_dir_all(dir)
+        .await
+        .map_err(|e| anyhow::anyhow!("could not create {}: {e}", dir.display()))?;
+    let dir = tokio::fs::canonicalize(dir).await?;
+    let ideal = dir.join(ideal.file_name().unwrap_or_default());
+
+    // Converting a file onto itself would truncate the input mid-read.
+    if path::same_file(source, &ideal) {
+        anyhow::bail!("source and destination are the same file");
     }
+
+    let dest = if prefs.overwrite && !claimed.contains(&ideal) {
+        let refresh_row = match crate::library::ingest::track_id_for_path(engine, &ideal).await? {
+            None => None,
+            Some(id) => {
+                let owns_it = tracks::get_opt(engine, id)
+                    .await?
+                    .is_some_and(|row| Path::new(&row.file_path) == ideal);
+                if !owns_it {
+                    anyhow::bail!(
+                        "{} is a library track's file; turn off Overwrite or choose another output folder",
+                        ideal.display()
+                    );
+                }
+                Some(id)
+            }
+        };
+        Destination {
+            path: ideal,
+            refresh_row,
+        }
+    } else {
+        Destination {
+            path: crate::fs::ingest::free_target(engine, &ideal, claimed).await?,
+            refresh_row: None,
+        }
+    };
+    claimed.insert(dest.path.clone());
+    Ok(dest)
 }
 
 /// Whether an `ffmpeg` we can drive is on PATH.
@@ -540,7 +650,7 @@ impl ConvertWorker {
 /// cancelled yet", which is what the encode loop actually asks.
 pub struct BatchCancel {
     rx: watch::Receiver<u64>,
-    generation: u64,
+    pub generation: u64,
 }
 
 impl BatchCancel {
@@ -574,7 +684,16 @@ async fn convert_batch<R: Runtime>(
     let mut converted = 0u64;
     let mut failed = 0u64;
     let mut added = 0u64;
+    let mut library_changed = false;
     let mut cancelled = false;
+    let mut claimed = HashSet::new();
+    let _ = app.emit(
+        CONVERT_STARTED,
+        ConvertStarted {
+            generation: cancel.generation,
+            total,
+        },
+    );
 
     for (idx, &track_id) in track_ids.iter().enumerate() {
         if cancel.is_cancelled() {
@@ -597,11 +716,24 @@ async fn convert_batch<R: Runtime>(
                 },
             );
         };
-        emit_progress(Some(0));
+        // No percentage at all for a track whose duration the library
+        // does not know, rather than a 0% that never moves.
+        let duration_known = matches!(&row, Ok(Some(r)) if r.duration_ms > 0);
+        let known = |p: u8| duration_known.then_some(p);
+        emit_progress(known(0));
 
         let outcome = match &row {
             Ok(Some(row)) => {
-                convert_prepared(engine, row, format, prefs, &mut cancel, &emit_progress).await
+                convert_prepared(
+                    engine,
+                    row,
+                    format,
+                    prefs,
+                    &mut cancel,
+                    &emit_progress,
+                    &mut claimed,
+                )
+                .await
             }
             Ok(None) => Err(anyhow::anyhow!("track is no longer in the library")),
             Err(e) => Err(anyhow::anyhow!(
@@ -613,19 +745,41 @@ async fn convert_batch<R: Runtime>(
                 cancelled = true;
                 break;
             }
-            Ok(Converted::File(target)) => {
+            Ok(Converted::File { path, refresh_row }) => {
                 converted += 1;
-                emit_progress(Some(100));
-                if prefs.add_to_library {
-                    match crate::library::ingest::probe_and_add(engine, &target).await {
-                        Ok(_) => added += 1,
-                        // The file is on disk and correct either way, so
-                        // a library-add problem is worth a log line but
-                        // not a failed conversion.
-                        Err(e) => log::warn!(
-                            "converted {} but could not add it to the library: {e}",
-                            target.display()
-                        ),
+                emit_progress(known(100));
+                let library = match refresh_row {
+                    Some(id) => crate::library::ingest::probe_and_update(engine, id, &path)
+                        .await
+                        .map(|()| false),
+                    None if prefs.add_to_library => {
+                        crate::library::ingest::probe_and_add(engine, &path)
+                            .await
+                            .map(|_| true)
+                    }
+                    None => continue,
+                };
+                match library {
+                    Ok(is_new) => {
+                        library_changed = true;
+                        if is_new {
+                            added += 1;
+                        }
+                    }
+                    // The file is on disk and correct, so this is not a
+                    // failed conversion — but it is not silent either.
+                    Err(e) => {
+                        let _ = app.emit(
+                            CONVERT_FAILED,
+                            ConvertFailed {
+                                track_id,
+                                title: name.clone(),
+                                error: format!(
+                                    "converted to {} but could not add it to the library: {e}",
+                                    path.display()
+                                ),
+                            },
+                        );
                     }
                 }
             }
@@ -644,14 +798,15 @@ async fn convert_batch<R: Runtime>(
         }
     }
 
-    if added > 0 {
-        // New rows exist that no UI action inserted; the DB watcher would
+    if library_changed {
+        // Rows changed that no UI action touched; the DB watcher would
         // notice within its poll interval, this just saves the wait.
         let _ = app.emit(LIBRARY_CHANGED, ());
     }
     let _ = app.emit(
         CONVERT_COMPLETE,
         ConvertComplete {
+            generation: cancel.generation,
             total,
             converted,
             failed,
@@ -666,16 +821,15 @@ async fn convert_batch<R: Runtime>(
 /// partway through. A cancel is not an error — nothing went wrong.
 #[derive(Debug)]
 enum Converted {
-    File(PathBuf),
+    File {
+        path: PathBuf,
+        /// See [`Destination::refresh_row`].
+        refresh_row: Option<i64>,
+    },
     Cancelled,
 }
 
-/// Resolve the destination and refuse one that would clobber a file the
-/// library references, then convert. Only `overwrite` can produce such a
-/// destination — otherwise the name is collision-resolved to a fresh
-/// one — and `same_file` alone does not catch it: the file may belong to
-/// a *different* track, or be a previous conversion that has since been
-/// added to the library and whose row would silently go stale.
+/// Resolve the destination (see `resolve_target`), then convert.
 async fn convert_prepared(
     engine: &SqliteRawEngine,
     row: &TrackRow,
@@ -683,20 +837,20 @@ async fn convert_prepared(
     prefs: &ConvertPrefs,
     cancel: &mut BatchCancel,
     emit_progress: &(dyn Fn(Option<u8>) + Sync),
+    claimed: &mut HashSet<PathBuf>,
 ) -> anyhow::Result<Converted> {
     let source = PathBuf::from(&row.file_path);
-    let target = target_path(&source, format, prefs);
-    if prefs.overwrite
-        && crate::library::ingest::track_id_for_path(engine, &target)
-            .await?
-            .is_some()
-    {
-        anyhow::bail!(
-            "{} is a library track's file; turn off Overwrite or choose another output folder",
-            target.display()
-        );
+    if !source.exists() {
+        anyhow::bail!("source file is missing: {}", source.display());
     }
-    convert_one(row, &target, format, prefs, cancel, emit_progress).await
+    let dest = resolve_target(engine, &source, format, prefs, claimed).await?;
+    match convert_one(row, &dest.path, format, prefs, cancel, emit_progress).await? {
+        Converted::File { path, .. } => Ok(Converted::File {
+            path,
+            refresh_row: dest.refresh_row,
+        }),
+        cancelled => Ok(cancelled),
+    }
 }
 
 async fn convert_one(
@@ -712,7 +866,9 @@ async fn convert_one(
         anyhow::bail!("source file is missing: {}", source.display());
     }
     if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| anyhow::anyhow!("could not create {}: {e}", parent.display()))?;
     }
     // Converting a file onto itself would truncate the input mid-read.
     if path::same_file(&source, target) {
@@ -720,18 +876,35 @@ async fn convert_one(
     }
     let temp = temp_path(target);
 
-    let mut policy = cover_policy(&source);
+    // lofty reads the whole tag block synchronously; keep it off the
+    // shared runtime like the ingest probe.
+    let mut policy = tokio::task::spawn_blocking({
+        let source = source.clone();
+        move || cover_policy(&source)
+    })
+    .await?;
+    let mut first_failure: Option<String> = None;
     let outcome = loop {
         let args = build_args(&source, &temp, format, prefs, policy);
         match run_ffmpeg(&args, row.duration_ms, cancel, emit_progress).await? {
-            // The picture, not the audio, is what the muxer choked on
-            // more often than not — one more go without it.
+            // Only a source that actually has a picture gets a second
+            // encode: with one present, the picture is what the muxer
+            // chokes on far more often than the audio.
             Encode::Failed(detail) if policy != CoverPolicy::Drop => {
                 log::warn!(
                     "convert of {} failed with cover art ({detail}); retrying without it",
                     source.display()
                 );
+                first_failure = Some(detail);
                 policy = CoverPolicy::Drop;
+            }
+            Encode::Failed(detail) => {
+                break Encode::Failed(match first_failure {
+                    Some(first) if first != detail => {
+                        format!("{first}; without cover art: {detail}")
+                    }
+                    _ => detail,
+                })
             }
             other => break other,
         }
@@ -756,8 +929,14 @@ async fn convert_one(
                     target.display()
                 );
             }
-            tokio::fs::rename(&temp, target).await?;
-            Ok(Converted::File(target.to_path_buf()))
+            if let Err(e) = tokio::fs::rename(&temp, target).await {
+                let _ = tokio::fs::remove_file(&temp).await;
+                anyhow::bail!("could not move the result to {}: {e}", target.display());
+            }
+            Ok(Converted::File {
+                path: target.to_path_buf(),
+                refresh_row: None,
+            })
         }
     }
 }
@@ -938,11 +1117,48 @@ mod tests {
     }
 
     #[test]
+    fn flac_32_bit_states_the_depth_and_opens_the_experimental_gate() {
+        let prefs = ConvertPrefs {
+            flac: FlacPrefs {
+                bit_depth: Some(32),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let args = args_of(ConvertFormat::Flac, &prefs);
+        assert_eq!(pair(&args, "-sample_fmt").as_deref(), Some("s32"));
+        assert_eq!(pair(&args, "-bits_per_raw_sample").as_deref(), Some("32"));
+        assert_eq!(pair(&args, "-strict").as_deref(), Some("experimental"));
+    }
+
+    #[test]
+    fn output_dir_is_trimmed_expanded_and_must_be_absolute() {
+        let with = |dir: &str| {
+            let raw = serde_json::json!({ "output_dir": dir });
+            serde_json::from_value::<ConvertPrefs>(raw)
+                .unwrap()
+                .output_dir
+        };
+        assert_eq!(with("  /exports "), Some("/exports".into()));
+        assert_eq!(with("   "), None);
+        assert_eq!(with("relative/dir"), None);
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(
+            with("~/Converted"),
+            Some(home.join("Converted").display().to_string())
+        );
+        assert_eq!(with("~"), Some(home.display().to_string()));
+    }
+
+    #[test]
     fn m4a_defaults_to_lossless_alac() {
         let args = args_of(ConvertFormat::M4a, &ConvertPrefs::default());
         assert_eq!(pair(&args, "-c:a").as_deref(), Some("alac"));
         assert!(!args.iter().any(|a| a == "-b:a"));
-        assert_eq!(pair(&args, "-movflags").as_deref(), Some("+faststart"));
+        assert_eq!(
+            pair(&args, "-movflags").as_deref(),
+            Some("+faststart+use_metadata_tags")
+        );
         assert_eq!(pair(&args, "-f").as_deref(), Some("ipod"));
     }
 
@@ -1070,7 +1286,8 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let src = make_source(dir.path());
-        assert_eq!(cover_policy(&src), CoverPolicy::Copy);
+        // Nothing to carry: no picture map at all, and no retry either.
+        assert_eq!(cover_policy(&src), CoverPolicy::Drop);
 
         attach_pictures(&src, &[MimeType::Png]);
         assert_eq!(cover_policy(&src), CoverPolicy::Copy);
@@ -1221,6 +1438,14 @@ mod tests {
         src
     }
 
+    /// The name `resolve_target` would pick with nothing else in the way:
+    /// the ideal, stepped past whatever is on disk. Tests that convert
+    /// the tone to its own format need this or they hit the same-file
+    /// guard.
+    fn fresh_target(src: &Path, format: ConvertFormat, prefs: &ConvertPrefs) -> PathBuf {
+        path::resolve_collision(&target_path(src, format, prefs))
+    }
+
     /// A batch (generation 1) that nobody has cancelled. The sender is
     /// leaked on purpose: dropping it would read as a teardown-cancel.
     fn live_cancel() -> BatchCancel {
@@ -1283,7 +1508,7 @@ mod tests {
         let mut cancel = live_cancel();
 
         let prefs = ConvertPrefs::default();
-        let target = target_path(&src, ConvertFormat::Flac, &prefs);
+        let target = fresh_target(&src, ConvertFormat::Flac, &prefs);
         let out = convert_one(
             &row_for(&src, 1000),
             &target,
@@ -1295,7 +1520,7 @@ mod tests {
         .await
         .unwrap();
 
-        let Converted::File(path) = out else {
+        let Converted::File { path, .. } = out else {
             panic!("expected a converted file");
         };
         assert!(path.exists(), "{} was not written", path.display());
@@ -1322,7 +1547,7 @@ mod tests {
             let prefs = ConvertPrefs::default();
             let out = convert_one(
                 &row_for(&src, 1000),
-                &target_path(&src, format, &prefs),
+                &fresh_target(&src, format, &prefs),
                 format,
                 &prefs,
                 &mut cancel,
@@ -1330,7 +1555,7 @@ mod tests {
             )
             .await
             .unwrap_or_else(|e| panic!("{format:?} conversion failed: {e}"));
-            let Converted::File(path) = out else {
+            let Converted::File { path, .. } = out else {
                 panic!("expected a converted file");
             };
             assert!(path.exists(), "{} was not written", path.display());
@@ -1399,7 +1624,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(matches!(out, Converted::File(_)));
+        assert!(matches!(out, Converted::File { .. }));
         assert!(target.exists());
     }
 
@@ -1426,7 +1651,22 @@ mod tests {
         let before = std::fs::metadata(&other).unwrap().len();
         let tmp_db = tempfile::NamedTempFile::new().unwrap();
         let db = crate::db::client::Db::open(tmp_db.path()).await.unwrap();
-        crate::library::ingest::probe_and_add(&db.engine, &other)
+        let id = crate::library::ingest::probe_and_add(&db.engine, &other)
+            .await
+            .unwrap();
+        // The row's managed copy lives elsewhere; `other` is what it was
+        // copied from. Overwriting it would leave the copy stale.
+        db.engine
+            .raw_sql_execute(
+                "UPDATE tracks SET file_path = ?, original_path = ? WHERE id = ?",
+                &[
+                    prax_query::filter::FilterValue::String("/managed/tone.m4a".into()),
+                    prax_query::filter::FilterValue::String(
+                        other.canonicalize().unwrap().display().to_string(),
+                    ),
+                    prax_query::filter::FilterValue::Int(id),
+                ],
+            )
             .await
             .unwrap();
 
@@ -1435,6 +1675,7 @@ mod tests {
             ..Default::default()
         };
         let mut cancel = live_cancel();
+        let mut claimed = HashSet::new();
         let err = convert_prepared(
             &db.engine,
             &row_for(&src, 1000),
@@ -1442,6 +1683,7 @@ mod tests {
             &prefs,
             &mut cancel,
             &|_| {},
+            &mut claimed,
         )
         .await
         .unwrap_err();
@@ -1467,7 +1709,7 @@ mod tests {
         let mut cancel = BatchCancel::new(watch::channel(1u64).1, 1);
 
         let prefs = ConvertPrefs::default();
-        let target = target_path(&src, ConvertFormat::Flac, &prefs);
+        let target = fresh_target(&src, ConvertFormat::Flac, &prefs);
         let out = convert_one(
             &row_for(&src, 1000),
             &target,
@@ -1502,23 +1744,135 @@ mod tests {
         assert!(err.to_string().contains("source file is missing"), "{err}");
     }
 
-    #[test]
-    fn overwrite_off_never_reuses_an_existing_name() {
+    #[tokio::test]
+    async fn resolve_target_skips_names_taken_on_disk_in_the_db_or_in_this_batch() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("song.wav");
-        std::fs::write(&source, b"x").unwrap();
-        std::fs::write(dir.path().join("song.flac"), b"x").unwrap();
+        let src = make_source(dir.path());
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = crate::db::client::Db::open(tmp_db.path()).await.unwrap();
+
+        // "tone.m4a" is taken on disk; "tone (2).m4a" by a row whose file
+        // is gone — the app keeps such rows, and file_path is UNIQUE.
+        std::fs::write(dir.path().join("tone.m4a"), b"x").unwrap();
+        let ghost = dir.path().join("tone (2).m4a");
+        std::fs::copy(&src, dir.path().join("ghost.flac")).unwrap();
+        let id = crate::library::ingest::probe_and_add(&db.engine, &dir.path().join("ghost.flac"))
+            .await
+            .unwrap();
+        db.engine
+            .raw_sql_execute(
+                "UPDATE tracks SET file_path = ? WHERE id = ?",
+                &[
+                    prax_query::filter::FilterValue::String(ghost.display().to_string()),
+                    prax_query::filter::FilterValue::Int(id),
+                ],
+            )
+            .await
+            .unwrap();
 
         let prefs = ConvertPrefs::default();
-        let t = target_path(&source, ConvertFormat::Flac, &prefs);
-        assert_eq!(t.file_name().unwrap(), "song (2).flac");
+        let mut claimed = HashSet::new();
+        let first = resolve_target(&db.engine, &src, ConvertFormat::M4a, &prefs, &mut claimed)
+            .await
+            .unwrap();
+        assert_eq!(first.path.file_name().unwrap(), "tone (3).m4a");
+        assert!(first.refresh_row.is_none());
 
-        let overwriting = ConvertPrefs {
+        // Same stem again in the same batch: the name just claimed is
+        // not free even though nothing is on disk yet.
+        let second = resolve_target(&db.engine, &src, ConvertFormat::M4a, &prefs, &mut claimed)
+            .await
+            .unwrap();
+        assert_eq!(second.path.file_name().unwrap(), "tone (4).m4a");
+    }
+
+    #[tokio::test]
+    async fn overwrite_dedupes_within_a_batch_and_canonicalises_the_folder() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = crate::db::client::Db::open(tmp_db.path()).await.unwrap();
+
+        // A `.` spelling of the folder must land in the same place.
+        let prefs = ConvertPrefs {
+            overwrite: true,
+            output_dir: Some(format!("{}/.", dir.path().display())),
+            ..Default::default()
+        };
+        let mut claimed = HashSet::new();
+        let first = resolve_target(&db.engine, &src, ConvertFormat::M4a, &prefs, &mut claimed)
+            .await
+            .unwrap();
+        assert_eq!(
+            first.path,
+            dir.path().canonicalize().unwrap().join("tone.m4a")
+        );
+        let second = resolve_target(&db.engine, &src, ConvertFormat::M4a, &prefs, &mut claimed)
+            .await
+            .unwrap();
+        assert_eq!(second.path.file_name().unwrap(), "tone (2).m4a");
+    }
+
+    #[tokio::test]
+    async fn overwrite_onto_its_own_previous_export_refreshes_that_row() {
+        if !ffmpeg_available() {
+            eprintln!("skipping: no ffmpeg on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_source(dir.path());
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = crate::db::client::Db::open(tmp_db.path()).await.unwrap();
+        let prefs = ConvertPrefs {
             overwrite: true,
             ..Default::default()
         };
-        let t = target_path(&source, ConvertFormat::Flac, &overwriting);
-        assert_eq!(t.file_name().unwrap(), "song.flac");
+
+        // First export, added in place.
+        let mut claimed = HashSet::new();
+        let mut cancel = live_cancel();
+        let out = convert_prepared(
+            &db.engine,
+            &row_for(&src, 1000),
+            ConvertFormat::M4a,
+            &prefs,
+            &mut cancel,
+            &|_| {},
+            &mut claimed,
+        )
+        .await
+        .unwrap();
+        let Converted::File { path, refresh_row } = out else {
+            panic!("expected a file");
+        };
+        assert!(refresh_row.is_none());
+        let id = crate::library::ingest::probe_and_add(&db.engine, &path)
+            .await
+            .unwrap();
+
+        // Second export onto the same name: allowed, and it names the
+        // row to re-probe rather than refusing.
+        let mut claimed = HashSet::new();
+        let out = convert_prepared(
+            &db.engine,
+            &row_for(&src, 1000),
+            ConvertFormat::M4a,
+            &prefs,
+            &mut cancel,
+            &|_| {},
+            &mut claimed,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(out, Converted::File { refresh_row: Some(r), .. } if r == id));
     }
 
     #[test]
