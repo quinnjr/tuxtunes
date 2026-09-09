@@ -23,32 +23,38 @@ class HostComponent {
   readonly value = signal<number | null>(96_000);
 }
 
-function setup() {
+async function setup() {
   TestBed.configureTestingModule({ imports: [HostComponent] });
   const fixture = TestBed.createComponent(HostComponent);
+  fixture.detectChanges();
+  // ngModel writes its value on a microtask.
+  await fixture.whenStable();
   fixture.detectChanges();
   const el = fixture.nativeElement as HTMLElement;
   return { fixture, host: fixture.componentInstance, select: el.querySelector('select')! };
 }
 
+function pick(select: HTMLSelectElement, index: number): void {
+  select.selectedIndex = index;
+  select.dispatchEvent(new Event('change'));
+}
+
 describe('ChoiceSelectComponent', () => {
-  it('selects the option matching the bound value', () => {
-    const { select } = setup();
-    expect(select.value).toBe('96000');
+  it('selects the option matching the bound value', async () => {
+    const { select } = await setup();
+    expect(select.selectedOptions[0]?.textContent).toContain('96 kHz');
   });
 
-  it('emits a number for a numeric option', () => {
-    const { fixture, host, select } = setup();
-    select.value = '44100';
-    select.dispatchEvent(new Event('change'));
+  it('emits the typed value of the chosen option', async () => {
+    const { fixture, host, select } = await setup();
+    pick(select, 1);
     fixture.detectChanges();
     expect(host.value()).toBe(44_100);
   });
 
-  it('maps the empty option back to null ("same as source")', () => {
-    const { fixture, host, select } = setup();
-    select.value = '';
-    select.dispatchEvent(new Event('change'));
+  it('carries null through as a real value, not a string', async () => {
+    const { fixture, host, select } = await setup();
+    pick(select, 0);
     fixture.detectChanges();
     expect(host.value()).toBeNull();
     expect(select.selectedOptions[0]?.textContent).toContain('Same as source');

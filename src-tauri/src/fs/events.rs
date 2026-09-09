@@ -8,6 +8,10 @@ use serde::Serialize;
 /// the constant so consumers don't have to be rewired when it lands.
 /// Remove or wire up once a batched/throttled progress design exists
 /// for bulk imports.
+/// Rows appeared or changed outside the UI's own actions: the DB watcher
+/// fires it on any foreign commit, and workers that insert rows nudge it
+/// directly so the list does not wait out the poll interval.
+pub const LIBRARY_CHANGED: &str = "library:external-change";
 pub const INGEST_PROGRESS: &str = "fs:ingest-progress";
 pub const INGEST_COMPLETE: &str = "fs:ingest-complete";
 pub const INGEST_FAILED: &str = "fs:ingest-failed";

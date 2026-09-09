@@ -67,17 +67,12 @@
       only when size matters more than fidelity.
     </p>
 
-    <div class="mac-segmented w-fit">
-      @for (c of codecs; track c.value) {
-        <button
-          type="button"
-          (click)="patchM4a({ codec: c.value })"
-          [class]="'mac-segment ' + (draft().m4a.codec === c.value ? 'selected' : '')"
-        >
-          {{ c.label }}
-        </button>
-      }
-    </div>
+    <app-choice-select
+      label="Codec"
+      [choices]="codecs"
+      [value]="draft().m4a.codec"
+      (changed)="patchM4a({ codec: $event })"
+    />
 
     @if (draft().m4a.codec === 'alac') {
       <app-choice-select
@@ -116,7 +111,7 @@
           label="Bitrate"
           [choices]="aacBitrates"
           [value]="draft().m4a.bitrate_kbps"
-          (changed)="patchM4a({ bitrate_kbps: $event ?? 256 })"
+          (changed)="patchM4a({ bitrate_kbps: $event })"
         />
       }
     }

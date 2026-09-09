@@ -162,7 +162,7 @@ pub fn run() {
                                 last = v;
                                 if changed {
                                     if let Err(e) =
-                                        app_for_watch.emit("library:external-change", ())
+                                        app_for_watch.emit(fs::events::LIBRARY_CHANGED, ())
                                     {
                                         log::warn!("db watch: emit failed: {e}");
                                     }

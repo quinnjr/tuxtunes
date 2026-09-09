@@ -20,8 +20,7 @@ pub async fn get_convert_prefs(state: tauri::State<'_, AppState>) -> Result<Conv
         preferences::get::<ConvertPrefs>(&state.db.engine, KEY_CONVERT_PREFS)
             .await
             .map_err(|e| e.to_string())?
-            .unwrap_or_default()
-            .sanitized(),
+            .unwrap_or_default(),
     )
 }
 
@@ -30,12 +29,11 @@ pub async fn set_convert_prefs(
     state: tauri::State<'_, AppState>,
     prefs: ConvertPrefs,
 ) -> Result<ConvertPrefs, String> {
-    let prefs = prefs.sanitized();
     preferences::set(&state.db.engine, KEY_CONVERT_PREFS, &prefs)
         .await
         .map_err(|e| e.to_string())?;
-    // Hand the clamped values back so the UI shows what was actually
-    // stored rather than what it optimistically sent.
+    // Deserialization clamped every knob; hand the result back so the
+    // UI shows what was actually stored rather than what it sent.
     Ok(prefs)
 }
 
@@ -68,12 +66,11 @@ pub async fn convert_tracks(
     // Before the await: the UI may show Cancel as soon as it has asked.
     let generation = state.fs.reserve_convert_generation();
     let prefs = match args.prefs {
-        Some(p) => p.sanitized(),
+        Some(p) => p,
         None => preferences::get::<ConvertPrefs>(&state.db.engine, KEY_CONVERT_PREFS)
             .await
             .map_err(|e| e.to_string())?
-            .unwrap_or_default()
-            .sanitized(),
+            .unwrap_or_default(),
     };
     state
         .fs

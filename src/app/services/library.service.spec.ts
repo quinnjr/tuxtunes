@@ -459,24 +459,6 @@ describe('LibraryService playlists', () => {
     void svc;
   });
 
-  it('a convert-complete that added tracks reloads the list; one that added none does not', async () => {
-    const { svc, invoke, emit } = build(async () => []);
-    await Promise.resolve(); // listener registration settles
-    invoke.mockClear();
-
-    // Nothing was added to the library — the rows on screen are still
-    // correct, so a reload would be pure churn.
-    emit('fs:convert-complete', { added_to_library: 0 });
-    await new Promise((r) => setTimeout(r));
-    expect(invoke).not.toHaveBeenCalledWith('list_tracks', expect.anything());
-
-    emit('fs:convert-complete', { added_to_library: 3 });
-    await new Promise((r) => setTimeout(r));
-    expect(invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
-    expect(invoke).toHaveBeenCalledWith('get_library_stats');
-    void svc;
-  });
-
   it('an external-change event reloads the open playlist instead of the library query', async () => {
     const { svc, invoke, emit } = build(async (cmd) => (cmd === 'open_playlist' ? raws : []));
     await svc.openPlaylist(9);

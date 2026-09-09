@@ -14,7 +14,7 @@
 use crate::db::tracks::{self, TrackRow};
 use crate::fs::events::{
     ConvertComplete, ConvertFailed, ConvertProgress, CONVERT_COMPLETE, CONVERT_FAILED,
-    CONVERT_PROGRESS,
+    CONVERT_PROGRESS, LIBRARY_CHANGED,
 };
 use crate::fs::path;
 use lofty::file::TaggedFileExt;
@@ -128,22 +128,52 @@ impl Default for M4aPrefs {
     }
 }
 
+/// Every knob is already clamped into the range its encoder accepts:
+/// deserialization goes through [`RawConvertPrefs`], so no value that
+/// arrived from the webview or the preferences table can exist
+/// unclamped. An out-of-range `-compression_level` would make ffmpeg
+/// exit non-zero for a reason the user cannot see.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "RawConvertPrefs")]
 pub struct ConvertPrefs {
-    #[serde(default)]
     pub flac: FlacPrefs,
-    #[serde(default)]
     pub m4a: M4aPrefs,
     /// Where converted files land. `None` writes beside the source.
-    #[serde(default)]
     pub output_dir: Option<String>,
     /// Replace an existing output instead of writing ` (2)` beside it.
-    #[serde(default)]
     pub overwrite: bool,
     /// Add each converted file to the library as its own track, in
     /// place — it is not copied under the library root.
-    #[serde(default = "default_true")]
     pub add_to_library: bool,
+}
+
+/// The wire shape of [`ConvertPrefs`]: same fields, values as sent.
+/// Missing fields (a blob stored before a knob existed) take defaults.
+#[derive(Deserialize)]
+struct RawConvertPrefs {
+    #[serde(default)]
+    flac: FlacPrefs,
+    #[serde(default)]
+    m4a: M4aPrefs,
+    #[serde(default)]
+    output_dir: Option<String>,
+    #[serde(default)]
+    overwrite: bool,
+    #[serde(default = "default_true")]
+    add_to_library: bool,
+}
+
+impl From<RawConvertPrefs> for ConvertPrefs {
+    fn from(raw: RawConvertPrefs) -> Self {
+        Self {
+            flac: raw.flac,
+            m4a: raw.m4a,
+            output_dir: raw.output_dir,
+            overwrite: raw.overwrite,
+            add_to_library: raw.add_to_library,
+        }
+        .sanitized()
+    }
 }
 
 fn default_true() -> bool {
@@ -164,10 +194,9 @@ impl Default for ConvertPrefs {
 
 impl ConvertPrefs {
     /// Clamp every knob into the range its encoder actually accepts.
-    /// The values arrive from the webview, so treat them as untrusted:
-    /// an out-of-range `-compression_level` makes ffmpeg exit non-zero
-    /// and the conversion fails for a reason the user cannot see.
-    pub fn sanitized(mut self) -> Self {
+    /// Private: every `ConvertPrefs` built from input already went
+    /// through this via `From<RawConvertPrefs>`.
+    fn sanitized(mut self) -> Self {
         self.flac.compression_level = self.flac.compression_level.min(12);
         self.flac.bit_depth = self.flac.bit_depth.map(clamp_lossless_depth);
         self.flac.sample_rate = self.flac.sample_rate.map(clamp_sample_rate);
@@ -615,6 +644,11 @@ async fn convert_batch<R: Runtime>(
         }
     }
 
+    if added > 0 {
+        // New rows exist that no UI action inserted; the DB watcher would
+        // notice within its poll interval, this just saves the wait.
+        let _ = app.emit(LIBRARY_CHANGED, ());
+    }
     let _ = app.emit(
         CONVERT_COMPLETE,
         ConvertComplete {
@@ -1517,6 +1551,22 @@ mod tests {
             percent_from_progress_line(&format!("out_time_us={}", i64::MAX), 60_000),
             Some(100)
         );
+    }
+
+    #[test]
+    fn out_of_range_values_are_clamped_on_the_way_in() {
+        // Whatever the webview or an old preferences blob sends, the
+        // value that exists in the program is already in range.
+        let wire = serde_json::json!({
+            "flac": { "compression_level": 99, "sample_rate": 1, "bit_depth": 20 },
+            "m4a": { "codec": "aac", "sample_rate": 192000, "bitrate_kbps": 4000 }
+        });
+        let prefs: ConvertPrefs = serde_json::from_value(wire).unwrap();
+        assert_eq!(prefs.flac.compression_level, 12);
+        assert_eq!(prefs.flac.sample_rate, Some(8_000));
+        assert_eq!(prefs.flac.bit_depth, Some(24));
+        assert_eq!(prefs.m4a.sample_rate, Some(96_000));
+        assert_eq!(prefs.m4a.bitrate_kbps, 512);
     }
 
     #[test]
