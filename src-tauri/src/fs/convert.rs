@@ -1493,6 +1493,9 @@ mod tests {
             skip_count: 0,
             import_status: "ok".into(),
             artwork_path: None,
+            rating: 0,
+            album_rating: 0,
+            date_added_unix: None,
         }
     }
 
