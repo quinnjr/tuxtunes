@@ -1,7 +1,15 @@
 # Maintainer: Joseph R. Quinn <quinn.josephr@gmail.com>
 pkgname=tuxtunes-git
-pkgver=0.1.0.r208.g570aabe
+# Set by pkgver() below; this value only matters before the first build.
+pkgver=0.1.0.r1.g13b0860
 pkgrel=1
+# pkgver() used to count every commit ($ver.r<rev-list count>), which put
+# the last untagged build at 0.1.0.r278. Now that the repo is tagged, it
+# counts commits since the tag instead, so v0.1.0 restarts at r1 — a
+# lower version than what is already installed. The epoch keeps upgrades
+# moving forwards across that one-time reset; it can go back to 0 (or be
+# dropped) if the package is ever rebuilt from scratch.
+epoch=1
 pkgdesc="Music library manager and player (Tauri + Angular)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/quinnjr/tuxtunes"
@@ -15,6 +23,9 @@ depends=(
   'dbus'
   'openssl'
   'xdg-utils'
+)
+optdepends=(
+  'ffmpeg: convert library files to FLAC or M4A'
 )
 makedepends=(
   'git'
@@ -45,11 +56,23 @@ _pnpm() {
   fi
 }
 
+# <last tag without the v>.r<commits since it>.g<short sha>, e.g.
+# 0.1.0.r1.g13b0860. --long keeps the r/g suffix even when HEAD is
+# exactly on a tag, so a release build sorts consistently with the
+# builds either side of it rather than dropping to a bare 0.1.0.
+#
+# Falls back to the old count-every-commit form when no tag is reachable
+# — a shallow clone, or a fork that has never tagged — so the build does
+# not simply fail there.
 pkgver() {
   cd "$pkgname"
-  local ver
-  ver=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
-  printf '%s.r%s.g%s' "$ver" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  if git describe --tags --long >/dev/null 2>&1; then
+    git describe --tags --long | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    local ver
+    ver=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)
+    printf '%s.r%s.g%s' "$ver" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  fi
 }
 
 prepare() {

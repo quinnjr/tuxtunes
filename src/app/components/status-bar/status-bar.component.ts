@@ -1,22 +1,25 @@
 import { Component, computed, inject, ChangeDetectionStrategy } from '@angular/core';
+import { ConvertService } from '../../services/convert.service';
 import { LibraryService } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { UiService } from '../../services/ui.service';
 import { formatByteSize, formatTotalDuration } from '../../utils/format';
+import { ConvertActivityComponent } from '../convert-activity/convert-activity.component';
 
 @Component({
   selector: 'app-status-bar',
-  imports: [],
+  imports: [ConvertActivityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './status-bar.component.html',
 })
 export class StatusBarComponent {
+  protected readonly convert = inject(ConvertService);
   protected readonly library = inject(LibraryService);
   protected readonly sync = inject(SyncService);
   protected readonly ui = inject(UiService);
 
   protected readonly summary = computed(this.#computeSummary.bind(this));
-  protected readonly syncLabel = computed(this.#computeSyncLabel.bind(this));
+  protected readonly activityLabel = computed(this.#computeActivityLabel.bind(this));
 
   #computeSummary() {
     const stats = this.library.stats();
@@ -29,7 +32,7 @@ export class StatusBarComponent {
     };
   }
 
-  #computeSyncLabel(): string | null {
+  #computeActivityLabel(): string | null {
     const state = this.sync.runState();
     if (state === 'running') return 'Syncing…';
     if (state === 'error') return 'Sync error';

@@ -13,9 +13,18 @@ type InvokeMock = (cmd: string, args?: Record<string, unknown>) => Promise<unkno
 function build(invoke: InvokeMock): {
   svc: PreferencesService;
   invoke: ReturnType<typeof vi.fn>;
+  emit: (event: string, payload?: unknown) => void;
 } {
   const invokeSpy = vi.fn(invoke as never);
-  const stubTauri = { invoke: invokeSpy } as unknown as TauriService;
+  const listeners = new Map<string, ((p: unknown) => void)[]>();
+  const listen = vi.fn(async (event: string, h: (p: unknown) => void) => {
+    listeners.set(event, [...(listeners.get(event) ?? []), h]);
+    return () => undefined;
+  });
+  const emit = (event: string, payload: unknown = undefined) => {
+    for (const h of listeners.get(event) ?? []) h(payload);
+  };
+  const stubTauri = { invoke: invokeSpy, listen } as unknown as TauriService;
   const injector = Injector.create({
     providers: [
       { provide: TauriService, useValue: stubTauri },
@@ -23,7 +32,7 @@ function build(invoke: InvokeMock): {
     ],
   });
   const svc = runInInjectionContext(injector, () => injector.get(PreferencesService));
-  return { svc, invoke: invokeSpy };
+  return { svc, invoke: invokeSpy, emit };
 }
 
 describe('PreferencesService', () => {
@@ -95,5 +104,45 @@ describe('negative cases', () => {
     });
     await expect(svc.setKeepOrganized(false)).rejects.toThrow('write failed');
     expect(svc.keepOrganized()).toBe(true);
+  });
+
+  it('consolidateLibrary() queues the pass and tracks it through to the summary', async () => {
+    const { svc, invoke, emit } = build(async () => undefined);
+    await Promise.resolve(); // listener registration settles
+
+    expect(svc.consolidateProgress()).toBeNull();
+
+    await svc.consolidateLibrary();
+    expect(invoke).toHaveBeenCalledWith('consolidate_library');
+    // Queued, not finished: the pass reports through events.
+    expect(svc.consolidateProgress()).toEqual({ current: 0, total: 0 });
+
+    emit('fs:consolidate-progress', { current: 25, total: 100 });
+    expect(svc.consolidateProgress()).toEqual({ current: 25, total: 100 });
+
+    const summary = { total: 100, moved: 40, copied: 10, in_place: 49, failed: 1 };
+    emit('fs:consolidate-complete', summary);
+    expect(svc.consolidateProgress()).toBeNull();
+    expect(svc.consolidateResult()).toEqual(summary);
+  });
+
+  it('consolidateLibrary() clears the running state when the command rejects', async () => {
+    const { svc } = build(async () => {
+      throw new Error('worker has exited');
+    });
+    await Promise.resolve();
+
+    await expect(svc.consolidateLibrary()).rejects.toThrow('worker has exited');
+    expect(svc.consolidateProgress()).toBeNull();
+  });
+
+  it('a stale result is cleared when a new pass starts', async () => {
+    const { svc, emit } = build(async () => undefined);
+    await Promise.resolve();
+    emit('fs:consolidate-complete', { total: 1, moved: 1, copied: 0, in_place: 0, failed: 0 });
+    expect(svc.consolidateResult()).not.toBeNull();
+
+    await svc.consolidateLibrary();
+    expect(svc.consolidateResult()).toBeNull();
   });
 });

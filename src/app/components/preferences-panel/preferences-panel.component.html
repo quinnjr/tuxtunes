@@ -61,6 +61,57 @@
         Keep library organized (rename on metadata edit)
       </label>
 
+      <div class="hairline-t flex flex-col gap-2 pt-3 text-body">
+        <span class="text-text-secondary">Organize existing files</span>
+        <p class="text-caption text-text-muted">
+          Brings every track already in the library to the path above. Files inside the library
+          folder are moved; files outside it are copied in and your originals are left alone.
+        </p>
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            (click)="reorganize()"
+            [disabled]="reorganizeStatus() !== null"
+            class="mac-btn h-8 px-3 bg-bg-elevated disabled:opacity-50"
+          >
+            Reorganize now
+          </button>
+          @if (reorganizeStatus(); as status) {
+            <span class="text-footnote text-text-muted">{{ status }}</span>
+          }
+          @if (reorganizeSummary(); as summary) {
+            <span class="text-footnote text-accent">{{ summary }}</span>
+          }
+        </div>
+      </div>
+
+      <div class="hairline-t flex flex-col gap-2 pt-3 text-body">
+        <span class="text-text-secondary">Reclaim space</span>
+        <p class="text-caption text-text-muted">
+          Files copied into the library folder left their originals where they were. Each original
+          is checked against its copy byte for byte, and only an exact match is moved to the trash.
+        </p>
+        @if (reclaimOffer(); as offer) {
+          <span class="text-caption text-text-muted">{{ offer }}</span>
+        }
+        <div class="flex items-center gap-3">
+          <button
+            type="button"
+            (click)="reclaim()"
+            [disabled]="reclaimStatus() !== null || (prefs.reclaimEstimate()?.files ?? 0) === 0"
+            class="mac-btn h-8 px-3 bg-bg-elevated disabled:opacity-50"
+          >
+            Reclaim now
+          </button>
+          @if (reclaimStatus(); as status) {
+            <span class="text-footnote text-text-muted">{{ status }}</span>
+          }
+          @if (reclaimSummary(); as summary) {
+            <span class="text-footnote text-accent">{{ summary }}</span>
+          }
+        </div>
+      </div>
+
       <footer class="hairline-t mt-2 flex justify-end gap-2 pt-3">
         <button type="button" (click)="hide()" class="mac-btn h-8 px-4 bg-bg-elevated">
           Cancel

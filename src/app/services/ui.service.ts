@@ -1,4 +1,5 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed, signal } from '@angular/core';
+import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { toErrorMessage } from '../utils/errors';
 
 export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
@@ -110,6 +111,24 @@ export class UiService {
   readonly trackInfo = signal<{ trackId: number } | null>(null);
 
   /**
+   * Whether any modal owns the screen. Keyboard shortcuts bound on
+   * document check this so a list-level key (Delete, ⌘A) does not fire
+   * behind an open dialog.
+   */
+  readonly anyModalOpen = computed(this.#computeAnyModalOpen.bind(this));
+
+  #computeAnyModalOpen(): boolean {
+    return (
+      this.importWizardOpen() ||
+      this.preferencesOpen() ||
+      this.smartEditor() !== null ||
+      this.namePrompt() !== null ||
+      this.confirm() !== null ||
+      this.trackInfo() !== null
+    );
+  }
+
+  /**
    * Most recent user-facing failure (a backend command rejected, a
    * file could not be played, …). Shown by the status bar and cleared
    * automatically after a few seconds or on the next `clearError()`.
@@ -139,6 +158,12 @@ export class UiService {
       this.reportError(error);
       return null;
     }
+  }
+
+  /** Native folder picker; null when cancelled or when the dialog failed. */
+  async pickDirectory(): Promise<string | null> {
+    const picked = await this.guard(dialogOpen({ directory: true, multiple: false }));
+    return typeof picked === 'string' ? picked : null;
   }
 
   private setError(message: string | null): void {

@@ -127,6 +127,18 @@ export class WindowService {
     await this.win?.close();
   }
 
+  /**
+   * End the app. Goes through the backend rather than closing the
+   * window so playback is stopped and what it owes the database is
+   * written first — the same shutdown the tray's Quit item runs.
+   *
+   * Inert outside the Tauri webview, like every other control here.
+   */
+  async quit(): Promise<void> {
+    if (!this.available) return;
+    await this.tauri.invoke<void>('quit_app');
+  }
+
   #computeCustomControls(): boolean {
     return this.available && this.platform() !== 'macos';
   }

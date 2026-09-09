@@ -5,6 +5,7 @@
 use crate::db::tracks::MetadataEdit;
 use lofty::config::WriteOptions;
 use lofty::file::TaggedFileExt;
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::tag::{Accessor, ItemKey, Tag, TagExt};
 use std::path::Path;
 
@@ -50,6 +51,77 @@ pub fn write_metadata(path: &Path, e: &MetadataEdit<'_>) -> Result<(), TagsError
 
     tag.save_to_path(path, WriteOptions::default())
         .map_err(|err| TagsError::Write(anyhow::Error::from(err)))
+}
+
+/// Embed `image` as the file's front cover, replacing any picture
+/// already there. `image_path` is read for its bytes; its extension
+/// decides the MIME type recorded in the tag.
+///
+/// A cover TuxTunes resolved (from a sidecar, or from a sibling track
+/// on the same album) lives only in its own cache until this puts it in
+/// the file, where every other player can see it.
+pub fn write_cover(path: &Path, image_path: &Path) -> Result<(), TagsError> {
+    if !path.exists() {
+        return Err(TagsError::NotFound(path.display().to_string()));
+    }
+    let data = std::fs::read(image_path).map_err(|e| TagsError::Write(anyhow::Error::from(e)))?;
+    let mime = mime_for(image_path);
+
+    let tagged =
+        lofty::read_from_path(path).map_err(|err| TagsError::Write(anyhow::Error::from(err)))?;
+    let mut tag = match tagged.primary_tag() {
+        Some(t) => t.clone(),
+        None => Tag::new(tagged.primary_tag_type()),
+    };
+
+    // One front cover, not a pile of them: drop what is there before
+    // inserting, or a repeated write-back would stack duplicates.
+    while tag
+        .pictures()
+        .iter()
+        .any(|p| p.pic_type() == PictureType::CoverFront)
+    {
+        let Some(i) = tag
+            .pictures()
+            .iter()
+            .position(|p| p.pic_type() == PictureType::CoverFront)
+        else {
+            break;
+        };
+        tag.remove_picture(i);
+    }
+
+    tag.push_picture(Picture::new_unchecked(
+        PictureType::CoverFront,
+        Some(mime),
+        None,
+        data,
+    ));
+
+    tag.save_to_path(path, WriteOptions::default())
+        .map_err(|err| TagsError::Write(anyhow::Error::from(err)))
+}
+
+/// Whether `path` already carries an embedded picture.
+pub fn has_embedded_cover(path: &Path) -> bool {
+    crate::library::artwork::extract_embedded(path).is_some()
+}
+
+fn mime_for(image_path: &Path) -> MimeType {
+    match image_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => MimeType::Png,
+        Some("gif") => MimeType::Gif,
+        Some("bmp") => MimeType::Bmp,
+        // Lofty has no WebP variant; the raw type keeps the bytes
+        // readable to anything that sniffs the magic number.
+        Some("webp") => MimeType::Unknown("image/webp".to_string()),
+        _ => MimeType::Jpeg,
+    }
 }
 
 fn set_or_remove_text(tag: &mut Tag, key: ItemKey, value: Option<&str>) {
@@ -126,6 +198,62 @@ mod tests {
         let tag = tagged.primary_tag().unwrap();
         assert_eq!(tag.genre(), None);
         assert_eq!(tag.artist().as_deref(), Some("blink-182"));
+    }
+
+    /// Smallest valid PNG: an 8-bit 1x1 image.
+    const PNG_1PX: &[u8] = &[
+        0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R', 0,
+        0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89, 0, 0, 0, 0x0a, b'I', b'D',
+        b'A', b'T', 0x78, 0x9c, 0x63, 0, 1, 0, 0, 5, 0, 1, 0x0d, 0x0a, 0x2d, 0xb4, 0, 0, 0, 0,
+        b'I', b'E', b'N', b'D', 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn write_cover_embeds_a_front_cover_that_is_readable_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.wav");
+        write_minimal_wav(&file);
+        let art = dir.path().join("cover.png");
+        std::fs::write(&art, PNG_1PX).unwrap();
+
+        assert!(!has_embedded_cover(&file), "fixture starts with no picture");
+        write_cover(&file, &art).unwrap();
+
+        assert!(has_embedded_cover(&file));
+        let found = crate::library::artwork::extract_embedded(&file).unwrap();
+        assert_eq!(found.data, PNG_1PX);
+        assert_eq!(found.ext, "png");
+    }
+
+    #[test]
+    fn write_cover_replaces_rather_than_stacks_front_covers() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.wav");
+        write_minimal_wav(&file);
+        let art = dir.path().join("cover.png");
+        std::fs::write(&art, PNG_1PX).unwrap();
+
+        write_cover(&file, &art).unwrap();
+        write_cover(&file, &art).unwrap();
+
+        let tagged = lofty::read_from_path(&file).unwrap();
+        let fronts = tagged
+            .primary_tag()
+            .unwrap()
+            .pictures()
+            .iter()
+            .filter(|p| p.pic_type() == PictureType::CoverFront)
+            .count();
+        assert_eq!(fronts, 1, "a repeated write-back stacked duplicate covers");
+    }
+
+    #[test]
+    fn write_cover_reports_a_missing_audio_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let art = dir.path().join("cover.png");
+        std::fs::write(&art, PNG_1PX).unwrap();
+        let err = write_cover(Path::new("/nonexistent/x.wav"), &art).unwrap_err();
+        assert!(matches!(err, TagsError::NotFound(_)), "{err}");
     }
 
     #[test]

@@ -192,6 +192,7 @@ describe('WindowService', () => {
     await svc.toggleMaximize();
     await svc.toggleFullscreen();
     await svc.close();
+    await svc.quit();
     expect(internals.invoke).not.toHaveBeenCalled();
   });
 

@@ -1,10 +1,11 @@
-import { Component, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, HostListener, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import {
   faFileImport,
   faFolderPlus,
   faGear,
   faPlus,
+  faRightFromBracket,
   faWandMagicSparkles,
 } from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
@@ -37,6 +38,7 @@ export class MenuBarComponent {
   protected readonly faWand = faWandMagicSparkles;
   protected readonly faFileImport = faFileImport;
   protected readonly faGear = faGear;
+  protected readonly faExit = faRightFromBracket;
 
   /** Which top-level menu is open, if any. Null closes every dropdown. */
   protected readonly openMenu = signal<MenuId | null>(null);
@@ -49,14 +51,67 @@ export class MenuBarComponent {
     this.openMenu.set(null);
   }
 
+  /**
+   * Escape closes an open menu. Bound on document, not on the
+   * click-catcher: that div has no tabindex and is not an ancestor of
+   * the menu, so a keydown never reaches it — the same reason
+   * ContextMenuComponent binds this on the host.
+   */
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    this.close();
+  }
+
+  /**
+   * Ctrl+Q quits, the accelerator every Linux desktop uses. Suppressed
+   * while typing so it cannot fire from the search box.
+   */
+  @HostListener('document:keydown.control.q', ['$event'])
+  onQuitShortcut(event: Event): void {
+    const el = event.target as HTMLElement | null;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+      return;
+    }
+    event.preventDefault();
+    void this.exit();
+  }
+
   protected async addFile(): Promise<void> {
     this.close();
-    await this.ui.guard(this.library.addTrackFromPicker());
+    const summary = await this.ui.guard(this.library.addTracksFromPicker());
+    // null: the guard reported a failure, or the dialog was cancelled.
+    if (summary === null || summary === undefined) return;
+    this.reportSkipped(summary.failed, summary.added.length + summary.existing);
   }
 
   protected async addFolder(): Promise<void> {
     this.close();
-    await this.ui.guard(this.library.addFolderFromPicker());
+    const summary = await this.ui.guard(this.library.addFolderFromPicker());
+    if (summary === null || summary === undefined) return;
+    this.reportSkipped(summary.failed, summary.added + summary.skipped);
+  }
+
+  /**
+   * Say which files were skipped. Without this a selection of
+   * unreadable files closes the dialog and does nothing at all, which
+   * reads as a broken app.
+   */
+  private reportSkipped(failed: string[], handled: number): void {
+    if (failed.length === 0) return;
+    const [first] = failed;
+    const name = first.split('/').pop() ?? first;
+    const rest = failed.length - 1;
+    const tail = rest > 0 ? ` and ${rest} more` : '';
+    this.ui.lastError.set(
+      handled === 0
+        ? `Could not read ${name}${tail}.`
+        : `Added ${handled}; could not read ${name}${tail}.`,
+    );
+  }
+
+  protected async exit(): Promise<void> {
+    this.close();
+    await this.ui.guard(this.win.quit());
   }
 
   protected newSmartPlaylist(): void {

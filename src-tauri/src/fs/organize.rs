@@ -46,7 +46,7 @@ impl OrganizeWorker {
     }
 }
 
-async fn organize_one<R: Runtime>(
+pub(crate) async fn organize_one<R: Runtime>(
     engine: &SqliteRawEngine,
     app: &AppHandle<R>,
     track_id: i64,

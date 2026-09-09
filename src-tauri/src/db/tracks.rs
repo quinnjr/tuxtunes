@@ -162,13 +162,23 @@ pub async fn list(
 }
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
+    get_opt(engine, id)
+        .await?
+        .ok_or_else(|| TracksError::Query(anyhow::anyhow!("track {id} not found")))
+}
+
+/// Like [`get`], but a missing row is `Ok(None)` rather than an error,
+/// so callers can tell "gone" from "the database is unwell".
+pub async fn get_opt(engine: &SqliteRawEngine, id: i64) -> Result<Option<TrackRow>, TracksError> {
     let sql = format!("SELECT {TRACK_ROW_COLUMNS} FROM tracks WHERE id = ?");
     let params = vec![prax_query::filter::FilterValue::Int(id)];
-    let json_row = engine
-        .raw_sql_first(&sql, &params)
-        .await
-        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    let json_row = match engine.raw_sql_optional(&sql, &params).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(TracksError::Query(anyhow::Error::from(e))),
+    };
     serde_json::from_value(json_row.into_json())
+        .map(Some)
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
@@ -514,8 +524,18 @@ pub async fn delete_missing(
 }
 
 /// Update the path-related columns after a successful ingest. Sets
-/// `file_path`, `original_path`, `file_hash`, `artwork_path`; marks
-/// `import_status = 'ok'` and refreshes `verified_at`.
+/// `file_path` and `file_hash`; marks `import_status = 'ok'` and
+/// refreshes `verified_at`.
+///
+/// `original_path` and `artwork_path` are `COALESCE`d: passing `None`
+/// leaves the stored value alone rather than clearing it. A file that
+/// needed no copy keeps the provenance an earlier sync recorded, and a
+/// re-ingest (the consolidate pass runs over rows that already have
+/// artwork resolved) cannot wipe a cover path.
+///
+/// Returns the number of rows updated: 0 means the track was deleted
+/// while the ingest was in flight, which the caller has to clean up
+/// after.
 pub async fn set_file_paths(
     engine: &SqliteRawEngine,
     local_id: i64,
@@ -523,11 +543,14 @@ pub async fn set_file_paths(
     original_path: Option<&str>,
     file_hash_hex: &str,
     artwork_path: Option<&str>,
-) -> Result<(), TracksError> {
+) -> Result<u64, TracksError> {
     use crate::db::sync_util::opt_str;
     use prax_query::filter::FilterValue as FV;
     let sql = "UPDATE tracks SET \
-        file_path = ?, original_path = ?, file_hash = ?, artwork_path = ?, \
+        file_path = ?, \
+        original_path = COALESCE(?, original_path), \
+        file_hash = ?, \
+        artwork_path = COALESCE(?, artwork_path), \
         import_status = 'ok', verified_at = CURRENT_TIMESTAMP \
         WHERE id = ?";
     let params = vec![
@@ -540,7 +563,6 @@ pub async fn set_file_paths(
     engine
         .raw_sql_execute(sql, &params)
         .await
-        .map(|_| ())
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
@@ -668,6 +690,23 @@ pub async fn path_in_use(engine: &SqliteRawEngine, path: &str) -> Result<bool, T
         .await
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
     Ok(n > 0)
+}
+
+/// Forget the stored hash for a track whose file we just rewrote.
+///
+/// Writing tags changes the file's bytes, so the hash recorded at
+/// import no longer describes it; leaving it would make the next
+/// Verify report a mismatch on a file the user themselves corrected.
+pub async fn clear_file_hash(engine: &SqliteRawEngine, local_id: i64) -> Result<(), TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    engine
+        .raw_sql_execute(
+            "UPDATE tracks SET file_hash = NULL, verified_at = CURRENT_TIMESTAMP WHERE id = ?",
+            &[FV::Int(local_id)],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
 /// Record a freshly-computed file hash (plus bump `verified_at`) — used
