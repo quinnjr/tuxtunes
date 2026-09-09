@@ -31,6 +31,9 @@ fn fake_track(title: &str) -> TrackRow {
         skip_count: 0,
         import_status: "ok".to_string(),
         artwork_path: None,
+        rating: 0,
+        album_rating: 0,
+        date_added_unix: None,
     }
 }
 

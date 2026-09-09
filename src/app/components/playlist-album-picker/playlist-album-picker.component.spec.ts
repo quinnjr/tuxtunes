@@ -9,7 +9,9 @@ import {
   PlaylistAlbumPickerComponent,
   UNKNOWN_ALBUM,
   UNKNOWN_ARTIST,
+  formatRating,
   groupByAlbum,
+  sortAlbums,
   type PlaylistAlbum,
 } from './playlist-album-picker.component';
 
@@ -37,6 +39,9 @@ const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   skipCount: 0,
   missing: false,
   artworkPath: null,
+  rating: 0,
+  albumRating: 0,
+  dateAdded: null,
   ...overrides,
 });
 
@@ -171,7 +176,198 @@ describe('groupByAlbum', () => {
   });
 });
 
+describe('groupByAlbum album-level values', () => {
+  it('takes the album rating its tracks carry, never the track ratings, and the latest date added', () => {
+    const [g] = groupByAlbum([
+      TRACK(1, { rating: 80, albumRating: 0, dateAdded: 100 }),
+      TRACK(2, { rating: 100, albumRating: 60, dateAdded: 300 }),
+      TRACK(3, { rating: 100, albumRating: 60, dateAdded: null }),
+    ]);
+    expect(g.rating).toBe(60);
+    expect(g.dateAdded).toBe(300);
+  });
+
+  it('leaves an album unrated and undated when no track carries either', () => {
+    const [g] = groupByAlbum([TRACK(1, { rating: 100 }), TRACK(2, { rating: 80 })]);
+    expect(g.rating).toBe(0);
+    expect(g.dateAdded).toBeNull();
+  });
+});
+
+describe('sortAlbums', () => {
+  const albums = () =>
+    groupByAlbum([
+      TRACK(1, {
+        album: 'Zebra',
+        artist: 'b',
+        albumArtist: 'b',
+        year: 2001,
+        albumRating: 40,
+        dateAdded: 5,
+      }),
+      TRACK(2, {
+        album: 'apple',
+        artist: 'C',
+        albumArtist: 'C',
+        year: null,
+        albumRating: 0,
+        dateAdded: 9,
+      }),
+      TRACK(3, {
+        album: 'Mango',
+        artist: 'a',
+        albumArtist: 'a',
+        year: 1999,
+        albumRating: 100,
+        dateAdded: null,
+      }),
+      TRACK(4, {
+        album: 'Album 10',
+        artist: 'a',
+        albumArtist: 'a',
+        year: 2001,
+        albumRating: 60,
+        dateAdded: 7,
+      }),
+      TRACK(5, {
+        album: 'Album 9',
+        artist: 'a',
+        albumArtist: 'a',
+        year: 2001,
+        albumRating: 60,
+        dateAdded: 7,
+      }),
+    ]);
+  const names = (list: PlaylistAlbum[]) => list.map((a) => a.album);
+
+  it('playlist order is the input order, reversible', () => {
+    expect(names(sortAlbums(albums(), { key: 'playlist', descending: false }))).toEqual([
+      'Zebra',
+      'apple',
+      'Mango',
+      'Album 10',
+      'Album 9',
+    ]);
+    expect(names(sortAlbums(albums(), { key: 'playlist', descending: true }))).toEqual([
+      'Album 9',
+      'Album 10',
+      'Mango',
+      'apple',
+      'Zebra',
+    ]);
+  });
+
+  it('name ignores case and orders numbers naturally', () => {
+    expect(names(sortAlbums(albums(), { key: 'name', descending: false }))).toEqual([
+      'Album 9',
+      'Album 10',
+      'apple',
+      'Mango',
+      'Zebra',
+    ]);
+    expect(names(sortAlbums(albums(), { key: 'name', descending: true }))).toEqual([
+      'Zebra',
+      'Mango',
+      'apple',
+      'Album 10',
+      'Album 9',
+    ]);
+  });
+
+  it('artist ties keep playlist order', () => {
+    expect(names(sortAlbums(albums(), { key: 'artist', descending: false }))).toEqual([
+      'Mango',
+      'Album 10',
+      'Album 9',
+      'Zebra',
+      'apple',
+    ]);
+  });
+
+  it('year puts albums without one last in both directions and keeps ties in playlist order', () => {
+    expect(names(sortAlbums(albums(), { key: 'year', descending: true }))).toEqual([
+      'Zebra',
+      'Album 10',
+      'Album 9',
+      'Mango',
+      'apple',
+    ]);
+    expect(names(sortAlbums(albums(), { key: 'year', descending: false }))).toEqual([
+      'Mango',
+      'Zebra',
+      'Album 10',
+      'Album 9',
+      'apple',
+    ]);
+  });
+
+  it('rating treats unrated as missing, not as zero', () => {
+    expect(names(sortAlbums(albums(), { key: 'rating', descending: false }))).toEqual([
+      'Zebra',
+      'Album 10',
+      'Album 9',
+      'Mango',
+      'apple',
+    ]);
+    expect(names(sortAlbums(albums(), { key: 'rating', descending: true }))[0]).toBe('Mango');
+    expect(names(sortAlbums(albums(), { key: 'rating', descending: true })).at(-1)).toBe('apple');
+  });
+
+  it('date added sorts newest first when descending, unknown last', () => {
+    expect(names(sortAlbums(albums(), { key: 'dateAdded', descending: true }))).toEqual([
+      'apple',
+      'Album 10',
+      'Album 9',
+      'Zebra',
+      'Mango',
+    ]);
+  });
+
+  it('does not mutate its input', () => {
+    const input = albums();
+    const before = names(input);
+    sortAlbums(input, { key: 'name', descending: true });
+    expect(names(input)).toEqual(before);
+  });
+});
+
+describe('formatRating', () => {
+  it('renders stars out of five, trimming whole numbers', () => {
+    expect(formatRating(0)).toBe('');
+    expect(formatRating(100)).toBe('★ 5');
+    expect(formatRating(90)).toBe('★ 4.5');
+    expect(formatRating(33)).toBe('★ 1.7');
+  });
+});
+
 describe('PlaylistAlbumPickerComponent', () => {
+  it('orders cards by the UI sort and re-sorts when it changes', () => {
+    const { el, fixture, ui } = setup([
+      TRACK(1, { album: 'B', year: 2000 }),
+      TRACK(2, { album: 'A', year: 2010 }),
+    ]);
+    const order = () =>
+      [...el.querySelectorAll<HTMLElement>('[data-album]')].map((n) => n.dataset['album']);
+    expect(order()).toEqual(['Artist\nB', 'Artist\nA']);
+    ui.playlistAlbumSort.set({ key: 'name', descending: false });
+    fixture.detectChanges();
+    expect(order()).toEqual(['Artist\nA', 'Artist\nB']);
+    ui.playlistAlbumSort.set({ key: 'year', descending: false });
+    fixture.detectChanges();
+    expect(order()).toEqual(['Artist\nB', 'Artist\nA']);
+  });
+
+  it('shows the album rating on the card only when rated', () => {
+    const { el } = setup([
+      TRACK(1, { album: 'Rated', albumRating: 90, rating: 20 }),
+      TRACK(2, { album: 'Rated', albumRating: 90 }),
+      TRACK(3, { album: 'Unrated', rating: 100 }),
+    ]);
+    const cards = [...el.querySelectorAll('[data-album]')];
+    expect(cards[0].querySelector('[data-rating]')?.textContent?.trim()).toBe('· ★ 4.5');
+    expect(cards[1].querySelector('[data-rating]')).toBeNull();
+  });
+
   it('renders one card per album', () => {
     const { el } = setup([
       TRACK(1, { album: 'A' }),

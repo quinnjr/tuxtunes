@@ -43,6 +43,9 @@
               <span class="tnum text-caption text-text-muted">
                 {{ a.tracks.length }} {{ a.tracks.length === 1 ? 'song' : 'songs' }} ·
                 {{ formatTotal(a.totalDurationMs) }}
+                @if (rating(a); as stars) {
+                  <span class="text-accent" [attr.data-rating]="a.rating"> · {{ stars }}</span>
+                }
               </span>
             </div>
           </button>

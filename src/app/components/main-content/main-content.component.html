@@ -18,6 +18,35 @@
           </button>
         }
       </div>
+      @if (showPicker()) {
+        <label
+          class="flex items-center gap-1.5 text-caption text-text-secondary"
+          data-testid="album-sort"
+        >
+          <span>Sort</span>
+          <select
+            class="rounded-md border border-border bg-bg-surface px-1.5 py-0.5 text-caption text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            [value]="ui.playlistAlbumSort().key"
+            (change)="setAlbumSortKey($event)"
+            aria-label="Sort albums by"
+          >
+            @for (key of albumSortKeys; track key) {
+              <option [value]="key" [selected]="ui.playlistAlbumSort().key === key">
+                {{ albumSortLabels[key] }}
+              </option>
+            }
+          </select>
+          <button
+            type="button"
+            class="mac-btn h-6 w-6 text-caption"
+            (click)="toggleAlbumSortDirection()"
+            [attr.aria-label]="ui.playlistAlbumSort().descending ? 'Descending' : 'Ascending'"
+            [attr.aria-pressed]="ui.playlistAlbumSort().descending"
+          >
+            {{ ui.playlistAlbumSort().descending ? '▼' : '▲' }}
+          </button>
+        </label>
+      }
       @if (library.activePlaylist(); as playlist) {
         <div class="flex min-w-0 items-center gap-1.5 text-body" data-testid="active-playlist">
           <span class="text-text-muted">›</span>

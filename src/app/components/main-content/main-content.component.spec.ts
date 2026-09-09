@@ -130,6 +130,37 @@ describe('MainContentComponent', () => {
       expect(el.querySelector('app-track-list-view')).not.toBeNull();
     });
 
+    it('offers the album sort only in the album view, driving the shared sort', () => {
+      const { fixture, library, ui } = setup();
+      library.activePlaylistId.set(42);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      const control = () => el.querySelector('[data-testid="album-sort"]');
+      expect(control()).not.toBeNull();
+      const select = control()!.querySelector('select')!;
+      const labels = [...select.options].map((o) => o.textContent?.trim());
+      expect(labels).toEqual(['Playlist order', 'Album', 'Artist', 'Year', 'Rating', 'Date added']);
+
+      select.value = 'year';
+      select.dispatchEvent(new Event('change'));
+      expect(ui.playlistAlbumSort()).toEqual({ key: 'year', descending: true });
+      select.value = 'name';
+      select.dispatchEvent(new Event('change'));
+      expect(ui.playlistAlbumSort()).toEqual({ key: 'name', descending: false });
+
+      fixture.detectChanges();
+      const dir = control()!.querySelector('button')!;
+      expect(dir.textContent?.trim()).toBe('▲');
+      dir.click();
+      fixture.detectChanges();
+      expect(ui.playlistAlbumSort()).toEqual({ key: 'name', descending: true });
+      expect(dir.textContent?.trim()).toBe('▼');
+
+      ui.playlistView.set('songs');
+      fixture.detectChanges();
+      expect(control()).toBeNull();
+    });
+
     it('keys the toolbar on the id so it never disagrees with the body', () => {
       const { fixture, library } = setup();
       // Row not loaded yet: the toggle still swaps, the name line waits.

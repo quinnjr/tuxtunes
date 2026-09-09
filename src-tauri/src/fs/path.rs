@@ -474,6 +474,9 @@ mod tests {
             skip_count: 0,
             import_status: "ok".to_string(),
             artwork_path: None,
+            rating: 0,
+            album_rating: 0,
+            date_added_unix: None,
         };
         let source = std::path::Path::new(&row.file_path);
         let tf = TrackFields::from_track_row(&row, source);
@@ -511,6 +514,9 @@ mod tests {
             skip_count: 0,
             import_status: "ok".to_string(),
             artwork_path: None,
+            rating: 0,
+            album_rating: 0,
+            date_added_unix: None,
         };
         let source = std::path::Path::new(&row.file_path);
         let tf = TrackFields::from_track_row(&row, source);

@@ -1,6 +1,13 @@
 import { Component, OnDestroy, computed, inject, ChangeDetectionStrategy } from '@angular/core';
 import { LibraryService } from '../../services/library.service';
-import { LibraryView, PlaylistView, UiService } from '../../services/ui.service';
+import {
+  LibraryView,
+  PLAYLIST_ALBUM_SORT_KEYS,
+  PlaylistAlbumSortKey,
+  PlaylistView,
+  UiService,
+  defaultDescending,
+} from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
 import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
 import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
@@ -25,6 +32,15 @@ export class MainContentComponent implements OnDestroy {
   protected readonly viewMode = this.ui.libraryView;
   protected readonly modes: readonly LibraryView[] = ['tracks', 'albums', 'artists'] as const;
   protected readonly playlistModes: readonly PlaylistView[] = ['albums', 'songs'] as const;
+  protected readonly albumSortKeys = PLAYLIST_ALBUM_SORT_KEYS;
+  protected readonly albumSortLabels: Record<PlaylistAlbumSortKey, string> = {
+    playlist: 'Playlist order',
+    name: 'Album',
+    artist: 'Artist',
+    year: 'Year',
+    rating: 'Rating',
+    dateAdded: 'Date added',
+  };
 
   /** An open playlist in its per-album presentation. */
   protected readonly showPicker = computed(this.#computeShowPicker.bind(this));
@@ -70,6 +86,17 @@ export class MainContentComponent implements OnDestroy {
   /** Switch how the open playlist is presented; the rows are shared. */
   protected setPlaylistMode(mode: PlaylistView): void {
     this.ui.playlistView.set(mode);
+  }
+
+  /** A new key starts in its natural direction; see `defaultDescending`. */
+  protected setAlbumSortKey(event: Event): void {
+    const key = (event.target as HTMLSelectElement).value as PlaylistAlbumSortKey;
+    if (!this.albumSortKeys.includes(key)) return;
+    this.ui.playlistAlbumSort.set({ key, descending: defaultDescending(key) });
+  }
+
+  protected toggleAlbumSortDirection(): void {
+    this.ui.playlistAlbumSort.update((s) => ({ ...s, descending: !s.descending }));
   }
 
   protected toggleBrowser(): void {
