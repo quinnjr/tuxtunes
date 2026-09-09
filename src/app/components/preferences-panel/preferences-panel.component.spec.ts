@@ -5,12 +5,6 @@ import { UiService } from '../../services/ui.service';
 import { appProviders, tauriStub } from '../../test-helpers';
 import { PreferencesPanelComponent } from './preferences-panel.component';
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-  open: vi.fn(),
-}));
-
-import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
-
 interface PrefsInternals {
   draftRoot: { (): string; set(v: string): void };
   draftScheme: { (): string; set(v: string): void };
@@ -90,17 +84,20 @@ describe('PreferencesPanelComponent', () => {
     expect(ui.preferencesOpen()).toBe(false);
   });
 
+  // The native dialog is behind UiService.pickDirectory, so the spec
+  // stubs that rather than the plugin module: a module mock only reaches
+  // the spec's own import, not a service compiled into the app bundle.
   it('pickRoot stores the chosen string into draftRoot', async () => {
-    const { cmp } = setup();
-    (dialogOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce('/picked');
+    const { cmp, ui } = setup();
+    vi.spyOn(ui, 'pickDirectory').mockResolvedValueOnce('/picked');
     await cmp.pickRoot();
     expect(cmp.draftRoot()).toBe('/picked');
   });
 
-  it('pickRoot ignores a cancelled dialog (non-string return)', async () => {
-    const { cmp } = setup();
+  it('pickRoot ignores a cancelled dialog', async () => {
+    const { cmp, ui } = setup();
     cmp.draftRoot.set('/before');
-    (dialogOpen as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+    vi.spyOn(ui, 'pickDirectory').mockResolvedValueOnce(null);
     await cmp.pickRoot();
     expect(cmp.draftRoot()).toBe('/before');
   });
