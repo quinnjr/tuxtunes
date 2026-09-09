@@ -1,7 +1,8 @@
 pkgbase = tuxtunes-git
 	pkgdesc = Music library manager and player (Tauri + Angular)
-	pkgver = 0.1.0.r208.g570aabe
+	pkgver = 0.1.0.r1.g13b0860
 	pkgrel = 1
+	epoch = 1
 	url = https://github.com/quinnjr/tuxtunes
 	arch = x86_64
 	arch = aarch64
@@ -19,6 +20,7 @@ pkgbase = tuxtunes-git
 	depends = dbus
 	depends = openssl
 	depends = xdg-utils
+	optdepends = ffmpeg: convert library files to FLAC or M4A
 	provides = tuxtunes
 	conflicts = tuxtunes
 	source = tuxtunes-git::git+https://github.com/quinnjr/tuxtunes.git#branch=develop

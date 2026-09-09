@@ -10,6 +10,7 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
+import { ConvertFormat, ConvertService } from '../../services/convert.service';
 import { LibraryService, SortColumn } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
 import { TauriService } from '../../services/tauri.service';
@@ -80,6 +81,7 @@ export class TrackListViewComponent implements OnInit {
   protected readonly playback = inject(PlaybackService);
   private readonly tauri = inject(TauriService);
   private readonly ctx = inject(ContextMenuService);
+  private readonly convert = inject(ConvertService);
   private readonly ui = inject(UiService);
 
   /** All columns the user can choose from. */
@@ -359,6 +361,24 @@ export class TrackListViewComponent implements OnInit {
         action: () => this.writeTags(targets),
       },
       {
+        label: single ? 'Convert To' : `Convert ${targets.length} To`,
+        // Greyed out, not hidden, when ffmpeg is missing: the item still
+        // tells the user the feature exists.
+        disabled: this.convert.available() === false,
+        children: [
+          {
+            label: 'FLAC (lossless)',
+            disabled: this.convert.available() === false,
+            action: () => this.convertTo(targets, 'flac'),
+          },
+          {
+            label: 'M4A',
+            disabled: this.convert.available() === false,
+            action: () => this.convertTo(targets, 'm4a'),
+          },
+        ],
+      },
+      {
         label: 'Show in Files',
         disabled: !single,
         action: async () => {
@@ -379,6 +399,20 @@ export class TrackListViewComponent implements OnInit {
       { label: '---' },
       { label: 'Select All', action: () => this.selectAll() },
     ];
+  }
+
+  /**
+   * Queue a transcode of the selection. Quality comes from Settings →
+   * Conversion. Progress, and a failure tally if there is one, show in
+   * the status bar; per-file errors are listed on that settings tab.
+   */
+  private async convertTo(targets: TrackRow[], format: ConvertFormat): Promise<void> {
+    await this.ui.guard(
+      this.convert.convert(
+        targets.map((t) => t.id),
+        format,
+      ),
+    );
   }
 
   /**

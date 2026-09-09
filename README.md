@@ -45,6 +45,25 @@ library that keeps working after iTunes is gone.
   a finished track counts as a play, an early skip counts as a skip.
 - Volume persisted across launches.
 
+**File conversion**
+
+- Convert any track to **FLAC** or **M4A** (ALAC or AAC) from the track list's
+  right-click menu, with every encoder knob exposed in Settings → Conversion:
+  FLAC compression level, sample rate, bit depth; ALAC/AAC, VBR quality or CBR
+  bitrate. The defaults are lossless and source-native — nothing is resampled or
+  requantised unless you ask.
+- Tags and cover art are carried across (a cover the containers cannot hold is
+  re-encoded to PNG, a broken one dropped rather than failing the track); the
+  original file is left untouched. Converted files are added to the library as
+  their own tracks, in place, by default (switch it off in the same tab).
+- Output is written to a hidden scratch file and renamed into place only when the
+  encoder finishes, so a failure, a cancel, or a crash never leaves a half-written
+  track behind, and **Overwrite** refuses to replace a file the library references.
+- Live per-file percentage in the status bar, a **Cancel** that stops the
+  batch, and a failure tally left in the bar when a batch lost files (the
+  per-file reasons are on the settings tab). Requires `ffmpeg` on PATH; without
+  it the Convert menu items are greyed out.
+
 **Smart playlists**
 
 - Full rule engine over 26 fields (text / int / bool / date) with iTunes' operator set:
@@ -127,6 +146,8 @@ TUXTUNES_SRC=file:///path/to/tuxtunes makepkg -si
 
 `webkit2gtk-4.1` · `gtk3` · `libayatana-appindicator` · `mpv` · `sqlite` · `dbus` ·
 `openssl` · `xdg-utils`
+
+Optional: `ffmpeg` — required only for file conversion (FLAC / M4A).
 
 ## Build from source
 

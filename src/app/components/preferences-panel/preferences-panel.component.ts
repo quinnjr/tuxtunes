@@ -1,6 +1,5 @@
 import { Component, effect, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { LibraryService } from '../../services/library.service';
 import { PreferencesService } from '../../services/preferences.service';
 import { ColorMode, ThemeService } from '../../services/theme.service';
@@ -42,8 +41,8 @@ export class PreferencesPanelComponent {
   }
 
   protected async pickRoot(): Promise<void> {
-    const picked = await this.ui.guard(dialogOpen({ directory: true, multiple: false }));
-    if (typeof picked === 'string') this.draftRoot.set(picked);
+    const picked = await this.ui.pickDirectory();
+    if (picked !== null) this.draftRoot.set(picked);
   }
 
   /** Persist the draft; on failure report it and keep the dialog open. */

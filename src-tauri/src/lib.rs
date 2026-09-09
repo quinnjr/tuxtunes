@@ -71,6 +71,11 @@ pub fn run() {
             commands::audio::list_audio_devices,
             commands::audio::set_audio_device,
             commands::audio::get_audio_prefs,
+            commands::convert::convert_available,
+            commands::convert::get_convert_prefs,
+            commands::convert::set_convert_prefs,
+            commands::convert::convert_tracks,
+            commands::convert::cancel_convert,
             commands::window::host_os,
             commands::window::quit_app,
             commands::sync::list_sync_sources,
@@ -157,7 +162,7 @@ pub fn run() {
                                 last = v;
                                 if changed {
                                     if let Err(e) =
-                                        app_for_watch.emit("library:external-change", ())
+                                        app_for_watch.emit(fs::events::LIBRARY_CHANGED, ())
                                     {
                                         log::warn!("db watch: emit failed: {e}");
                                     }

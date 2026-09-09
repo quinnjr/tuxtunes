@@ -229,6 +229,37 @@ async fn known_paths(
 /// constraint; now that the column moves to the managed root, nothing
 /// but this check stops a second add from duplicating both the row and
 /// the file on disk.
+/// Re-read the technical columns of an existing row whose file was just
+/// rewritten in place (a re-export over a previous conversion). Title
+/// and the other user-editable tags are left alone.
+pub async fn probe_and_update(
+    engine: &SqliteRawEngine,
+    track_id: i64,
+    path: &Path,
+) -> Result<(), IngestError> {
+    let owned_path = path.to_path_buf();
+    let probed = tokio::task::spawn_blocking(move || probe_blocking(&owned_path))
+        .await
+        .map_err(|e| IngestError::Db(anyhow::Error::from(e)))??;
+    let opt_int = |v: Option<i64>| v.map(FilterValue::Int).unwrap_or(FilterValue::Null);
+    let sql = "UPDATE tracks SET duration_ms = ?, size_bytes = ?, sample_rate = ?, \
+               bit_depth = ?, channels = ?, bit_rate = ?, file_hash = NULL WHERE id = ?";
+    let params: Vec<FilterValue> = vec![
+        FilterValue::Int(probed.duration_ms),
+        FilterValue::Int(probed.size_bytes),
+        opt_int(probed.sample_rate),
+        opt_int(probed.bit_depth),
+        opt_int(probed.channels),
+        opt_int(probed.bit_rate),
+        FilterValue::Int(track_id),
+    ];
+    engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
+    Ok(())
+}
+
 pub async fn track_id_for_path(
     engine: &SqliteRawEngine,
     path: &Path,

@@ -1,5 +1,6 @@
 //! Handle for file-management workers. Held in AppState.
 
+use crate::fs::convert::{ConvertCommand, ConvertFormat, ConvertPrefs, ConvertWorker};
 use crate::fs::ingest::{IngestCommand, IngestWorker};
 use crate::fs::organize::{OrganizeCommand, OrganizeWorker};
 use prax_sqlite::raw::SqliteRawEngine;
@@ -10,13 +11,15 @@ use tauri::{AppHandle, Runtime};
 pub struct FsCoordinator {
     ingest: IngestWorker,
     organize: OrganizeWorker,
+    convert: ConvertWorker,
 }
 
 impl FsCoordinator {
     pub fn new<R: Runtime>(engine: Arc<SqliteRawEngine>, app: AppHandle<R>) -> Self {
         Self {
             ingest: IngestWorker::spawn(Arc::clone(&engine), app.clone()),
-            organize: OrganizeWorker::spawn(engine, app),
+            organize: OrganizeWorker::spawn(Arc::clone(&engine), app.clone()),
+            convert: ConvertWorker::spawn(engine, app),
         }
     }
 
@@ -47,6 +50,40 @@ impl FsCoordinator {
             .tx
             .send(IngestCommand::ReclaimOriginals)
             .map_err(|_| "ingest worker has exited".to_string())
+    }
+
+    /// Stop the batch in flight and drop everything queued behind it. A
+    /// batch requested after this call is unaffected.
+    pub fn cancel_convert(&self) -> Result<(), String> {
+        self.convert.cancel_all()
+    }
+
+    /// Number a batch before anything about it is awaited, so a Cancel
+    /// the user clicks while its preferences are still loading covers
+    /// it. A generation that is reserved but never queued is harmless.
+    pub fn reserve_convert_generation(&self) -> u64 {
+        self.convert.next_generation()
+    }
+
+    /// Queue a transcode batch. Progress arrives on
+    /// `fs:convert-progress`, per-file errors on `fs:convert-failed`,
+    /// and the tally on `fs:convert-complete`.
+    pub fn convert_tracks(
+        &self,
+        track_ids: Vec<i64>,
+        format: ConvertFormat,
+        prefs: ConvertPrefs,
+        generation: u64,
+    ) -> Result<(), String> {
+        self.convert
+            .tx
+            .send(ConvertCommand::Tracks {
+                track_ids,
+                format,
+                prefs,
+                generation,
+            })
+            .map_err(|_| "convert worker has exited".to_string())
     }
 
     pub fn reorganize_track(&self, track_id: i64) -> Result<(), String> {

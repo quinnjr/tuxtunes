@@ -1,4 +1,5 @@
 import { Injectable, computed, signal } from '@angular/core';
+import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { toErrorMessage } from '../utils/errors';
 
 export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
@@ -123,6 +124,12 @@ export class UiService {
       this.reportError(error);
       return null;
     }
+  }
+
+  /** Native folder picker; null when cancelled or when the dialog failed. */
+  async pickDirectory(): Promise<string | null> {
+    const picked = await this.guard(dialogOpen({ directory: true, multiple: false }));
+    return typeof picked === 'string' ? picked : null;
   }
 
   private setError(message: string | null): void {

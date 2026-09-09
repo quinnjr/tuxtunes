@@ -1,0 +1,79 @@
+//! File-conversion Tauri commands.
+
+use crate::db::preferences::{self, KEY_CONVERT_PREFS};
+use crate::fs::convert::{ConvertFormat, ConvertPrefs};
+use crate::runtime::AppState;
+
+/// Whether conversion is usable at all. On `false` the settings tab
+/// shows an install hint, the context menu disables its Convert items,
+/// and `convert_tracks` refuses a batch outright.
+#[tauri::command]
+pub async fn convert_available() -> Result<bool, String> {
+    tokio::task::spawn_blocking(crate::fs::convert::ffmpeg_available)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_convert_prefs(state: tauri::State<'_, AppState>) -> Result<ConvertPrefs, String> {
+    Ok(
+        preferences::get::<ConvertPrefs>(&state.db.engine, KEY_CONVERT_PREFS)
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default(),
+    )
+}
+
+#[tauri::command]
+pub async fn set_convert_prefs(
+    state: tauri::State<'_, AppState>,
+    prefs: ConvertPrefs,
+) -> Result<ConvertPrefs, String> {
+    preferences::set(&state.db.engine, KEY_CONVERT_PREFS, &prefs)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Deserialization clamped every knob; hand the result back so the
+    // UI shows what was actually stored rather than what it sent.
+    Ok(prefs)
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ConvertTracksArgs {
+    pub track_ids: Vec<i64>,
+    pub format: ConvertFormat,
+}
+
+/// Stop the conversion batch in flight, and anything queued behind it.
+#[tauri::command]
+pub async fn cancel_convert(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.fs.cancel_convert()
+}
+
+/// Queue a conversion batch. Returns as soon as it is queued; the
+/// outcome arrives on the `fs:convert-*` events.
+#[tauri::command]
+pub async fn convert_tracks(
+    state: tauri::State<'_, AppState>,
+    args: ConvertTracksArgs,
+) -> Result<(), String> {
+    if args.track_ids.is_empty() {
+        return Err("no tracks selected".into());
+    }
+    // Refuse the whole batch once rather than spawning a doomed ffmpeg
+    // per track; the settings page shows the same message.
+    let has_ffmpeg = tokio::task::spawn_blocking(crate::fs::convert::ffmpeg_available)
+        .await
+        .map_err(|e| e.to_string())?;
+    if !has_ffmpeg {
+        return Err("ffmpeg was not found on PATH — install it to convert files".into());
+    }
+    // Before the await: a Cancel that lands while prefs load covers it.
+    let generation = state.fs.reserve_convert_generation();
+    let prefs = preferences::get::<ConvertPrefs>(&state.db.engine, KEY_CONVERT_PREFS)
+        .await
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    state
+        .fs
+        .convert_tracks(args.track_ids, args.format, prefs, generation)
+}
