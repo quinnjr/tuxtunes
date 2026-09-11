@@ -52,27 +52,21 @@ pub async fn pending(engine: &SqliteRawEngine) -> Result<(u64, u64), anyhow::Err
     Ok((count, bytes))
 }
 
+/// Trash every reclaimable original without UI progress events —
+/// the headless half of [`reclaim_all`]. `tuxtunes-cli reclaim` runs
+/// this directly so both paths share one verification policy.
+pub async fn reclaim_all_headless(engine: &SqliteRawEngine) -> Result<ReclaimStats, anyhow::Error> {
+    run_reclaim(engine, |_, _| {}).await
+}
+
 pub async fn reclaim_all<R: Runtime>(
     engine: &SqliteRawEngine,
     app: &AppHandle<R>,
 ) -> Result<ReclaimStats, anyhow::Error> {
-    let root = preferences::get_library_root(engine).await?;
-    let cands = candidates(engine).await?;
-    let total = cands.len() as u64;
-
-    let mut stats = ReclaimStats::default();
-    for (seen, cand) in cands.into_iter().enumerate() {
-        if (seen as u64).is_multiple_of(PROGRESS_EVERY) {
-            let _ = app.emit(
-                RECLAIM_PROGRESS,
-                ReclaimProgress {
-                    current: seen as u64,
-                    total,
-                },
-            );
-        }
-        reclaim_one(engine, &cand, &root, &mut stats).await;
-    }
+    let stats = run_reclaim(engine, |current, total| {
+        let _ = app.emit(RECLAIM_PROGRESS, ReclaimProgress { current, total });
+    })
+    .await?;
 
     let _ = app.emit(
         RECLAIM_COMPLETE,
@@ -83,6 +77,27 @@ pub async fn reclaim_all<R: Runtime>(
             failed: stats.failed,
         },
     );
+    Ok(stats)
+}
+
+/// The shared walk: every recorded original gets one `reclaim_one`
+/// verdict, with a progress hook the GUI feeds and headless callers
+/// ignore.
+async fn run_reclaim(
+    engine: &SqliteRawEngine,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<ReclaimStats, anyhow::Error> {
+    let root = preferences::get_library_root(engine).await?;
+    let cands = candidates(engine).await?;
+    let total = cands.len() as u64;
+
+    let mut stats = ReclaimStats::default();
+    for (seen, cand) in cands.into_iter().enumerate() {
+        if (seen as u64).is_multiple_of(PROGRESS_EVERY) {
+            on_progress(seen as u64, total);
+        }
+        reclaim_one(engine, &cand, &root, &mut stats).await;
+    }
     Ok(stats)
 }
 
@@ -117,9 +132,17 @@ async fn reclaim_one(
     stats: &mut ReclaimStats,
 ) {
     // Nothing to reclaim if the original is already gone — clear the
-    // column so the row stops being offered.
+    // column so the row stops being offered. A clear that itself fails
+    // counts as failed: the row will be re-offered on every run until
+    // the bookkeeping lands.
     let Ok(meta) = std::fs::metadata(&cand.original) else {
-        forget_original(engine, cand.id).await;
+        if let Err(e) = forget_original(engine, cand.id).await {
+            log::warn!(
+                "reclaim: could not clear original_path for {}: {e}",
+                cand.id
+            );
+            stats.failed += 1;
+        }
         return;
     };
 
@@ -162,7 +185,16 @@ async fn reclaim_one(
         Ok(()) => {
             stats.reclaimed += 1;
             stats.bytes_freed += meta.len();
-            forget_original(engine, cand.id).await;
+            if let Err(e) = forget_original(engine, cand.id).await {
+                // The bytes are already trashed; what failed is the
+                // bookkeeping, which re-offers the (now missing) row
+                // next run until the clear lands.
+                log::warn!(
+                    "reclaim: could not clear original_path for {}: {e}",
+                    cand.id
+                );
+                stats.failed += 1;
+            }
         }
         Err(e) => {
             log::warn!("reclaim: could not trash {path_str}: {e}");
@@ -172,14 +204,265 @@ async fn reclaim_one(
 }
 
 /// Clear `original_path` so a second run does not re-offer the row.
-async fn forget_original(engine: &SqliteRawEngine, track_id: i64) {
-    if let Err(e) = engine
+async fn forget_original(engine: &SqliteRawEngine, track_id: i64) -> anyhow::Result<()> {
+    engine
         .raw_sql_execute(
             "UPDATE tracks SET original_path = NULL WHERE id = ?",
             &[FilterValue::Int(track_id)],
         )
         .await
-    {
-        log::warn!("reclaim: could not clear original_path for {track_id}: {e}");
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+
+    /// A tiny synthetic WAV that lofty will happily parse.
+    fn write_minimal_wav(path: &Path) {
+        let header: &[u8] = &[
+            b'R', b'I', b'F', b'F', 0x25, 0x00, 0x00, 0x00, b'W', b'A', b'V', b'E', b'f', b'm',
+            b't', b' ', 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x40, 0x1f, 0x00, 0x00,
+            0x40, 0x1f, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, b'd', b'a', b't', b'a', 0x01, 0x00,
+            0x00, 0x00, 0x80,
+        ];
+        std::fs::write(path, header).unwrap();
+    }
+
+    async fn db_with_root(tmp: &std::path::Path) -> (Db, PathBuf, PathBuf) {
+        let db = Db::open(&tmp.join("t.db")).await.unwrap();
+        let root = tmp.join("managed");
+        crate::db::preferences::set_library_root(&db.engine, &root)
+            .await
+            .unwrap();
+        let incoming = tmp.join("incoming");
+        std::fs::create_dir_all(&incoming).unwrap();
+        (db, root, incoming)
+    }
+
+    /// Register a row whose managed copy is `managed` and whose
+    /// recorded original is `original`.
+    async fn add_copied_track(db: &Db, managed: &Path, original: &Path) -> i64 {
+        let id = crate::library::ingest::probe_and_add(&db.engine, original)
+            .await
+            .unwrap();
+        crate::db::tracks::set_file_paths(
+            &db.engine,
+            id,
+            &managed.display().to_string(),
+            Some(&original.display().to_string()),
+            "00",
+            None,
+        )
+        .await
+        .unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn reclaim_all_headless_trashes_a_verified_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, root, incoming) = db_with_root(tmp.path()).await;
+
+        let original = incoming.join("a.wav");
+        write_minimal_wav(&original);
+        let managed = root.join("a.wav");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::copy(&original, &managed).unwrap();
+        let wav_len = std::fs::metadata(&original).unwrap().len();
+        add_copied_track(&db, &managed, &original).await;
+
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        assert_eq!(stats.reclaimed, 1);
+        assert_eq!(stats.bytes_freed, wav_len);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(stats.failed, 0);
+        assert!(!original.exists(), "original must be trashed");
+        assert!(managed.is_file(), "managed copy must survive");
+
+        // A second run finds nothing to do.
+        let again = reclaim_all_headless(&db.engine).await.unwrap();
+        assert_eq!(again, ReclaimStats::default());
+    }
+
+    #[tokio::test]
+    async fn reclaim_all_headless_skips_a_diverged_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, root, incoming) = db_with_root(tmp.path()).await;
+
+        let original = incoming.join("b.wav");
+        write_minimal_wav(&original);
+        let managed = root.join("b.wav");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::copy(&original, &managed).unwrap();
+        // Same size, different bytes: the copy has diverged.
+        let mut bytes = std::fs::read(&managed).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xFF;
+        std::fs::write(&managed, bytes).unwrap();
+        add_copied_track(&db, &managed, &original).await;
+
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        assert_eq!(stats.reclaimed, 0);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.failed, 0);
+        assert!(original.is_file(), "diverged original must be kept");
+    }
+
+    #[tokio::test]
+    async fn reclaim_all_headless_forgets_a_missing_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, root, incoming) = db_with_root(tmp.path()).await;
+
+        let original = incoming.join("gone.wav");
+        let managed = root.join("gone.wav");
+        std::fs::create_dir_all(&root).unwrap();
+        write_minimal_wav(&managed);
+        // Probe a sibling so the row exists, then point it at the
+        // managed file with a recorded original that was never there.
+        let sibling = incoming.join("sibling.wav");
+        write_minimal_wav(&sibling);
+        let id = crate::library::ingest::probe_and_add(&db.engine, &sibling)
+            .await
+            .unwrap();
+        crate::db::tracks::set_file_paths(
+            &db.engine,
+            id,
+            &managed.display().to_string(),
+            Some(&original.display().to_string()),
+            "00",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        assert_eq!(stats, ReclaimStats::default());
+        let (count, _) = pending(&db.engine).await.unwrap();
+        assert_eq!(count, 0, "missing original must stop being offered");
+    }
+
+    #[tokio::test]
+    async fn reclaim_all_headless_skips_a_size_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, root, incoming) = db_with_root(tmp.path()).await;
+
+        let original = incoming.join("c.wav");
+        write_minimal_wav(&original);
+        let managed = root.join("c.wav");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::copy(&original, &managed).unwrap();
+        // Different size: the cheap precheck skips before hashing.
+        let mut bytes = std::fs::read(&managed).unwrap();
+        bytes.push(0x00);
+        std::fs::write(&managed, bytes).unwrap();
+        add_copied_track(&db, &managed, &original).await;
+
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        assert_eq!(stats.reclaimed, 0);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.failed, 0);
+        assert!(original.is_file(), "size-mismatched original must be kept");
+    }
+
+    #[tokio::test]
+    async fn reclaim_all_headless_skips_a_copy_outside_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, _root, incoming) = db_with_root(tmp.path()).await;
+
+        let original = incoming.join("d.wav");
+        write_minimal_wav(&original);
+        // Identical bytes, but the "managed" file lives outside the
+        // library root: not ours to trash against.
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let managed = elsewhere.join("d.wav");
+        std::fs::copy(&original, &managed).unwrap();
+        add_copied_track(&db, &managed, &original).await;
+
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        assert_eq!(stats.reclaimed, 0);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.failed, 0);
+        assert!(original.is_file() && managed.is_file());
+    }
+
+    #[tokio::test]
+    async fn reclaim_all_headless_skips_same_file_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, root, incoming) = db_with_root(tmp.path()).await;
+
+        // The "original" is a symlink to the managed file: distinct
+        // path strings that canonicalize alike. Trashing it would
+        // delete the managed file itself.
+        let managed = root.join("e.wav");
+        std::fs::create_dir_all(&root).unwrap();
+        write_minimal_wav(&managed);
+        let original = incoming.join("e.wav");
+        std::os::unix::fs::symlink(&managed, &original).unwrap();
+        add_copied_track(&db, &managed, &original).await;
+
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        assert_eq!(stats.reclaimed, 0);
+        assert_eq!(stats.skipped, 1);
+        assert_eq!(stats.failed, 0);
+        assert!(
+            managed.is_file(),
+            "managed file must survive its own original"
+        );
+    }
+
+    /// chmod-based failure injection below assumes a non-root user (the
+    /// developer workstation and CI); root ignores permission bits.
+    #[tokio::test]
+    async fn reclaim_all_headless_counts_a_hash_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, root, incoming) = db_with_root(tmp.path()).await;
+
+        let original = incoming.join("f.wav");
+        write_minimal_wav(&original);
+        let managed = root.join("f.wav");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::copy(&original, &managed).unwrap();
+        add_copied_track(&db, &managed, &original).await;
+
+        // Unreadable managed copy: present and sized, but unhashable.
+        std::fs::set_permissions(&managed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        std::fs::set_permissions(&managed, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(stats.reclaimed, 0);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(stats.failed, 1);
+        assert!(original.is_file(), "nothing trashed on hash failure");
+    }
+
+    #[tokio::test]
+    async fn reclaim_all_headless_counts_a_trash_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (db, root, incoming) = db_with_root(tmp.path()).await;
+
+        let original = incoming.join("g.wav");
+        write_minimal_wav(&original);
+        let managed = root.join("g.wav");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::copy(&original, &managed).unwrap();
+        add_copied_track(&db, &managed, &original).await;
+
+        // Read-only source directory: the verified bytes cannot be
+        // moved to the trash (rename out fails, delete fails).
+        std::fs::set_permissions(&incoming, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let stats = reclaim_all_headless(&db.engine).await.unwrap();
+        std::fs::set_permissions(&incoming, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(stats.reclaimed, 0);
+        assert_eq!(stats.failed, 1);
+        assert!(original.is_file(), "untrashable original must be kept");
     }
 }

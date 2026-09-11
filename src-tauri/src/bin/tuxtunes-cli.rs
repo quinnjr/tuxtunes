@@ -1,10 +1,12 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+mod import_cmd;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "tuxtunes-cli",
-    about = "Manage iTunes .itl sync sources for TuxTunes"
+    about = "Manage the TuxTunes library: import audio, manage iTunes .itl sync sources"
 )]
 struct Cli {
     /// Path to the library database (defaults to the desktop app's DB).
@@ -22,6 +24,20 @@ enum Command {
     /// Run sync reconciliation.
     #[command(subcommand)]
     Sync(SyncCommand),
+    /// Add audio files to the library. Each path is a file or a
+    /// directory (directories are walked recursively); added files are
+    /// copied under the managed library root, exactly like the GUI's
+    /// Add Folder. Re-running is a no-op for files already imported.
+    Import {
+        /// Files or directories to import.
+        #[arg(required = true)]
+        paths: Vec<std::path::PathBuf>,
+    },
+    /// Trash the source files that importing copied under the managed
+    /// library root. Each original is hash-verified against its copy
+    /// first and goes to the system trash, never unlink — the GUI's
+    /// Reclaim Originals, headless.
+    Reclaim,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -198,6 +214,35 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Import { paths } => {
+            // clap's `required = true` rejects the empty case; an empty
+            // slice here returns a zero summary by construction.
+            let summary = import_cmd::run_import(&db, &paths).await?;
+            println!(
+                "added={} skipped={} failed={}",
+                summary.added,
+                summary.skipped,
+                summary.failed.len()
+            );
+            for f in &summary.failed {
+                eprintln!("failed: {f}");
+            }
+            if !summary.failed.is_empty() {
+                anyhow::bail!("{} file(s) failed to import", summary.failed.len());
+            }
+            Ok(())
+        }
+        Command::Reclaim => {
+            let stats = tuxtunes::fs::reclaim::reclaim_all_headless(&db.engine).await?;
+            println!(
+                "reclaimed={} bytes_freed={} skipped={} failed={}",
+                stats.reclaimed, stats.bytes_freed, stats.skipped, stats.failed
+            );
+            if stats.failed > 0 {
+                anyhow::bail!("{} file(s) failed to reclaim", stats.failed);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -299,5 +344,32 @@ mod tests {
     fn parse_mapping_rejects_empty_from_or_to() {
         assert!(parse_mapping("=/mnt/music").is_err());
         assert!(parse_mapping("D:/=").is_err());
+    }
+
+    #[test]
+    fn parses_import_with_paths() {
+        let cli =
+            Cli::try_parse_from(["tuxtunes-cli", "import", "/music/a", "/music/b.flac"]).unwrap();
+        match cli.command {
+            Command::Import { paths } => {
+                assert_eq!(
+                    paths,
+                    vec![PathBuf::from("/music/a"), PathBuf::from("/music/b.flac")]
+                );
+            }
+            _ => panic!("expected import"),
+        }
+    }
+
+    #[test]
+    fn import_requires_at_least_one_path() {
+        let cli = Cli::try_parse_from(["tuxtunes-cli", "import"]);
+        assert!(cli.is_err());
+    }
+
+    #[test]
+    fn parses_reclaim() {
+        let cli = Cli::try_parse_from(["tuxtunes-cli", "reclaim"]).unwrap();
+        assert!(matches!(cli.command, Command::Reclaim));
     }
 }

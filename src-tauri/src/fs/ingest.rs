@@ -106,12 +106,22 @@ impl IngestWorker {
     }
 }
 
-pub(crate) async fn ingest_one<R: Runtime>(
+/// Where a track's file landed after the managed copy.
+#[derive(Debug, Clone)]
+pub struct IngestLanded {
+    pub managed_path: PathBuf,
+    pub artwork_path: Option<PathBuf>,
+}
+
+/// Copy a freshly added track under the library root and point its row
+/// at the copy — the worker-free half of `ingest_one`. Headless
+/// callers (`tuxtunes-cli import`) use this directly; the GUI worker
+/// wraps it with its event emits so both paths share one copy.
+pub async fn ingest_one_headless(
     engine: &SqliteRawEngine,
-    app: &AppHandle<R>,
     track_id: i64,
     source_path: &std::path::Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<IngestLanded> {
     // Per-track progress emits are intentionally omitted — the
     // fs:ingest-complete event fires once per track and carries the
     // managed path, so the UI can track progress without the IPC
@@ -158,8 +168,7 @@ pub(crate) async fn ingest_one<R: Runtime>(
     // goes in `artwork_path`: the asset-protocol scope is pinned to
     // `$APPDATA/artwork/**`, so a path under the library root would 403
     // in the webview. That column belongs to `resolve_artwork_for_album`
-    // and its cache; passing None here leaves whatever it resolved.
-    let artwork_str = artwork.as_ref().map(|p| p.display().to_string());
+    // and its cache; passing None below leaves whatever it resolved.
 
     // `original_path` records where a copied file came from. For a file
     // that was already in place there is no separate original, and
@@ -186,13 +195,22 @@ pub(crate) async fn ingest_one<R: Runtime>(
         anyhow::bail!("track {track_id} disappeared before its copy landed");
     }
 
+    Ok(IngestLanded {
+        managed_path: target_abs,
+        artwork_path: artwork,
+    })
+}
+
+pub(crate) async fn ingest_one<R: Runtime>(
+    engine: &SqliteRawEngine,
+    app: &AppHandle<R>,
+    track_id: i64,
+    source_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let landed = ingest_one_headless(engine, track_id, source_path).await?;
     let _ = app.emit(
         INGEST_COMPLETE,
-        IngestComplete {
-            track_id,
-            managed_path: target_abs.display().to_string(),
-            artwork_path: artwork_str,
-        },
+        IngestComplete::from_landed(track_id, &landed),
     );
     Ok(())
 }
@@ -310,5 +328,59 @@ fn make_owner_writable(path: &std::path::Path) {
             perms.set_readonly(false);
             let _ = std::fs::set_permissions(path, perms);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Db;
+
+    /// A tiny synthetic WAV that lofty will happily parse.
+    fn write_minimal_wav(path: &std::path::Path) {
+        let header: &[u8] = &[
+            b'R', b'I', b'F', b'F', 0x25, 0x00, 0x00, 0x00, // chunk size 37
+            b'W', b'A', b'V', b'E', b'f', b'm', b't', b' ', 0x10, 0x00, 0x00,
+            0x00, // subchunk1 size 16
+            0x01, 0x00, // PCM
+            0x01, 0x00, // mono
+            0x40, 0x1f, 0x00, 0x00, // 8000 Hz
+            0x40, 0x1f, 0x00, 0x00, // byte rate
+            0x01, 0x00, // block align
+            0x08, 0x00, // bits/sample
+            b'd', b'a', b't', b'a', 0x01, 0x00, 0x00, 0x00, // data size 1
+            0x80, // one silent sample
+        ];
+        std::fs::write(path, header).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ingest_one_headless_copies_file_under_library_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Db::open(&tmp.path().join("t.db")).await.unwrap();
+        let root = tmp.path().join("managed");
+        crate::db::preferences::set_library_root(&db.engine, &root)
+            .await
+            .unwrap();
+
+        let src_dir = tmp.path().join("incoming");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let src = src_dir.join("a_track.wav");
+        write_minimal_wav(&src);
+
+        let id = crate::library::ingest::probe_and_add(&db.engine, &src)
+            .await
+            .unwrap();
+        let landed = ingest_one_headless(&db.engine, id, &src).await.unwrap();
+
+        assert!(landed.managed_path.starts_with(&root));
+        assert!(landed.managed_path.is_file());
+        // The source is left behind; reclaiming it is a separate step.
+        assert!(src.is_file());
+
+        let row = crate::db::tracks::get(&db.engine, id).await.unwrap();
+        assert_eq!(row.file_path, landed.managed_path.display().to_string());
+        assert_eq!(row.import_status, "ok");
+        assert!(row.file_hash.is_some());
     }
 }

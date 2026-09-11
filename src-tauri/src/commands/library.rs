@@ -306,23 +306,16 @@ fn file_label(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Add one picked file. A file the library already has — under either
-/// its current path or the one it was copied from — is left alone:
-/// copy-on-add vacates the source path that `file_path`'s UNIQUE
-/// constraint used to guard, so without this the second pick would add
-/// and copy it all over again.
+/// Add one picked file. Deduplication lives in
+/// [`ingest::ensure_track`] (shared with the headless import); a file
+/// the library already has is left alone.
 async fn add_one_picked_file(
     state: &AppState,
     path_buf: std::path::PathBuf,
 ) -> Result<AddOutcome, ingest::IngestError> {
-    if ingest::track_id_for_path(&state.db.engine, &path_buf)
-        .await?
-        .is_some()
-    {
+    let Some(id) = ingest::ensure_track(&state.db.engine, &path_buf).await? else {
         return Ok(AddOutcome::Existing);
-    }
-
-    let id = ingest::probe_and_add(&state.db.engine, &path_buf).await?;
+    };
 
     queue_copy(state, id, path_buf);
 
