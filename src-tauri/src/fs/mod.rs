@@ -3,6 +3,7 @@
 
 pub mod artwork;
 pub mod consolidate;
+pub mod convert;
 pub mod coordinator;
 pub mod events;
 pub mod hash;

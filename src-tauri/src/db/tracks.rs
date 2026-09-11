@@ -38,6 +38,18 @@ pub struct TrackRow {
     /// Cached cover image, if one has been resolved for the album.
     #[serde(default)]
     pub artwork_path: Option<String>,
+    /// 0–100 in iTunes units (20 per star); 0 = unrated.
+    #[serde(default)]
+    pub rating: i64,
+    /// The album's own 0–100 rating, as iTunes keeps it — separate from
+    /// the track's. Identical on every track of the album.
+    #[serde(default)]
+    pub album_rating: i64,
+    /// Unix seconds. The column holds either SQLite datetime text
+    /// (`date_added` default / older imports) or an integer (sync
+    /// inserts), so the SELECT normalises both — see `TRACK_ROW_COLUMNS`.
+    #[serde(default)]
+    pub date_added_unix: Option<i64>,
 }
 
 fn default_import_status() -> String {
@@ -49,7 +61,9 @@ fn default_import_status() -> String {
 /// `db::playlists`, `db::smart`) so the column list lives in one place.
 pub const TRACK_ROW_COLUMNS: &str = "id, title, artist, album, album_artist, genre, year, \
      track_number, disc_number, duration_ms, file_path, file_hash, sample_rate, bit_depth, \
-     kind, play_count, skip_count, import_status, artwork_path";
+     kind, play_count, skip_count, import_status, artwork_path, rating, album_rating, \
+     CASE WHEN typeof(date_added) IN ('integer', 'real') THEN CAST(date_added AS INTEGER) \
+          ELSE CAST(strftime('%s', date_added) AS INTEGER) END AS date_added_unix";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TracksError {
@@ -148,13 +162,23 @@ pub async fn list(
 }
 
 pub async fn get(engine: &SqliteRawEngine, id: i64) -> Result<TrackRow, TracksError> {
+    get_opt(engine, id)
+        .await?
+        .ok_or_else(|| TracksError::Query(anyhow::anyhow!("track {id} not found")))
+}
+
+/// Like [`get`], but a missing row is `Ok(None)` rather than an error,
+/// so callers can tell "gone" from "the database is unwell".
+pub async fn get_opt(engine: &SqliteRawEngine, id: i64) -> Result<Option<TrackRow>, TracksError> {
     let sql = format!("SELECT {TRACK_ROW_COLUMNS} FROM tracks WHERE id = ?");
     let params = vec![prax_query::filter::FilterValue::Int(id)];
-    let json_row = engine
-        .raw_sql_first(&sql, &params)
-        .await
-        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    let json_row = match engine.raw_sql_optional(&sql, &params).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(TracksError::Query(anyhow::Error::from(e))),
+    };
     serde_json::from_value(json_row.into_json())
+        .map(Some)
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))
 }
 
@@ -207,6 +231,8 @@ pub struct ItlTrackUpsert<'a> {
     pub year: Option<i64>,
     pub bpm: Option<i64>,
     pub rating: i64,
+    /// The iTunes album record's rating, 0 when the album has none.
+    pub album_rating: i64,
     pub play_count: i64,
     pub date_added_unix: i64,
     pub file_path: &'a str,
@@ -372,9 +398,9 @@ pub async fn insert_from_itl(
     let sql = "INSERT INTO tracks ( \
         persistent_id, sync_source_id, title, artist, album, album_artist, \
         composer, genre, kind, duration_ms, size_bytes, bit_rate, sample_rate, \
-        track_number, disc_number, year, bpm, rating, play_count, \
+        track_number, disc_number, year, bpm, rating, album_rating, play_count, \
         date_added, file_path, original_path, playlist_ids) \
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
                 datetime(?, 'unixepoch'), ?, ?, '[]') RETURNING id";
     let params = vec![
         FV::String(pid_hex(t.persistent_id)),
@@ -395,6 +421,7 @@ pub async fn insert_from_itl(
         opt_int(t.year),
         opt_int(t.bpm),
         FV::Int(t.rating),
+        FV::Int(t.album_rating),
         FV::Int(t.play_count),
         FV::Int(t.date_added_unix),
         FV::String(t.file_path.to_string()),
@@ -448,7 +475,7 @@ pub async fn update_descriptive_fields(
         disc_number = CASE WHEN user_edited = 1 THEN disc_number ELSE ? END, \
         year = CASE WHEN user_edited = 1 THEN year ELSE ? END, \
         bpm = ?, \
-        rating = ?, play_count = ?, file_path = ?, \
+        rating = ?, album_rating = ?, play_count = ?, file_path = ?, \
         import_status = CASE WHEN file_path = ? THEN import_status ELSE 'ok' END, \
         file_hash = CASE WHEN file_path = ? THEN file_hash ELSE NULL END, \
         verified_at = CASE WHEN file_path = ? THEN verified_at ELSE CURRENT_TIMESTAMP END \
@@ -470,6 +497,7 @@ pub async fn update_descriptive_fields(
         opt_int(t.year),
         opt_int(t.bpm),
         FV::Int(resolved_rating),
+        FV::Int(t.album_rating),
         FV::Int(resolved_play_count),
         FV::String(t.file_path.to_string()),
         FV::String(t.file_path.to_string()),
@@ -731,6 +759,7 @@ mod tests {
             year: Some(2001),
             bpm: None,
             rating: 0,
+            album_rating: 0,
             play_count: 0,
             date_added_unix: 0,
             file_path: path,
@@ -1008,6 +1037,9 @@ mod tests {
             skip_count: 2,
             import_status: "ok".to_string(),
             artwork_path: None,
+            rating: 80,
+            album_rating: 60,
+            date_added_unix: Some(1_700_000_000),
         };
         let json = serde_json::to_string(&row).unwrap();
         let back: TrackRow = serde_json::from_str(&json).unwrap();
@@ -1047,6 +1079,7 @@ mod tests {
             year: Some(1972),
             bpm: None,
             rating: 80,
+            album_rating: 0,
             play_count: 12,
             date_added_unix: 1_700_000_000,
             file_path: "/mnt/d/music/foxtrot.flac",
@@ -1101,6 +1134,7 @@ mod tests {
             year: None,
             bpm: None,
             rating: 0,
+            album_rating: 0,
             play_count: 0,
             date_added_unix: 0,
             file_path: path,
@@ -1379,6 +1413,7 @@ mod tests {
             year: Some(2000),
             bpm: None,
             rating: 0,
+            album_rating: 0,
             play_count: 0,
             date_added_unix: 0,
             file_path: "/tmp/u.flac",
@@ -1524,6 +1559,7 @@ mod tests {
             year: None,
             bpm: None,
             rating: 0,
+            album_rating: 0,
             play_count: 0,
             date_added_unix: 0,
             file_path: "/music/old.mp3",

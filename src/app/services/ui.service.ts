@@ -1,4 +1,5 @@
 import { Injectable, computed, signal } from '@angular/core';
+import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { toErrorMessage } from '../utils/errors';
 
 export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
@@ -26,6 +27,37 @@ export interface ConfirmRequest {
   onConfirm: () => void | Promise<void>;
 }
 
+/**
+ * Album-card orderings. `playlist` is the order the playlist first
+ * reaches each album; the rest sort by an album-level value derived
+ * from its tracks (see `PlaylistAlbum`).
+ */
+export type PlaylistAlbumSortKey = 'playlist' | 'name' | 'artist' | 'year' | 'rating' | 'dateAdded';
+
+export interface PlaylistAlbumSort {
+  key: PlaylistAlbumSortKey;
+  descending: boolean;
+}
+
+export const DEFAULT_PLAYLIST_ALBUM_SORT: PlaylistAlbumSort = {
+  key: 'playlist',
+  descending: false,
+};
+
+export const PLAYLIST_ALBUM_SORT_KEYS: readonly PlaylistAlbumSortKey[] = [
+  'playlist',
+  'name',
+  'artist',
+  'year',
+  'rating',
+  'dateAdded',
+] as const;
+
+/** Newest / highest first is the natural reading for these. */
+export function defaultDescending(key: PlaylistAlbumSortKey): boolean {
+  return key === 'year' || key === 'rating' || key === 'dateAdded';
+}
+
 @Injectable({ providedIn: 'root' })
 export class UiService {
   readonly importWizardOpen = signal(false);
@@ -36,6 +68,9 @@ export class UiService {
 
   /** Presentation of the active playlist; sticky across playlists. */
   readonly playlistView = signal<PlaylistView>('albums');
+
+  /** Ordering of the cards in a playlist's album view; sticky across playlists. */
+  readonly playlistAlbumSort = signal<PlaylistAlbumSort>({ ...DEFAULT_PLAYLIST_ALBUM_SORT });
 
   /** Whether the column browser strip is shown above the active view. */
   readonly columnBrowserOpen = signal(false);
@@ -123,6 +158,12 @@ export class UiService {
       this.reportError(error);
       return null;
     }
+  }
+
+  /** Native folder picker; null when cancelled or when the dialog failed. */
+  async pickDirectory(): Promise<string | null> {
+    const picked = await this.guard(dialogOpen({ directory: true, multiple: false }));
+    return typeof picked === 'string' ? picked : null;
   }
 
   private setError(message: string | null): void {

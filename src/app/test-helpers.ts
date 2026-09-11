@@ -5,6 +5,7 @@
 
 import { Provider } from '@angular/core';
 import { vi } from 'vitest';
+import { DEFAULT_CONVERT_PREFS } from './services/convert.service';
 import { DeviceService } from './services/device.service';
 import { LibraryService } from './services/library.service';
 import { PlaybackService } from './services/playback.service';
@@ -44,6 +45,12 @@ export const defaultInvoke = async (cmd: string): Promise<unknown> => {
   }
   if (cmd === 'resolve_album_artwork' || cmd === 'resolve_track_artwork') {
     return null;
+  }
+  if (cmd === 'convert_available') {
+    return true;
+  }
+  if (cmd === 'get_convert_prefs' || cmd === 'set_convert_prefs') {
+    return DEFAULT_CONVERT_PREFS;
   }
   if (cmd === 'get_audio_prefs') {
     return { device_id: null, exclusive: false, replaygain_mode: 'off' };

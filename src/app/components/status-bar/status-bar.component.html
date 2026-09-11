@@ -17,7 +17,21 @@
       [title]="error"
       >{{ error }}</span
     >
-  } @else if (syncLabel(); as label) {
+  } @else if (convert.running()) {
+    <!-- Conversion is started from a context menu anywhere in the app,
+         so this is the one place its progress is guaranteed visible. It
+         outranks the sync label because the user just asked for it. -->
+    <app-convert-activity class="absolute right-4 flex items-center gap-2 text-text-secondary" />
+  } @else if (convert.lastComplete()?.failed) {
+    <!-- A batch started from the context menu has nowhere else to report
+         a partial failure; like "Sync error", this stays until the next
+         run or the user opens Settings → Conversion for the details. -->
+    <span
+      class="absolute right-4 max-w-[50%] truncate font-medium text-accent"
+      [title]="convert.summary()"
+      >{{ convert.summary() }}</span
+    >
+  } @else if (activityLabel(); as label) {
     <span class="absolute right-4 text-text-secondary">{{ label }}</span>
   }
 </footer>

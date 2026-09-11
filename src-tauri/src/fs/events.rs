@@ -11,6 +11,11 @@ use serde::Serialize;
 pub const INGEST_PROGRESS: &str = "fs:ingest-progress";
 pub const INGEST_COMPLETE: &str = "fs:ingest-complete";
 pub const INGEST_FAILED: &str = "fs:ingest-failed";
+
+/// Rows appeared or changed outside the UI's own actions: the DB watcher
+/// fires it on any foreign commit, and workers that insert rows nudge it
+/// directly so the list does not wait out the poll interval.
+pub const LIBRARY_CHANGED: &str = "library:external-change";
 pub const ORGANIZE_APPLIED: &str = "fs:organize-applied";
 pub const ORGANIZE_FAILED: &str = "fs:organize-failed";
 pub const CONSOLIDATE_PROGRESS: &str = "fs:consolidate-progress";
@@ -20,6 +25,14 @@ pub const RECLAIM_COMPLETE: &str = "fs:reclaim-complete";
 pub const VERIFY_PROGRESS: &str = "fs:verify-progress";
 pub const VERIFY_COMPLETE: &str = "fs:verify-complete";
 pub const VERIFY_FAILED: &str = "fs:verify-failed";
+/// The worker picked a batch up. Emitted before any of its progress or
+/// its complete, so the UI learns of a batch from the same ordered
+/// stream that ends it — never from the invoke response, which can
+/// arrive after a fast-failing batch has already finished.
+pub const CONVERT_STARTED: &str = "fs:convert-started";
+pub const CONVERT_PROGRESS: &str = "fs:convert-progress";
+pub const CONVERT_COMPLETE: &str = "fs:convert-complete";
+pub const CONVERT_FAILED: &str = "fs:convert-failed";
 
 /// Payload for [`INGEST_PROGRESS`]. See that constant for why this
 /// event is reserved and not currently emitted.
@@ -36,6 +49,22 @@ pub struct IngestComplete {
     pub track_id: i64,
     pub managed_path: String,
     pub artwork_path: Option<String>,
+}
+
+impl IngestComplete {
+    /// The single conversion site from the headless copy outcome to the
+    /// IPC payload: `display().to_string()` is the canonical crossing
+    /// from fs paths into event/DB string space.
+    pub fn from_landed(track_id: i64, landed: &super::ingest::IngestLanded) -> Self {
+        Self {
+            track_id,
+            managed_path: landed.managed_path.display().to_string(),
+            artwork_path: landed
+                .artwork_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -120,6 +149,47 @@ pub struct VerifyFailed {
     pub message: String,
 }
 
+/// Emitted before each file in a convert batch starts encoding, so the
+/// UI can name what it is working on. `current` is zero-based.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConvertProgress {
+    pub current: u64,
+    pub total: u64,
+    pub title: String,
+    /// How far through this file the encoder is, or `None` when the
+    /// library does not know the track's duration and there is nothing
+    /// to measure against.
+    pub percent: Option<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConvertStarted {
+    pub generation: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConvertComplete {
+    /// Matches the [`ConvertStarted`] this closes.
+    pub generation: u64,
+    pub total: u64,
+    pub converted: u64,
+    pub failed: u64,
+    /// Converted files that were also added to the library as tracks.
+    pub added_to_library: u64,
+    /// Whether the batch stopped early because the user cancelled.
+    pub cancelled: bool,
+    /// Target extension, so a UI showing several batches can label them.
+    pub format: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConvertFailed {
+    pub track_id: i64,
+    pub title: String,
+    pub error: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +208,10 @@ mod tests {
         assert_eq!(VERIFY_PROGRESS, "fs:verify-progress");
         assert_eq!(VERIFY_COMPLETE, "fs:verify-complete");
         assert_eq!(VERIFY_FAILED, "fs:verify-failed");
+        assert_eq!(CONVERT_PROGRESS, "fs:convert-progress");
+        assert_eq!(CONVERT_COMPLETE, "fs:convert-complete");
+        assert_eq!(CONVERT_FAILED, "fs:convert-failed");
+        assert_eq!(CONVERT_STARTED, "fs:convert-started");
+        assert_eq!(LIBRARY_CHANGED, "library:external-change");
     }
 }

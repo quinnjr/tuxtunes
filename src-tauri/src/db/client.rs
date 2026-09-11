@@ -29,6 +29,8 @@ const PLAYLIST_LOCAL_EDITS_MIGRATION: &str =
 const TRACK_USER_EDITS_MIGRATION: &str =
     include_str!("../../prax/migrations/0004_track_user_edits/migration.sql");
 const DEVICES_MIGRATION: &str = include_str!("../../prax/migrations/0005_devices/migration.sql");
+const ALBUM_RATING_MIGRATION: &str =
+    include_str!("../../prax/migrations/0006_album_rating/migration.sql");
 
 /// A single migration entry: a stable name (the ledger key), the SQL batch
 /// to run, and a backfill probe used only when the ledger has no row for
@@ -83,6 +85,13 @@ static MIGRATIONS: &[Migration] = &[
         marker_sql: "SELECT COUNT(*) FROM sqlite_master \
              WHERE type = 'table' AND name IN ('devices', 'device_objects')",
         marker_count: 2,
+    },
+    Migration {
+        name: "0006_album_rating",
+        sql: ALBUM_RATING_MIGRATION,
+        marker_sql: "SELECT COUNT(*) FROM pragma_table_info('tracks') \
+             WHERE name = 'album_rating'",
+        marker_count: 1,
     },
 ];
 
@@ -331,7 +340,8 @@ mod tests {
                 "0002_composite_sync_indexes".to_string(),
                 "0003_playlist_local_edits".to_string(),
                 "0004_track_user_edits".to_string(),
-                "0005_devices".to_string()
+                "0005_devices".to_string(),
+                "0006_album_rating".to_string()
             ],
             "ledger should carry every migration after upgrade"
         );

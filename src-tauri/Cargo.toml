@@ -1,6 +1,6 @@
 [package]
 name = "tuxtunes"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 default-run = "tuxtunes"
@@ -45,3 +45,6 @@ tempfile = "3"
 # `test-util` (not part of tokio's "full") provides the paused clock the
 # device timeout tests use to elapse a 30s deadline instantly.
 tokio = { version = "1", features = ["full", "test-util"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2.4.4"

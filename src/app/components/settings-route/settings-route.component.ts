@@ -13,12 +13,13 @@ import { TauriService } from '../../services/tauri.service';
 import { UiService } from '../../services/ui.service';
 import { toErrorMessage } from '../../utils/errors';
 import { SettingsAudioComponent } from '../settings-audio/settings-audio.component';
+import { SettingsConvertComponent } from '../settings-convert/settings-convert.component';
 
-type SettingsTab = 'playback' | 'sync' | 'maintenance' | 'about';
+type SettingsTab = 'playback' | 'convert' | 'sync' | 'maintenance' | 'about';
 
 @Component({
   selector: 'app-settings-route',
-  imports: [SettingsAudioComponent],
+  imports: [SettingsAudioComponent, SettingsConvertComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './settings-route.component.html',
 })
@@ -31,6 +32,7 @@ export class SettingsRouteComponent implements OnInit, OnDestroy {
   protected readonly tab = signal<SettingsTab>('playback');
   protected readonly tabs: readonly { id: SettingsTab; label: string }[] = [
     { id: 'playback', label: 'Playback' },
+    { id: 'convert', label: 'Conversion' },
     { id: 'sync', label: 'Sync Sources' },
     { id: 'maintenance', label: 'Library Maintenance' },
     { id: 'about', label: 'About' },

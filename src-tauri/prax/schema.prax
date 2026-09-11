@@ -108,6 +108,8 @@ model Track {
 
     // User stats
     rating          Int          @default(0)
+    /// iTunes album rating (0–100), carried on every track of the album; independent of `rating`.
+    album_rating    Int          @default(0)
     play_count      Int          @default(0)
     skip_count      Int          @default(0)
     last_played     DateTime?

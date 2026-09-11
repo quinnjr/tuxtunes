@@ -247,7 +247,36 @@ describe('App view persistence', () => {
       expandedFolders: [2, 5],
       nowPlayingOpen: true,
       columns: { genres: ['Jazz'], artists: [], albums: [] },
+      playlistAlbumSort: { key: 'playlist', descending: false },
     });
+  });
+
+  it('remembers the album sort, and accepts a view saved before it existed', () => {
+    localStorage.clear();
+    const { fixture, ui } = setup();
+    ui.playlistAlbumSort.set({ key: 'rating', descending: true });
+    fixture.detectChanges();
+    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) ?? '{}') as {
+      playlistAlbumSort: unknown;
+    };
+    expect(saved.playlistAlbumSort).toEqual({ key: 'rating', descending: true });
+
+    TestBed.resetTestingModule();
+    const { ui: restored } = setup();
+    expect(restored.playlistAlbumSort()).toEqual({ key: 'rating', descending: true });
+
+    TestBed.resetTestingModule();
+    const older: Record<string, unknown> = { ...saved };
+    delete older['playlistAlbumSort'];
+    localStorage.setItem(VIEW_KEY, JSON.stringify(older));
+    expect(setup().ui.playlistAlbumSort()).toEqual({ key: 'playlist', descending: false });
+
+    TestBed.resetTestingModule();
+    localStorage.setItem(
+      VIEW_KEY,
+      JSON.stringify({ ...saved, playlistAlbumSort: { key: 'bogus', descending: true } }),
+    );
+    expect(setup().ui.playlistAlbumSort()).toEqual({ key: 'playlist', descending: false });
   });
 
   it('restores the saved view on startup', () => {
