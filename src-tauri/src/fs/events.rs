@@ -51,6 +51,22 @@ pub struct IngestComplete {
     pub artwork_path: Option<String>,
 }
 
+impl IngestComplete {
+    /// The single conversion site from the headless copy outcome to the
+    /// IPC payload: `display().to_string()` is the canonical crossing
+    /// from fs paths into event/DB string space.
+    pub fn from_landed(track_id: i64, landed: &super::ingest::IngestLanded) -> Self {
+        Self {
+            track_id,
+            managed_path: landed.managed_path.display().to_string(),
+            artwork_path: landed
+                .artwork_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct IngestFailed {
     pub track_id: i64,

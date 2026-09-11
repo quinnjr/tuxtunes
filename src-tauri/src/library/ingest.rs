@@ -275,6 +275,57 @@ pub async fn track_id_for_path(
     Ok(row.and_then(|r| r.into_json().get("id").and_then(|v| v.as_i64())))
 }
 
+/// Ensure one file is in the library: probe and insert it, or return
+/// the row the library already has — under either its current path or
+/// the one it was copied from, since copy-on-add vacates the source
+/// path that `file_path`'s UNIQUE constraint used to guard. Shared by
+/// the GUI picker and the headless import so the dedup policy lives in
+/// exactly one place. Returns the new row id, or `None` when the file
+/// was already present.
+pub async fn ensure_track(
+    engine: &SqliteRawEngine,
+    path: &Path,
+) -> Result<Option<i64>, IngestError> {
+    if track_id_for_path(engine, path).await?.is_some() {
+        return Ok(None);
+    }
+    probe_and_add(engine, path).await.map(Some)
+}
+
+/// Rows under `dir` whose file was inserted but never copied under the
+/// managed library root — a copy that failed, or a process that died
+/// between insert and copy. Re-running an import must re-queue these
+/// instead of counting them as done: they match `known_paths` (and so
+/// would otherwise be skipped forever) while pointing outside the
+/// root with no recorded original.
+pub async fn pending_copies(
+    engine: &SqliteRawEngine,
+    dir: &Path,
+) -> Result<Vec<(i64, std::path::PathBuf)>, IngestError> {
+    let root = crate::db::preferences::get_library_root(engine)
+        .await
+        .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
+    let prefix = format!("{}%", dir.display());
+    let rows = engine
+        .raw_sql_query(
+            "SELECT id, file_path FROM tracks \
+             WHERE file_path LIKE ?1 AND original_path IS NULL ORDER BY id",
+            &[FilterValue::String(prefix)],
+        )
+        .await
+        .map_err(|e| IngestError::Db(anyhow::Error::from(e)))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let json = row.into_json();
+            let id = json.get("id").and_then(|v| v.as_i64())?;
+            let file_path = json.get("file_path").and_then(|v| v.as_str())?;
+            (!crate::fs::path::is_under(&root, Path::new(file_path)))
+                .then(|| (id, std::path::PathBuf::from(file_path)))
+        })
+        .collect())
+}
+
 /// Add every audio file under `dir` that the library doesn't already
 /// reference. Per-file probe failures are recorded, not fatal.
 pub async fn add_folder(
@@ -589,5 +640,65 @@ mod tests {
 
         let err = probe_and_add(&db.engine, &bogus).await.unwrap_err();
         assert!(matches!(err, IngestError::Probe { .. }));
+    }
+
+    #[tokio::test]
+    async fn ensure_track_adds_once_then_reports_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("a.wav");
+        write_minimal_wav(&src);
+
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp_db.path()).await.unwrap();
+
+        let id = ensure_track(&db.engine, &src)
+            .await
+            .unwrap()
+            .expect("first call inserts");
+        assert!(id > 0);
+        assert_eq!(ensure_track(&db.engine, &src).await.unwrap(), None);
+
+        let n: i64 = db
+            .engine
+            .raw_sql_scalar("SELECT COUNT(*) FROM tracks", &[])
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn pending_copies_finds_stranded_rows_but_not_landed_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Db::open(&tmp.path().join("t.db")).await.unwrap();
+        let root = tmp.path().join("managed");
+        crate::db::preferences::set_library_root(&db.engine, &root)
+            .await
+            .unwrap();
+
+        let dir = tmp.path().join("incoming");
+        std::fs::create_dir_all(&dir).unwrap();
+        let stranded = dir.join("stranded.wav");
+        write_minimal_wav(&stranded);
+        let landed_src = dir.join("landed.wav");
+        write_minimal_wav(&landed_src);
+
+        // Stranded: inserted, never copied.
+        let stranded_id = probe_and_add(&db.engine, &stranded).await.unwrap();
+        // Landed: file_path under the root with a recorded original.
+        let landed_id = probe_and_add(&db.engine, &landed_src).await.unwrap();
+        let managed = root.join("landed.wav");
+        crate::db::tracks::set_file_paths(
+            &db.engine,
+            landed_id,
+            &managed.display().to_string(),
+            Some(&landed_src.display().to_string()),
+            "00",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let pending = pending_copies(&db.engine, &dir).await.unwrap();
+        assert_eq!(pending, vec![(stranded_id, stranded)]);
     }
 }

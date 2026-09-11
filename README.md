@@ -174,6 +174,16 @@ Headless management of iTunes sync sources — useful for scripting, cron, or a 
 import before you ever open the GUI.
 
 ```bash
+# Import audio straight into the library (files or folders, recursively).
+# Added files are copied under the managed library root, like the GUI's
+# Add Folder; re-running skips files that are already imported.
+tuxtunes-cli import ~/Music/_incoming
+
+# Trash the source files importing left behind. Each original is
+# hash-verified against its managed copy first and goes to the system
+# trash, never unlink.
+tuxtunes-cli reclaim
+
 # Point at an iTunes library and remap its media paths
 tuxtunes-cli source add \
   --name "Old Windows library" \
