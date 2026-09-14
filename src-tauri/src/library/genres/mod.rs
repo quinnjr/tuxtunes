@@ -9,5 +9,6 @@
 pub mod apply;
 pub mod map;
 pub mod musicbrainz;
+pub mod rebuild;
 pub mod resolve;
 pub mod taxonomy;
