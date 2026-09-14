@@ -807,7 +807,9 @@ mod tests {
     async fn set_genre_user_edited_only_touches_changed_rows() {
         let db = tmp_db().await;
         let id = insert_fixture(&db.engine, "T", "/tmp/g.flac").await;
-        assert!(set_genre_user_edited(&db.engine, id, "Metalcore").await.unwrap());
+        assert!(set_genre_user_edited(&db.engine, id, "Metalcore")
+            .await
+            .unwrap());
         let row: serde_json::Value = db
             .engine
             .raw_sql_first(
@@ -819,8 +821,12 @@ mod tests {
             .into_json();
         assert_eq!(row["genre"], "Metalcore");
         assert_eq!(row["user_edited"], 1);
-        assert!(!set_genre_user_edited(&db.engine, id, "Metalcore").await.unwrap());
-        assert!(!set_genre_user_edited(&db.engine, 999_999, "X").await.unwrap());
+        assert!(!set_genre_user_edited(&db.engine, id, "Metalcore")
+            .await
+            .unwrap());
+        assert!(!set_genre_user_edited(&db.engine, 999_999, "X")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

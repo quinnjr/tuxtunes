@@ -33,8 +33,16 @@ pub async fn artist_stats(engine: &SqliteRawEngine) -> anyhow::Result<Vec<Artist
     let mut by_key: BTreeMap<String, ArtistStats> = BTreeMap::new();
     for r in rows {
         let j = r.into_json();
-        let key = j.get("k").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let tag = j.get("g").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let key = j
+            .get("k")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let tag = j
+            .get("g")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let count = j.get("c").and_then(|v| v.as_u64()).unwrap_or(0);
         let entry = by_key.entry(key.clone()).or_insert_with(|| ArtistStats {
             key,
@@ -265,7 +273,13 @@ mod tests {
         insert(&db, "Obscure Band", None, Some("Death Metal/Black Metal")).await;
         insert(&db, "Nothing Known", None, Some("145")).await;
         insert(&db, "Armored Core V", None, Some("Game")).await;
-        insert(&db, "Various Artists", Some("Various Artists"), Some("Rock")).await;
+        insert(
+            &db,
+            "Various Artists",
+            Some("Various Artists"),
+            Some("Rock"),
+        )
+        .await;
         insert(&db, "Hand Fixed", None, Some("Pop")).await;
         insert(&db, "Already Done", None, Some("Pop")).await;
 
@@ -312,11 +326,18 @@ mod tests {
         assert_eq!(g("Various Artists").source, Source::Unresolved);
         assert_eq!(g("Hand Fixed").genre, "Trance");
         assert_eq!(g("Hand Fixed").source, Source::Manual);
-        assert_eq!(g("Hand Fixed").track_count, 1, "counts refresh even on kept entries");
+        assert_eq!(
+            g("Hand Fixed").track_count,
+            1,
+            "counts refresh even on kept entries"
+        );
         assert_eq!(g("Already Done").genre, "Old Genre");
 
         let calls = fake.calls.lock().unwrap().clone();
-        assert_eq!(calls, ["Asking Alexandria", "Nothing Known", "Obscure Band"]);
+        assert_eq!(
+            calls,
+            ["Asking Alexandria", "Nothing Known", "Obscure Band"]
+        );
         assert_eq!(saves.get(), 1);
         assert_eq!(
             summary,
@@ -360,9 +381,16 @@ mod tests {
         insert(&db, "A", None, None).await;
         insert(&db, "B", None, None).await;
         let mut map = GenreMap::default();
-        let err = resolve(&db.engine, &Boom, &mut map, ResolveOpts::default(), |_| Ok(()), |_, _, _| {})
-            .await
-            .unwrap_err();
+        let err = resolve(
+            &db.engine,
+            &Boom,
+            &mut map,
+            ResolveOpts::default(),
+            |_| Ok(()),
+            |_, _, _| {},
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("network down"));
         assert_eq!(map.artists["A"].genre, "Rock");
         assert!(!map.artists.contains_key("B"));

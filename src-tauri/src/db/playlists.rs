@@ -302,7 +302,10 @@ pub async fn ids_with_marker_prefix(
                AND persistent_id LIKE ? ESCAPE '\\' ORDER BY id";
     let pattern = format!(
         "{}%",
-        prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+        prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
     );
     collect_ids(engine, sql, &[FilterValue::String(pattern)]).await
 }
@@ -1359,9 +1362,16 @@ mod tests {
     #[tokio::test]
     async fn generated_rows_are_found_by_marker_and_synced_smart_folders_listed() {
         let db = tmp().await;
-        let folder = create_generated(&db.engine, "Metal", PlaylistKind::Folder, None, None, "gen:folder:Metal")
-            .await
-            .unwrap();
+        let folder = create_generated(
+            &db.engine,
+            "Metal",
+            PlaylistKind::Folder,
+            None,
+            None,
+            "gen:folder:Metal",
+        )
+        .await
+        .unwrap();
         let smart = create_generated(
             &db.engine,
             "Band",
@@ -1383,19 +1393,30 @@ mod tests {
             track_entries: &[],
             smart_rule_json: None,
         };
-        let s_smart = upsert(&db.engine, &mk(1, PlaylistKind::Smart)).await.unwrap();
-        let s_folder = upsert(&db.engine, &mk(2, PlaylistKind::Folder)).await.unwrap();
-        let _s_reg = upsert(&db.engine, &mk(3, PlaylistKind::Regular)).await.unwrap();
+        let s_smart = upsert(&db.engine, &mk(1, PlaylistKind::Smart))
+            .await
+            .unwrap();
+        let s_folder = upsert(&db.engine, &mk(2, PlaylistKind::Folder))
+            .await
+            .unwrap();
+        let _s_reg = upsert(&db.engine, &mk(3, PlaylistKind::Regular))
+            .await
+            .unwrap();
 
         assert_eq!(
             ids_with_marker_prefix(&db.engine, "gen:").await.unwrap(),
             vec![folder, smart]
         );
         assert_eq!(
-            ids_with_marker_prefix(&db.engine, "gen:artist:Band_100%").await.unwrap(),
+            ids_with_marker_prefix(&db.engine, "gen:artist:Band_100%")
+                .await
+                .unwrap(),
             vec![smart]
         );
-        assert!(ids_with_marker_prefix(&db.engine, "gen:artist:BandX100%").await.unwrap().is_empty());
+        assert!(ids_with_marker_prefix(&db.engine, "gen:artist:BandX100%")
+            .await
+            .unwrap()
+            .is_empty());
         assert_eq!(
             synced_smart_and_folder_ids(&db.engine).await.unwrap(),
             vec![s_smart, s_folder]
@@ -1404,7 +1425,10 @@ mod tests {
         let row = rows.iter().find(|r| r.id == smart).unwrap();
         assert_eq!(row.parent_id, Some(folder));
         assert_eq!(row.sync_source_id, None);
-        assert_eq!(get_smart_rule(&db.engine, smart).await.unwrap().as_deref(), Some("{}"));
+        assert_eq!(
+            get_smart_rule(&db.engine, smart).await.unwrap().as_deref(),
+            Some("{}")
+        );
         let _ = user;
     }
 

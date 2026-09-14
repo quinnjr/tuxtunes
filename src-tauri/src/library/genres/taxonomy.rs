@@ -141,7 +141,10 @@ pub fn normalize_tag(raw: &str) -> Option<String> {
     if JUNK.contains(&lower.as_str()) {
         return None;
     }
-    if lower.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ' ') {
+    if lower
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == ' ')
+    {
         return None;
     }
     if lower.contains('.') && !lower.contains(' ') && lower.contains(|c: char| c.is_alphabetic()) {
@@ -174,10 +177,7 @@ fn title_case(s: &str) -> String {
             if word.len() <= 3 && word.chars().all(|c| c.is_ascii_uppercase()) {
                 return word.to_string();
             }
-            word.split('-')
-                .map(cap_first)
-                .collect::<Vec<_>>()
-                .join("-")
+            word.split('-').map(cap_first).collect::<Vec<_>>().join("-")
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -254,7 +254,10 @@ const UMBRELLA_KEYWORDS: &[(Umbrella, &[&str])] = &[
             "pop punk",
         ],
     ),
-    (Umbrella::HipHop, &["hip hop", "rap", "trap", "grime", "drill"]),
+    (
+        Umbrella::HipHop,
+        &["hip hop", "rap", "trap", "grime", "drill"],
+    ),
     (
         Umbrella::Electronic,
         &[
@@ -327,11 +330,22 @@ const UMBRELLA_KEYWORDS: &[(Umbrella, &[&str])] = &[
             "traditional",
         ],
     ),
-    (Umbrella::NewAge, &["new age", "meditation", "relaxation", "healing"]),
+    (
+        Umbrella::NewAge,
+        &["new age", "meditation", "relaxation", "healing"],
+    ),
     (Umbrella::Rock, &["rock", "psychedelic", "progressive"]),
     (
         Umbrella::Pop,
-        &["pop", "j-pop", "k-pop", "idol", "disco", "easy listening", "vocal"],
+        &[
+            "pop",
+            "j-pop",
+            "k-pop",
+            "idol",
+            "disco",
+            "easy listening",
+            "vocal",
+        ],
     ),
 ];
 
@@ -374,22 +388,39 @@ mod tests {
 
     #[test]
     fn junk_is_none() {
-        for raw in ["", " ", "145", "atrilli.net", "Unclassifiable", "Other", "K Theory"] {
+        for raw in [
+            "",
+            " ",
+            "145",
+            "atrilli.net",
+            "Unclassifiable",
+            "Other",
+            "K Theory",
+        ] {
             assert_eq!(normalize_tag(raw), None, "{raw:?}");
         }
     }
 
     #[test]
     fn generic_tags_are_title_cased_and_collapsed() {
-        assert_eq!(normalize_tag("  heavy   metal ").as_deref(), Some("Heavy Metal"));
+        assert_eq!(
+            normalize_tag("  heavy   metal ").as_deref(),
+            Some("Heavy Metal")
+        );
         assert_eq!(normalize_tag("Metal").as_deref(), Some("Metal"));
-        assert_eq!(normalize_tag("post-hardcore").as_deref(), Some("Post-Hardcore"));
+        assert_eq!(
+            normalize_tag("post-hardcore").as_deref(),
+            Some("Post-Hardcore")
+        );
         assert_eq!(normalize_tag("EDM").as_deref(), Some("EDM"));
     }
 
     #[test]
     fn musicbrainz_genres_become_title_case() {
-        assert_eq!(canonical_genre("melodic death metal"), "Melodic Death Metal");
+        assert_eq!(
+            canonical_genre("melodic death metal"),
+            "Melodic Death Metal"
+        );
         assert_eq!(canonical_genre("drum and bass"), "Drum and Bass");
         assert_eq!(canonical_genre("hip hop"), "Hip Hop");
         assert_eq!(canonical_genre("rock"), "Rock");

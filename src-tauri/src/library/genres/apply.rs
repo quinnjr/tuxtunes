@@ -180,7 +180,8 @@ mod tests {
             "Band".into(),
             ArtistGenre::new("Metalcore", Source::Musicbrainz, 2),
         );
-        m.artists.insert("Nobody".into(), ArtistGenre::unresolved(1));
+        m.artists
+            .insert("Nobody".into(), ArtistGenre::unresolved(1));
         m
     }
 
@@ -201,7 +202,10 @@ mod tests {
             target_genre(&m, "Various Artists", Some("rock")).as_deref(),
             Some("Rock")
         );
-        assert_eq!(target_genre(&m, "Unmapped", Some("Rock")).as_deref(), Some("Rock"));
+        assert_eq!(
+            target_genre(&m, "Unmapped", Some("Rock")).as_deref(),
+            Some("Rock")
+        );
     }
 
     fn write_minimal_wav(path: &std::path::Path) {
@@ -224,9 +228,17 @@ mod tests {
         let c = insert(&db, "Nobody", Some("JPop"), "/tmp/missing.flac").await;
         let d = insert(&db, "Nobody", Some("145"), "/tmp/junk.flac").await;
 
-        let dry = apply(&db.engine, &map(), ApplyOpts { write_tags: true, dry_run: true }, |_, _| {})
-            .await
-            .unwrap();
+        let dry = apply(
+            &db.engine,
+            &map(),
+            ApplyOpts {
+                write_tags: true,
+                dry_run: true,
+            },
+            |_, _| {},
+        )
+        .await
+        .unwrap();
         assert_eq!(dry.planned, 2);
         assert_eq!(dry.db_updated, 0);
         assert_eq!(row(&db, a).await, (Some("Alternative".into()), 0));
@@ -250,7 +262,10 @@ mod tests {
         let tag = lofty::read_from_path(&wav).unwrap();
         use lofty::file::TaggedFileExt;
         use lofty::tag::Accessor;
-        assert_eq!(tag.primary_tag().unwrap().genre().as_deref(), Some("Metalcore"));
+        assert_eq!(
+            tag.primary_tag().unwrap().genre().as_deref(),
+            Some("Metalcore")
+        );
 
         // Second run is a no-op.
         let again = apply(&db.engine, &map(), ApplyOpts::default(), |_, _| {})

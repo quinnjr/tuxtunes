@@ -338,12 +338,21 @@ mod tests {
     fn lucene_phrase_escapes_syntax() {
         assert_eq!(lucene_phrase("AC/DC"), r#""AC\/DC""#);
         assert_eq!(lucene_phrase(r#"Say "Hi""#), r#""Say \"Hi\"""#);
-        assert_eq!(lucene_phrase("Panic! At the Disco"), r#""Panic\! At the Disco""#);
+        assert_eq!(
+            lucene_phrase("Panic! At the Disco"),
+            r#""Panic\! At the Disco""#
+        );
     }
 
     #[test]
     fn genre_list_parses_lowercase_nonempty_lines() {
         let set = parse_genre_list("Metal\n\n Thrash Metal \nrock\n");
-        assert_eq!(set, genres().into_iter().filter(|g| g != "heavy metal").collect());
+        assert_eq!(
+            set,
+            genres()
+                .into_iter()
+                .filter(|g| g != "heavy metal")
+                .collect()
+        );
     }
 }

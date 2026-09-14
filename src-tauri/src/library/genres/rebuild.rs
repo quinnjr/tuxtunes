@@ -198,7 +198,9 @@ async fn cache_count(engine: &SqliteRawEngine, id: i64, rule: &SmartRule) -> any
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::playlists::{create_regular, create_smart, list_all, tombstoned_pids, upsert, PlaylistUpsert};
+    use crate::db::playlists::{
+        create_regular, create_smart, list_all, tombstoned_pids, upsert, PlaylistUpsert,
+    };
     use crate::db::Db;
     use crate::library::genres::map::{ArtistGenre, Source};
     use prax_query::filter::FilterValue as FV;
@@ -240,12 +242,26 @@ mod tests {
 
     fn map() -> GenreMap {
         let mut m = GenreMap::default();
-        m.artists.insert("Zeal".into(), ArtistGenre::new("Metalcore", Source::Musicbrainz, 6));
-        m.artists.insert("abba".into(), ArtistGenre::new("Death Metal", Source::Tags, 5));
-        m.artists.insert("Tiny".into(), ArtistGenre::new("Djent", Source::Tags, 2));
-        m.artists.insert("Daft".into(), ArtistGenre::new("House", Source::Musicbrainz, 9));
-        m.artists.insert("Various Artists".into(), ArtistGenre::new("Rock", Source::Tags, 50));
-        m.artists.insert("Nobody".into(), ArtistGenre::unresolved(40));
+        m.artists.insert(
+            "Zeal".into(),
+            ArtistGenre::new("Metalcore", Source::Musicbrainz, 6),
+        );
+        m.artists.insert(
+            "abba".into(),
+            ArtistGenre::new("Death Metal", Source::Tags, 5),
+        );
+        m.artists
+            .insert("Tiny".into(), ArtistGenre::new("Djent", Source::Tags, 2));
+        m.artists.insert(
+            "Daft".into(),
+            ArtistGenre::new("House", Source::Musicbrainz, 9),
+        );
+        m.artists.insert(
+            "Various Artists".into(),
+            ArtistGenre::new("Rock", Source::Tags, 50),
+        );
+        m.artists
+            .insert("Nobody".into(), ArtistGenre::unresolved(40));
         m
     }
 
@@ -268,7 +284,10 @@ mod tests {
         assert_eq!(metal.0, vec!["Death Metal", "Djent", "Metalcore"]);
         assert_eq!(metal.1, vec!["abba", "Zeal"]);
         assert_eq!(p[&Umbrella::Electronic].1, vec!["Daft"]);
-        assert!(!p.contains_key(&Umbrella::Rock), "Various Artists never gets a playlist");
+        assert!(
+            !p.contains_key(&Umbrella::Rock),
+            "Various Artists never gets a playlist"
+        );
         assert!(!p.contains_key(&Umbrella::Other));
         let all = plan(&map(), 1);
         assert_eq!(all[&Umbrella::Metal].1, vec!["abba", "Tiny", "Zeal"]);
@@ -293,21 +312,40 @@ mod tests {
             track_entries: &[],
             smart_rule_json: None,
         };
-        let s_folder = upsert(&db.engine, &mk(1, "Metal (old)", PlaylistKind::Folder)).await.unwrap();
-        let s_smart = upsert(&db.engine, &mk(2, "Zeal (old)", PlaylistKind::Smart)).await.unwrap();
-        let s_reg = upsert(&db.engine, &mk(3, "Road trip", PlaylistKind::Regular)).await.unwrap();
+        let s_folder = upsert(&db.engine, &mk(1, "Metal (old)", PlaylistKind::Folder))
+            .await
+            .unwrap();
+        let s_smart = upsert(&db.engine, &mk(2, "Zeal (old)", PlaylistKind::Smart))
+            .await
+            .unwrap();
+        let s_reg = upsert(&db.engine, &mk(3, "Road trip", PlaylistKind::Regular))
+            .await
+            .unwrap();
         let u_reg = create_regular(&db.engine, "Mine", None).await.unwrap();
         let u_smart = create_smart(&db.engine, "My smart", "{}").await.unwrap();
 
-        let dry = rebuild(&db.engine, &map(), RebuildOpts { dry_run: true, ..Default::default() })
-            .await
-            .unwrap();
+        let dry = rebuild(
+            &db.engine,
+            &map(),
+            RebuildOpts {
+                dry_run: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(dry.deleted_synced, 2);
         assert_eq!(dry.folders, 2);
         assert_eq!(dry.playlists, 5);
-        assert_eq!(list_all(&db.engine).await.unwrap().len(), 5, "dry run touched nothing");
+        assert_eq!(
+            list_all(&db.engine).await.unwrap().len(),
+            5,
+            "dry run touched nothing"
+        );
 
-        let s = rebuild(&db.engine, &map(), RebuildOpts::default()).await.unwrap();
+        let s = rebuild(&db.engine, &map(), RebuildOpts::default())
+            .await
+            .unwrap();
         assert_eq!(s.deleted_generated, 0);
         assert_eq!(s.deleted_synced, 2);
         assert_eq!(s.tree["Metal"], vec!["abba", "Zeal"]);
@@ -330,14 +368,23 @@ mod tests {
         assert_eq!(all_metal.cached_track_count, Some(4));
         let zeal = by_name("Zeal");
         assert_eq!(zeal.parent_id, Some(metal.id));
-        assert_eq!(zeal.cached_track_count, Some(4), "album-artist credit counts too");
+        assert_eq!(
+            zeal.cached_track_count,
+            Some(4),
+            "album-artist credit counts too"
+        );
         assert_eq!(by_name("Daft").parent_id, Some(by_name("Electronic").id));
         assert!(all_metal.sort_order < zeal.sort_order);
         assert!(by_name("abba").sort_order < zeal.sort_order);
-        assert!(metal.sort_order < by_name("Electronic").sort_order, "folders in umbrella order");
+        assert!(
+            metal.sort_order < by_name("Electronic").sort_order,
+            "folders in umbrella order"
+        );
         assert_eq!(rows.len(), 3 + 7);
 
-        let again = rebuild(&db.engine, &map(), RebuildOpts::default()).await.unwrap();
+        let again = rebuild(&db.engine, &map(), RebuildOpts::default())
+            .await
+            .unwrap();
         assert_eq!(again.deleted_generated, 7);
         assert_eq!(again.deleted_synced, 0);
         assert_eq!(list_all(&db.engine).await.unwrap().len(), 3 + 7);
@@ -345,7 +392,10 @@ mod tests {
         let kept = rebuild(
             &db.engine,
             &map(),
-            RebuildOpts { replace_synced: false, ..Default::default() },
+            RebuildOpts {
+                replace_synced: false,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

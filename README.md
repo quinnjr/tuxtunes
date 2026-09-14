@@ -193,6 +193,17 @@ tuxtunes-cli source add \
 tuxtunes-cli source list
 tuxtunes-cli sync run --all      # or: sync run <id>
 tuxtunes-cli source remove <id>
+
+# Genre cleanup + per-artist playlists, in three re-runnable steps.
+# resolve asks MusicBrainz what each artist plays (1 request/sec, cached
+# in genre_map.json beside the database; hand-edit an entry and mark it
+# "source": "manual" to pin it). apply writes those genres onto every
+# track row and file tag. rebuild replaces the synced smart playlists and
+# folders with one folder per genre, each holding "All <Genre>" plus one
+# smart playlist per artist with at least --min-tracks tracks.
+tuxtunes-cli genres resolve
+tuxtunes-cli genres apply --dry-run     # then without --dry-run
+tuxtunes-cli genres rebuild --min-tracks 5
 ```
 
 Operates on the desktop app's database by default

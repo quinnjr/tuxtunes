@@ -190,7 +190,8 @@ mod tests {
             "Zebra".into(),
             ArtistGenre::new("Metalcore", Source::Musicbrainz, 12),
         );
-        map.artists.insert("Alpha".into(), ArtistGenre::unresolved(1));
+        map.artists
+            .insert("Alpha".into(), ArtistGenre::unresolved(1));
         map.save(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.find("\"Alpha\"").unwrap() < text.find("\"Zebra\"").unwrap());
