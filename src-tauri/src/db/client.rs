@@ -29,6 +29,8 @@ const PLAYLIST_LOCAL_EDITS_MIGRATION: &str =
 const TRACK_USER_EDITS_MIGRATION: &str =
     include_str!("../../prax/migrations/0004_track_user_edits/migration.sql");
 const DEVICES_MIGRATION: &str = include_str!("../../prax/migrations/0005_devices/migration.sql");
+const GENRE_LOCKED_MIGRATION: &str =
+    include_str!("../../prax/migrations/0007_genre_locked/migration.sql");
 const ALBUM_RATING_MIGRATION: &str =
     include_str!("../../prax/migrations/0006_album_rating/migration.sql");
 
@@ -91,6 +93,13 @@ static MIGRATIONS: &[Migration] = &[
         sql: ALBUM_RATING_MIGRATION,
         marker_sql: "SELECT COUNT(*) FROM pragma_table_info('tracks') \
              WHERE name = 'album_rating'",
+        marker_count: 1,
+    },
+    Migration {
+        name: "0007_genre_locked",
+        sql: GENRE_LOCKED_MIGRATION,
+        marker_sql: "SELECT COUNT(*) FROM pragma_table_info('tracks') \
+             WHERE name = 'genre_locked'",
         marker_count: 1,
     },
 ];
@@ -341,7 +350,8 @@ mod tests {
                 "0003_playlist_local_edits".to_string(),
                 "0004_track_user_edits".to_string(),
                 "0005_devices".to_string(),
-                "0006_album_rating".to_string()
+                "0006_album_rating".to_string(),
+                "0007_genre_locked".to_string()
             ],
             "ledger should carry every migration after upgrade"
         );

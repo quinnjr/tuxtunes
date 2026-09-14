@@ -1,12 +1,14 @@
 use clap::Parser;
 use std::path::PathBuf;
 
+mod genres_cmd;
 mod import_cmd;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "tuxtunes-cli",
-    about = "Manage the TuxTunes library: import audio, manage iTunes .itl sync sources"
+    about = "Manage the TuxTunes library: import audio, manage iTunes .itl sync sources, \
+             resolve genres and rebuild genre playlists"
 )]
 struct Cli {
     /// Path to the library database (defaults to the desktop app's DB).
@@ -38,6 +40,9 @@ enum Command {
     /// first and goes to the system trash, never unlink — the GUI's
     /// Reclaim Originals, headless.
     Reclaim,
+    /// Resolve artist genres and rebuild the per-genre playlist tree.
+    #[command(subcommand)]
+    Genres(genres_cmd::GenresCommand),
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -134,6 +139,9 @@ fn main() -> std::process::ExitCode {
 async fn run_async(cli: Cli) -> anyhow::Result<()> {
     let db_path = cli.db.unwrap_or_else(default_db_path);
     let db = tuxtunes::db::Db::open(&db_path).await?;
+    if let Command::Genres(cmd) = cli.command {
+        return genres_cmd::run(&db, &db_path, cmd).await;
+    }
     match cli.command {
         Command::Source(SourceCommand::List) => {
             let sources = tuxtunes::db::sync_sources::list(&db.engine).await?;
@@ -232,6 +240,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Genres(_) => unreachable!("dispatched above"),
         Command::Reclaim => {
             let stats = tuxtunes::fs::reclaim::reclaim_all_headless(&db.engine).await?;
             println!(

@@ -15,6 +15,9 @@ pub enum TagsError {
     NotFound(String),
     #[error("tag write failed: {0}")]
     Write(#[source] anyhow::Error),
+    /// The file already carries exactly this value; nothing was written.
+    #[error("tag already up to date")]
+    Unchanged,
 }
 
 /// Write the edit's fields into `path`'s primary tag (created in the
@@ -49,6 +52,27 @@ pub fn write_metadata(path: &Path, e: &MetadataEdit<'_>) -> Result<(), TagsError
         None => tag.remove_disk(),
     }
 
+    tag.save_to_path(path, WriteOptions::default())
+        .map_err(|err| TagsError::Write(anyhow::Error::from(err)))
+}
+
+/// Overwrite only the genre in `path`'s primary tag, leaving every
+/// other field as it is. Used by the bulk genre rewrite, where the
+/// track's other metadata must not be normalised as a side effect.
+pub fn write_genre(path: &Path, genre: &str) -> Result<(), TagsError> {
+    if !path.exists() {
+        return Err(TagsError::NotFound(path.display().to_string()));
+    }
+    let tagged =
+        lofty::read_from_path(path).map_err(|err| TagsError::Write(anyhow::Error::from(err)))?;
+    let mut tag = match tagged.primary_tag() {
+        Some(t) => t.clone(),
+        None => Tag::new(tagged.primary_tag_type()),
+    };
+    if tag.genre().as_deref() == Some(genre) {
+        return Err(TagsError::Unchanged);
+    }
+    set_or_remove_text(&mut tag, ItemKey::Genre, Some(genre));
     tag.save_to_path(path, WriteOptions::default())
         .map_err(|err| TagsError::Write(anyhow::Error::from(err)))
 }
@@ -198,6 +222,29 @@ mod tests {
         let tag = tagged.primary_tag().unwrap();
         assert_eq!(tag.genre(), None);
         assert_eq!(tag.artist().as_deref(), Some("blink-182"));
+    }
+
+    #[test]
+    fn write_genre_changes_only_the_genre() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.wav");
+        write_minimal_wav(&file);
+        write_metadata(&file, &edit()).unwrap();
+        write_genre(&file, "Pop Punk").unwrap();
+        assert!(matches!(
+            write_genre(&file, "Pop Punk"),
+            Err(TagsError::Unchanged)
+        ));
+        let tagged = lofty::read_from_path(&file).unwrap();
+        let tag = tagged.primary_tag().unwrap();
+        assert_eq!(tag.genre().as_deref(), Some("Pop Punk"));
+        assert_eq!(tag.title().as_deref(), Some("Anthem, Pt. 2"));
+        assert_eq!(tag.artist().as_deref(), Some("blink-182"));
+        assert_eq!(tag.year(), Some(2001));
+        assert!(matches!(
+            write_genre(&dir.path().join("missing.wav"), "X"),
+            Err(TagsError::NotFound(_))
+        ));
     }
 
     /// Smallest valid PNG: an 8-bit 1x1 image.

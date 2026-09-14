@@ -36,6 +36,7 @@ trash = "5.2.5"
 zbus = { version = "5", features = ["tokio"], default-features = false }
 notify-rust = "4"
 libc = "0.2.189"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

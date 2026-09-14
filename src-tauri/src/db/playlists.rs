@@ -255,6 +255,148 @@ pub async fn create_regular(
         .ok_or_else(|| PlaylistsError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
 }
 
+/// Insert a tool-generated playlist row. `marker` goes into
+/// `persistent_id` (which is only ever read together with a sync
+/// source, so a marker is inert for the reconciler) and lets the
+/// generator find and replace its own rows on the next run. Returns
+/// the new id.
+pub async fn create_generated(
+    engine: &SqliteRawEngine,
+    name: &str,
+    kind: PlaylistKind,
+    parent_id: Option<i64>,
+    rule_json: Option<&str>,
+    marker: &str,
+) -> Result<i64, PlaylistsError> {
+    let sql = "INSERT INTO playlists (name, persistent_id, kind, sort_order, track_entries, \
+               parent_id, smart_rule) \
+               VALUES (?, ?, ?, \
+               (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM playlists), '[]', ?, ?) \
+               RETURNING id";
+    let params = vec![
+        FilterValue::String(name.to_string()),
+        FilterValue::String(marker.to_string()),
+        FilterValue::String(kind.as_str().to_string()),
+        parent_id.map(FilterValue::Int).unwrap_or(FilterValue::Null),
+        rule_json
+            .map(|r| FilterValue::String(r.to_string()))
+            .unwrap_or(FilterValue::Null),
+    ];
+    let row = engine
+        .raw_sql_first(sql, &params)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    row.into_json()
+        .get("id")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| PlaylistsError::Query(anyhow::anyhow!("INSERT ... RETURNING id missing")))
+}
+
+/// Ids of user-owned rows whose `persistent_id` starts with `prefix`
+/// — the rows a generator created earlier.
+pub async fn ids_with_marker_prefix(
+    engine: &SqliteRawEngine,
+    prefix: &str,
+) -> Result<Vec<i64>, PlaylistsError> {
+    let sql = "SELECT id FROM playlists WHERE sync_source_id IS NULL \
+               AND persistent_id LIKE ? ESCAPE '\\' ORDER BY id";
+    let pattern = format!(
+        "{}%",
+        prefix
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
+    collect_ids(engine, sql, &[FilterValue::String(pattern)]).await
+}
+
+/// Ids of every sync-sourced smart playlist and folder. Regular synced
+/// playlists are not included.
+pub async fn synced_smart_and_folder_ids(
+    engine: &SqliteRawEngine,
+) -> Result<Vec<i64>, PlaylistsError> {
+    let sql = "SELECT id FROM playlists WHERE sync_source_id IS NOT NULL \
+               AND kind IN ('smart', 'folder') ORDER BY id";
+    collect_ids(engine, sql, &[]).await
+}
+
+/// Names of regular playlists whose parent is one of `folder_ids`.
+/// Reported before a rebuild so the user knows which playlists lose
+/// their folder.
+pub async fn regular_children_of(
+    engine: &SqliteRawEngine,
+    folder_ids: &[i64],
+) -> Result<Vec<String>, PlaylistsError> {
+    if folder_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = vec!["?"; folder_ids.len()].join(",");
+    let sql = format!(
+        "SELECT name FROM playlists WHERE kind = 'regular' AND parent_id IN ({marks}) \
+         ORDER BY name COLLATE NOCASE"
+    );
+    let params: Vec<FilterValue> = folder_ids.iter().map(|id| FilterValue::Int(*id)).collect();
+    let rows = engine
+        .raw_sql_query(&sql, &params)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            r.into_json()
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+/// Hard-delete many playlists in one transaction, tombstoning every
+/// sync-sourced row first (the multi-row twin of [`delete`]). Either
+/// every row goes or none does. Ids are integers, so inlining them in
+/// the batch is safe.
+pub async fn delete_many(engine: &SqliteRawEngine, ids: &[i64]) -> Result<(), PlaylistsError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let list = ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "BEGIN IMMEDIATE;\n\
+         INSERT OR IGNORE INTO playlist_tombstones (sync_source_id, persistent_id) \
+         SELECT sync_source_id, persistent_id FROM playlists \
+         WHERE id IN ({list}) AND sync_source_id IS NOT NULL AND persistent_id IS NOT NULL;\n\
+         DELETE FROM playlists WHERE id IN ({list});\n\
+         COMMIT;"
+    );
+    let conn = engine
+        .pool()
+        .get()
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    conn.execute_batch(&sql)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
+async fn collect_ids(
+    engine: &SqliteRawEngine,
+    sql: &str,
+    params: &[FilterValue],
+) -> Result<Vec<i64>, PlaylistsError> {
+    let rows = engine
+        .raw_sql_query(sql, params)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| r.into_json().get("id").and_then(|v| v.as_i64()))
+        .collect())
+}
+
 /// The user-mutable playlist predicate shared by add/remove: only
 /// regular playlists the user owns. Synced ones are rewritten wholesale
 /// by the next sync, so an edit there would silently vanish — refuse it
@@ -1277,6 +1419,123 @@ mod tests {
         upsert(&db.engine, &renamed).await.unwrap();
         let rows = list_all(&db.engine).await.unwrap();
         assert_eq!(rows.iter().find(|r| r.id == id).unwrap().name, "Gym 2024");
+    }
+
+    #[tokio::test]
+    async fn generated_rows_are_found_by_marker_and_synced_smart_folders_listed() {
+        let db = tmp().await;
+        let folder = create_generated(
+            &db.engine,
+            "Metal",
+            PlaylistKind::Folder,
+            None,
+            None,
+            "gen:folder:Metal",
+        )
+        .await
+        .unwrap();
+        let smart = create_generated(
+            &db.engine,
+            "Band",
+            PlaylistKind::Smart,
+            Some(folder),
+            Some("{}"),
+            "gen:artist:Band_100%",
+        )
+        .await
+        .unwrap();
+        let user = create_regular(&db.engine, "Mine", None).await.unwrap();
+        let mk = |pid: u64, kind: PlaylistKind| PlaylistUpsert {
+            persistent_id: pid,
+            sync_source_id: 1,
+            name: "S",
+            kind,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &[],
+            smart_rule_json: None,
+        };
+        let s_smart = upsert(&db.engine, &mk(1, PlaylistKind::Smart))
+            .await
+            .unwrap();
+        let s_folder = upsert(&db.engine, &mk(2, PlaylistKind::Folder))
+            .await
+            .unwrap();
+        let _s_reg = upsert(&db.engine, &mk(3, PlaylistKind::Regular))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            ids_with_marker_prefix(&db.engine, "gen:").await.unwrap(),
+            vec![folder, smart]
+        );
+        assert_eq!(
+            ids_with_marker_prefix(&db.engine, "gen:artist:Band_100%")
+                .await
+                .unwrap(),
+            vec![smart]
+        );
+        assert!(ids_with_marker_prefix(&db.engine, "gen:artist:BandX100%")
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            synced_smart_and_folder_ids(&db.engine).await.unwrap(),
+            vec![s_smart, s_folder]
+        );
+        let rows = list_all(&db.engine).await.unwrap();
+        let row = rows.iter().find(|r| r.id == smart).unwrap();
+        assert_eq!(row.parent_id, Some(folder));
+        assert_eq!(row.sync_source_id, None);
+        assert_eq!(
+            get_smart_rule(&db.engine, smart).await.unwrap().as_deref(),
+            Some("{}")
+        );
+        let _ = user;
+    }
+
+    #[tokio::test]
+    async fn delete_many_tombstones_synced_rows_and_unparents_children() {
+        let db = tmp().await;
+        let mk = |pid: u64, kind: PlaylistKind| PlaylistUpsert {
+            persistent_id: pid,
+            sync_source_id: 1,
+            name: "S",
+            kind,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &[],
+            smart_rule_json: None,
+        };
+        let folder = upsert(&db.engine, &mk(0xa1, PlaylistKind::Folder))
+            .await
+            .unwrap();
+        let smart = upsert(&db.engine, &mk(0xa2, PlaylistKind::Smart))
+            .await
+            .unwrap();
+        let child = create_regular(&db.engine, "Inside", Some(folder))
+            .await
+            .unwrap();
+        let user = create_regular(&db.engine, "Mine", None).await.unwrap();
+        assert_eq!(
+            regular_children_of(&db.engine, &[folder]).await.unwrap(),
+            vec!["Inside"]
+        );
+        delete_many(&db.engine, &[folder, smart, user])
+            .await
+            .unwrap();
+        let rows = list_all(&db.engine).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, child);
+        assert_eq!(rows[0].parent_id, None);
+        let dead = tombstoned_pids(&db.engine, 1).await.unwrap();
+        assert_eq!(dead.len(), 2);
+        assert!(dead.contains(&0xa1) && dead.contains(&0xa2));
+        delete_many(&db.engine, &[]).await.unwrap();
+        assert!(regular_children_of(&db.engine, &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
