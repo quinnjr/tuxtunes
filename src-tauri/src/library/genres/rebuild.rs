@@ -177,12 +177,48 @@ pub async fn spellings_for(engine: &SqliteRawEngine, key: &str) -> anyhow::Resul
     Ok(out)
 }
 
+/// Every distinct genre string the library holds, filed by umbrella.
+/// Compilation tracks carry normalised tags that no artist entry
+/// mentions, so the "All <Genre>" rules draw on this rather than on
+/// the map alone.
+pub async fn library_genres(
+    engine: &SqliteRawEngine,
+) -> anyhow::Result<BTreeMap<Umbrella, Vec<String>>> {
+    let rows = engine
+        .raw_sql_query(
+            "SELECT DISTINCT genre AS g FROM tracks WHERE genre IS NOT NULL AND genre <> ''",
+            &[],
+        )
+        .await?;
+    let mut out: BTreeMap<Umbrella, Vec<String>> = BTreeMap::new();
+    for r in rows {
+        if let Some(g) = r.into_json().get("g").and_then(|v| v.as_str()) {
+            out.entry(super::taxonomy::umbrella_for(g))
+                .or_default()
+                .push(g.to_string());
+        }
+    }
+    for v in out.values_mut() {
+        v.sort();
+    }
+    Ok(out)
+}
+
 pub async fn rebuild(
     engine: &SqliteRawEngine,
     map: &GenreMap,
     opts: RebuildOpts,
 ) -> anyhow::Result<RebuildSummary> {
-    let planned = plan(map, opts.min_tracks);
+    let mut planned = plan(map, opts.min_tracks);
+    let in_library = library_genres(engine).await?;
+    for (u, (genres, _)) in planned.iter_mut() {
+        for g in in_library.get(u).into_iter().flatten() {
+            if !genres.contains(g) {
+                genres.push(g.clone());
+            }
+        }
+        genres.sort();
+    }
     let mut summary = RebuildSummary::default();
     for (u, (_, artists)) in &planned {
         summary
@@ -386,6 +422,8 @@ mod tests {
         insert_track(&db, "zeal ", None, "Metalcore").await;
         insert_track(&db, "Zeal feat. X", Some("ZEAL"), "Metalcore").await;
         insert_track(&db, "Daft", None, "House").await;
+        // A compilation track whose genre no artist entry mentions.
+        insert_track(&db, "Someone", Some("Various Artists"), "Thrash Metal").await;
 
         let mk = |pid: u64, name: &'static str, kind: PlaylistKind, parent: Option<u64>| {
             PlaylistUpsert {
@@ -465,7 +503,11 @@ mod tests {
         assert_eq!(metal.sync_source_id, None);
         let all_metal = by_name("All Metal");
         assert_eq!(all_metal.parent_id, Some(metal.id));
-        assert_eq!(all_metal.cached_track_count, Some(4));
+        assert_eq!(
+            all_metal.cached_track_count,
+            Some(5),
+            "library-only genres join the umbrella rule"
+        );
         let zeal = by_name("Zeal");
         assert_eq!(zeal.parent_id, Some(metal.id));
         assert_eq!(
