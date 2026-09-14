@@ -297,6 +297,31 @@ pub async fn update_metadata(
     Ok(())
 }
 
+/// Set one track's genre and mark the row `user_edited` so the sync
+/// reconciler leaves it alone. Returns `true` when the stored genre
+/// actually changed; an already-matching row is left untouched (no
+/// `date_modified` bump, no `user_edited` flip).
+pub async fn set_genre_user_edited(
+    engine: &SqliteRawEngine,
+    local_id: i64,
+    genre: &str,
+) -> Result<bool, TracksError> {
+    use prax_query::filter::FilterValue as FV;
+    let sql = "UPDATE tracks SET genre = ?, user_edited = 1, \
+        date_modified = CURRENT_TIMESTAMP \
+        WHERE id = ? AND COALESCE(genre, '') <> ?";
+    let params = vec![
+        FV::String(genre.to_string()),
+        FV::Int(local_id),
+        FV::String(genre.to_string()),
+    ];
+    let n = engine
+        .raw_sql_execute(sql, &params)
+        .await
+        .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
+    Ok(n > 0)
+}
+
 /// Local-side view of a track used for conflict resolution: row id +
 /// every user-state field needed by `sync::conflict::resolve_*`.
 #[derive(Debug, Clone, Deserialize)]
@@ -776,6 +801,26 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_genre_user_edited_only_touches_changed_rows() {
+        let db = tmp_db().await;
+        let id = insert_fixture(&db.engine, "T", "/tmp/g.flac").await;
+        assert!(set_genre_user_edited(&db.engine, id, "Metalcore").await.unwrap());
+        let row: serde_json::Value = db
+            .engine
+            .raw_sql_first(
+                "SELECT genre, user_edited FROM tracks WHERE id = ?",
+                &[prax_query::filter::FilterValue::Int(id)],
+            )
+            .await
+            .unwrap()
+            .into_json();
+        assert_eq!(row["genre"], "Metalcore");
+        assert_eq!(row["user_edited"], 1);
+        assert!(!set_genre_user_edited(&db.engine, id, "Metalcore").await.unwrap());
+        assert!(!set_genre_user_edited(&db.engine, 999_999, "X").await.unwrap());
     }
 
     #[tokio::test]

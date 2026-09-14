@@ -6,6 +6,7 @@
 //! with one smart playlist per artist. See
 //! `docs/superpowers/specs/2026-09-14-genre-playlists-design.md`.
 
+pub mod apply;
 pub mod map;
 pub mod musicbrainz;
 pub mod resolve;
