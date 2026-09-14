@@ -222,7 +222,10 @@ impl MusicBrainz {
     async fn search(&self, artist: &str) -> anyhow::Result<serde_json::Value> {
         let query = format!("artist:{}", lucene_phrase(artist));
         let url = format!("{API_ROOT}/artist/");
-        const ATTEMPTS: usize = 3;
+        // MusicBrainz sheds load with a "busy" reply that can persist
+        // for a minute or more; back off 5s, 10s, 20s, 40s, 60s, 60s…
+        const ATTEMPTS: u32 = 8;
+        let backoff = |attempt: u32| Duration::from_secs((5u64 << (attempt - 1)).min(60));
         for attempt in 1..=ATTEMPTS {
             self.pace().await;
             let resp = self
@@ -236,7 +239,7 @@ impl MusicBrainz {
                 Ok(v) => v,
                 Err(e) if attempt < ATTEMPTS => {
                     log::warn!("musicbrainz: unreadable body for {artist:?}: {e}");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(backoff(attempt)).await;
                     continue;
                 }
                 Err(e) => return Err(e.into()),
@@ -246,7 +249,7 @@ impl MusicBrainz {
             let busy = body.get("error").and_then(|e| e.as_str());
             if status == reqwest::StatusCode::SERVICE_UNAVAILABLE || busy.is_some() {
                 if attempt < ATTEMPTS {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(backoff(attempt)).await;
                     continue;
                 }
                 anyhow::bail!(
