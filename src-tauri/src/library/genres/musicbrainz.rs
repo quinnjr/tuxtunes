@@ -224,13 +224,14 @@ impl MusicBrainz {
         let url = format!("{API_ROOT}/artist/");
         // MusicBrainz sheds load with a cheap "busy" reply that, under
         // load, hits about half of all requests regardless of pacing.
-        // Retry quickly for a while (a 503 costs half a second), and
-        // only back off (5s, 10s, … 60s) once a run of them suggests a
-        // real outage.
+        // Retry at the normal request pace for a while (a 503 costs
+        // half a second and `pace` already spaces the retry), and only
+        // back off (5s, 10s, … 60s) once a run of them suggests a real
+        // outage.
         const ATTEMPTS: u32 = 24;
         let backoff = |attempt: u32| {
             if attempt <= 12 {
-                Duration::from_secs(2)
+                Duration::ZERO
             } else {
                 Duration::from_secs((5u64 << (attempt - 13)).min(60))
             }
