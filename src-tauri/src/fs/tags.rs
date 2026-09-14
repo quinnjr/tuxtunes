@@ -15,6 +15,9 @@ pub enum TagsError {
     NotFound(String),
     #[error("tag write failed: {0}")]
     Write(#[source] anyhow::Error),
+    /// The file already carries exactly this value; nothing was written.
+    #[error("tag already up to date")]
+    Unchanged,
 }
 
 /// Write the edit's fields into `path`'s primary tag (created in the
@@ -67,7 +70,7 @@ pub fn write_genre(path: &Path, genre: &str) -> Result<(), TagsError> {
         None => Tag::new(tagged.primary_tag_type()),
     };
     if tag.genre().as_deref() == Some(genre) {
-        return Ok(());
+        return Err(TagsError::Unchanged);
     }
     set_or_remove_text(&mut tag, ItemKey::Genre, Some(genre));
     tag.save_to_path(path, WriteOptions::default())
@@ -228,6 +231,10 @@ mod tests {
         write_minimal_wav(&file);
         write_metadata(&file, &edit()).unwrap();
         write_genre(&file, "Pop Punk").unwrap();
+        assert!(matches!(
+            write_genre(&file, "Pop Punk"),
+            Err(TagsError::Unchanged)
+        ));
         let tagged = lofty::read_from_path(&file).unwrap();
         let tag = tagged.primary_tag().unwrap();
         assert_eq!(tag.genre().as_deref(), Some("Pop Punk"));

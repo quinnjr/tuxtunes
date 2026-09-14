@@ -28,6 +28,10 @@ pub enum GenresCommand {
         /// Update database rows only; leave file tags alone.
         #[arg(long)]
         no_tags: bool,
+        /// Also revisit the file tag of every track whose genre is
+        /// already locked, to finish a tag phase that was interrupted.
+        #[arg(long, conflicts_with = "no_tags")]
+        retag: bool,
         /// Report what would change without touching anything.
         #[arg(long)]
         dry_run: bool,
@@ -96,13 +100,18 @@ pub async fn run(db: &tuxtunes::db::Db, db_path: &Path, cmd: GenresCommand) -> a
             }
             Ok(())
         }
-        GenresCommand::Apply { no_tags, dry_run } => {
+        GenresCommand::Apply {
+            no_tags,
+            retag,
+            dry_run,
+        } => {
             let map = load_required(&map_path)?;
             let summary = apply(
                 &db.engine,
                 &map,
                 ApplyOpts {
                     write_tags: !no_tags,
+                    retag,
                     dry_run,
                 },
                 |done, total| eprintln!("tags {done}/{total}"),

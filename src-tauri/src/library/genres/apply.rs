@@ -14,6 +14,11 @@ use std::path::PathBuf;
 pub struct ApplyOpts {
     /// Also rewrite the genre tag inside each changed file.
     pub write_tags: bool,
+    /// Run the tag phase over every row whose genre is locked, not only
+    /// the rows this run changed — finishes a tag phase that was
+    /// interrupted after the database phase committed. Files already
+    /// carrying the genre are read but not rewritten.
+    pub retag: bool,
     /// Compute and report, touch nothing.
     pub dry_run: bool,
 }
@@ -22,6 +27,7 @@ impl Default for ApplyOpts {
     fn default() -> Self {
         Self {
             write_tags: true,
+            retag: false,
             dry_run: false,
         }
     }
@@ -112,6 +118,33 @@ pub async fn apply(
     let changes: Vec<(i64, &str)> = planned.iter().map(|p| (p.id, p.genre.as_str())).collect();
     summary.db_updated = set_genres_locked(engine, &changes).await?;
 
+    if opts.write_tags && opts.retag {
+        let rows = engine
+            .raw_sql_query(
+                "SELECT id, genre, file_path FROM tracks \
+                 WHERE genre_locked = 1 AND genre IS NOT NULL AND genre <> '' ORDER BY id",
+                &[],
+            )
+            .await?;
+        let already: std::collections::HashSet<i64> = planned.iter().map(|p| p.id).collect();
+        for r in rows {
+            let j = r.into_json();
+            let id = j.get("id").and_then(|v| v.as_i64()).unwrap_or_default();
+            if already.contains(&id) {
+                continue;
+            }
+            planned.push(Planned {
+                id,
+                path: PathBuf::from(j.get("file_path").and_then(|v| v.as_str()).unwrap_or("")),
+                genre: j
+                    .get("genre")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+    }
+
     if opts.write_tags {
         let total = planned.len() as u64;
         // Tag writes are blocking file IO; batch them onto the blocking
@@ -131,6 +164,7 @@ pub async fn apply(
             for (path, res) in results {
                 match res {
                     Ok(()) => summary.tags_written += 1,
+                    Err(TagsError::Unchanged) => {}
                     Err(TagsError::NotFound(_)) => summary.tags_skipped_missing += 1,
                     Err(e) => summary.tags_failed.push(format!("{}: {e}", path.display())),
                 }
@@ -244,8 +278,8 @@ mod tests {
             &db.engine,
             &map(),
             ApplyOpts {
-                write_tags: true,
                 dry_run: true,
+                ..Default::default()
             },
             |_, _| {},
         )
@@ -290,5 +324,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(again.planned, 0);
+        assert_eq!(again.tags_written, 0);
+
+        // --retag revisits every locked row's file; an up-to-date tag is
+        // read but counted as written only when it actually changed.
+        write_genre(&wav, "Stale").unwrap();
+        let retag = apply(
+            &db.engine,
+            &map(),
+            ApplyOpts {
+                retag: true,
+                ..Default::default()
+            },
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(retag.planned, 0);
+        assert_eq!(retag.tags_written, 1);
+        assert_eq!(retag.tags_skipped_missing, 2);
+        let tag = lofty::read_from_path(&wav).unwrap();
+        assert_eq!(
+            tag.primary_tag().unwrap().genre().as_deref(),
+            Some("Metalcore")
+        );
     }
 }
