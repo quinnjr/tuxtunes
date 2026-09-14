@@ -1,14 +1,22 @@
 //! Step three: regenerate the sidebar as one folder per umbrella genre,
 //! each holding an "All <Genre>" playlist and one smart playlist per
 //! artist.
+//!
+//! Order of operations is create-then-delete: the new tree is built
+//! first, and only once every row exists are the previous generated
+//! rows and the sync-sourced smart playlists/folders removed, in one
+//! transaction. A failure part-way therefore leaves extra rows (which
+//! the next run replaces), never a library with its playlists gone.
 
 use super::map::GenreMap;
-use super::resolve::is_non_artist;
+use super::resolve::{fold_key, is_non_artist};
 use super::taxonomy::Umbrella;
 use crate::db::playlists::{
-    self, create_generated, ids_with_marker_prefix, synced_smart_and_folder_ids, PlaylistKind,
+    self, create_generated, delete_many, ids_with_marker_prefix, synced_smart_and_folder_ids,
+    PlaylistKind,
 };
 use crate::db::smart::{Condition, ConditionGroup, LeafCondition, Op, SmartRule, Value};
+use prax_query::filter::FilterValue;
 use prax_sqlite::raw::SqliteRawEngine;
 use std::collections::BTreeMap;
 
@@ -40,6 +48,9 @@ impl Default for RebuildOpts {
 pub struct RebuildSummary {
     pub deleted_generated: u64,
     pub deleted_synced: u64,
+    /// Regular playlists that sat inside a deleted synced folder and
+    /// now live at the top level.
+    pub unfoldered: Vec<String>,
     pub folders: u64,
     pub playlists: u64,
     /// Artist playlists per folder name, in sidebar order.
@@ -54,15 +65,22 @@ fn leaf(field: &str, value: &str) -> Condition {
     })
 }
 
-/// Every track credited to the artist, as album artist or as artist.
-pub fn artist_rule(key: &str) -> SmartRule {
+/// Every track credited to the artist under any of its raw spellings,
+/// as album artist or as artist. Smart-rule equality is exact, so each
+/// spelling the library actually contains gets its own pair of leaves.
+pub fn artist_rule(spellings: &[String]) -> SmartRule {
+    let mut children = Vec::with_capacity(spellings.len() * 2);
+    for s in spellings {
+        children.push(leaf("album_artist", s));
+        children.push(leaf("artist", s));
+    }
     SmartRule {
         match_all: false,
         live_updating: true,
         limit: None,
         root: ConditionGroup {
             match_all: false,
-            children: vec![leaf("album_artist", key), leaf("artist", key)],
+            children,
         },
     }
 }
@@ -80,16 +98,27 @@ pub fn umbrella_rule(genres: &[String]) -> SmartRule {
     }
 }
 
-pub fn folder_marker(u: Umbrella) -> String {
-    format!("{MARKER_PREFIX}folder:{}", u.display_name())
+/// A token unique to one rebuild run. `persistent_id` is UNIQUE and
+/// the previous generation is still present while the new one is
+/// created, so every marker carries the run it belongs to.
+pub fn run_token() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!("{nanos:x}")
 }
 
-pub fn all_marker(u: Umbrella) -> String {
-    format!("{MARKER_PREFIX}all:{}", u.display_name())
+pub fn folder_marker(run: &str, u: Umbrella) -> String {
+    format!("{MARKER_PREFIX}{run}:folder:{}", u.display_name())
 }
 
-pub fn artist_marker(key: &str) -> String {
-    format!("{MARKER_PREFIX}artist:{key}")
+pub fn all_marker(run: &str, u: Umbrella) -> String {
+    format!("{MARKER_PREFIX}{run}:all:{}", u.display_name())
+}
+
+pub fn artist_marker(run: &str, key: &str) -> String {
+    format!("{MARKER_PREFIX}{run}:artist:{}", fold_key(key))
 }
 
 /// The tree the map implies: umbrella → (specific genres, qualifying
@@ -111,9 +140,41 @@ pub fn plan(map: &GenreMap, min_tracks: u64) -> BTreeMap<Umbrella, (Vec<String>,
     out.retain(|_, (_, artists)| !artists.is_empty());
     for (genres, artists) in out.values_mut() {
         genres.sort();
-        artists.sort_by_key(|a| a.to_lowercase());
+        artists.sort_by_key(|a| fold_key(a));
     }
     out
+}
+
+/// Every raw `album_artist` / `artist` value in the library that folds
+/// to `key`, so the generated rule matches padded and re-cased
+/// spellings too.
+pub async fn spellings_for(engine: &SqliteRawEngine, key: &str) -> anyhow::Result<Vec<String>> {
+    let fold = fold_key(key);
+    let sql = "SELECT album_artist AS v FROM tracks \
+               WHERE LOWER(TRIM(COALESCE(album_artist, ''))) = ? \
+               UNION \
+               SELECT artist AS v FROM tracks \
+               WHERE LOWER(TRIM(COALESCE(artist, ''))) = ? \
+               ORDER BY v";
+    let rows = engine
+        .raw_sql_query(
+            sql,
+            &[FilterValue::String(fold.clone()), FilterValue::String(fold)],
+        )
+        .await?;
+    let mut out: Vec<String> = rows
+        .into_iter()
+        .filter_map(|r| {
+            r.into_json()
+                .get("v")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    if out.is_empty() {
+        out.push(key.to_string());
+    }
+    Ok(out)
 }
 
 pub async fn rebuild(
@@ -136,6 +197,7 @@ pub async fn rebuild(
     };
     summary.deleted_generated = generated.len() as u64;
     summary.deleted_synced = synced.len() as u64;
+    summary.unfoldered = playlists::regular_children_of(engine, &synced).await?;
     summary.folders = planned.len() as u64;
     summary.playlists = planned
         .values()
@@ -145,12 +207,7 @@ pub async fn rebuild(
         return Ok(summary);
     }
 
-    // Children before folders is not required (FK is SET NULL) but
-    // deleting in reverse id order keeps folders last anyway.
-    for id in generated.iter().rev().chain(synced.iter().rev()) {
-        playlists::delete(engine, *id).await?;
-    }
-
+    let run = run_token();
     for (u, (genres, artists)) in &planned {
         let folder = create_generated(
             engine,
@@ -158,7 +215,7 @@ pub async fn rebuild(
             PlaylistKind::Folder,
             None,
             None,
-            &folder_marker(*u),
+            &folder_marker(&run, *u),
         )
         .await?;
         let all_rule = umbrella_rule(genres);
@@ -168,24 +225,30 @@ pub async fn rebuild(
             PlaylistKind::Smart,
             Some(folder),
             Some(&serde_json::to_string(&all_rule)?),
-            &all_marker(*u),
+            &all_marker(&run, *u),
         )
         .await?;
         cache_count(engine, all_id, &all_rule).await?;
         for key in artists {
-            let rule = artist_rule(key);
+            let rule = artist_rule(&spellings_for(engine, key).await?);
             let id = create_generated(
                 engine,
                 key,
                 PlaylistKind::Smart,
                 Some(folder),
                 Some(&serde_json::to_string(&rule)?),
-                &artist_marker(key),
+                &artist_marker(&run, key),
             )
             .await?;
             cache_count(engine, id, &rule).await?;
         }
     }
+
+    // Only now that the new tree exists: remove the old one, all at
+    // once, tombstoning the synced rows so the reconciler never brings
+    // them back.
+    let doomed: Vec<i64> = generated.iter().chain(synced.iter()).copied().collect();
+    delete_many(engine, &doomed).await?;
     Ok(summary)
 }
 
@@ -267,14 +330,18 @@ mod tests {
 
     #[test]
     fn rules_have_the_expected_shape() {
-        let r = artist_rule("Daft");
+        let r = artist_rule(&["Daft".into(), "DAFT ".into()]);
         assert!(!r.match_all && r.live_updating && r.limit.is_none());
-        assert_eq!(r.root.children.len(), 2);
+        assert_eq!(r.root.children.len(), 4);
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains(r#""field":"album_artist","op":"is","value":"Daft""#));
-        assert!(json.contains(r#""field":"artist","op":"is","value":"Daft""#));
+        assert!(json.contains(r#""field":"artist","op":"is","value":"DAFT ""#));
         let u = umbrella_rule(&["Djent".into(), "Metalcore".into()]);
         assert_eq!(u.root.children.len(), 2);
+        assert_eq!(
+            artist_marker("r1", "ABBA "),
+            "tuxtunes-genres:r1:artist:abba"
+        );
     }
 
     #[test]
@@ -294,31 +361,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spellings_cover_padding_and_case_on_both_columns() {
+        let db = tmp().await;
+        insert_track(&db, "Zeal", None, "Metalcore").await;
+        insert_track(&db, "zeal ", None, "Metalcore").await;
+        insert_track(&db, "Zeal feat. X", Some(" ZEAL"), "Metalcore").await;
+        insert_track(&db, "Other", Some("Other"), "Rock").await;
+        assert_eq!(
+            spellings_for(&db.engine, "Zeal").await.unwrap(),
+            vec![" ZEAL", "Zeal", "zeal "]
+        );
+        assert_eq!(
+            spellings_for(&db.engine, "Ghost").await.unwrap(),
+            vec!["Ghost"]
+        );
+    }
+
+    #[tokio::test]
     async fn rebuild_replaces_synced_tree_keeps_user_rows_and_is_idempotent() {
         let db = tmp().await;
-        for _ in 0..3 {
+        for _ in 0..2 {
             insert_track(&db, "Zeal", None, "Metalcore").await;
         }
-        insert_track(&db, "Zeal feat. X", Some("Zeal"), "Metalcore").await;
+        insert_track(&db, "zeal ", None, "Metalcore").await;
+        insert_track(&db, "Zeal feat. X", Some("ZEAL"), "Metalcore").await;
         insert_track(&db, "Daft", None, "House").await;
 
-        let mk = |pid: u64, name: &'static str, kind: PlaylistKind| PlaylistUpsert {
-            persistent_id: pid,
-            sync_source_id: 1,
-            name,
-            kind,
-            parent_persistent_id: None,
-            sort_order: 0,
-            track_entries: &[],
-            smart_rule_json: None,
+        let mk = |pid: u64, name: &'static str, kind: PlaylistKind, parent: Option<u64>| {
+            PlaylistUpsert {
+                persistent_id: pid,
+                sync_source_id: 1,
+                name,
+                kind,
+                parent_persistent_id: parent,
+                sort_order: 0,
+                track_entries: &[],
+                smart_rule_json: None,
+            }
         };
-        let s_folder = upsert(&db.engine, &mk(1, "Metal (old)", PlaylistKind::Folder))
+        let s_folder = upsert(
+            &db.engine,
+            &mk(1, "Metal (old)", PlaylistKind::Folder, None),
+        )
+        .await
+        .unwrap();
+        let s_smart = upsert(&db.engine, &mk(2, "Zeal (old)", PlaylistKind::Smart, None))
             .await
             .unwrap();
-        let s_smart = upsert(&db.engine, &mk(2, "Zeal (old)", PlaylistKind::Smart))
+        let s_reg = upsert(&db.engine, &mk(3, "Road trip", PlaylistKind::Regular, None))
             .await
             .unwrap();
-        let s_reg = upsert(&db.engine, &mk(3, "Road trip", PlaylistKind::Regular))
+        // A regular playlist inside the doomed folder floats to the top.
+        db.engine
+            .raw_sql_execute(
+                "UPDATE playlists SET parent_id = ? WHERE id = ?",
+                &[FV::Int(s_folder), FV::Int(s_reg)],
+            )
             .await
             .unwrap();
         let u_reg = create_regular(&db.engine, "Mine", None).await.unwrap();
@@ -335,6 +433,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(dry.deleted_synced, 2);
+        assert_eq!(dry.unfoldered, vec!["Road trip"]);
         assert_eq!(dry.folders, 2);
         assert_eq!(dry.playlists, 5);
         assert_eq!(
@@ -359,6 +458,7 @@ mod tests {
         assert!(dead.contains(&1) && dead.contains(&2) && !dead.contains(&3));
 
         let by_name = |n: &str| rows.iter().find(|r| r.name == n).cloned().unwrap();
+        assert_eq!(by_name("Road trip").parent_id, None);
         let metal = by_name("Metal");
         assert_eq!(metal.kind, "folder");
         assert_eq!(metal.parent_id, None);
@@ -371,7 +471,7 @@ mod tests {
         assert_eq!(
             zeal.cached_track_count,
             Some(4),
-            "album-artist credit counts too"
+            "album-artist credit, padding and case variants all count"
         );
         assert_eq!(by_name("Daft").parent_id, Some(by_name("Electronic").id));
         assert!(all_metal.sort_order < zeal.sort_order);
@@ -387,6 +487,7 @@ mod tests {
             .unwrap();
         assert_eq!(again.deleted_generated, 7);
         assert_eq!(again.deleted_synced, 0);
+        assert!(again.unfoldered.is_empty());
         assert_eq!(list_all(&db.engine).await.unwrap().len(), 3 + 7);
 
         let kept = rebuild(

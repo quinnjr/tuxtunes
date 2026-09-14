@@ -147,7 +147,12 @@ pub fn normalize_tag(raw: &str) -> Option<String> {
     {
         return None;
     }
-    if lower.contains('.') && !lower.contains(' ') && lower.contains(|c: char| c.is_alphabetic()) {
+    if lower.starts_with("www.")
+        || lower.starts_with("http")
+        || [".net", ".com", ".org", ".io", ".fm", ".co.uk"]
+            .iter()
+            .any(|tld| lower.ends_with(tld))
+    {
         // "atrilli.net", "www.example.com"
         return None;
     }
@@ -200,6 +205,30 @@ fn cap_first(part: &str) -> String {
 /// "industrial metal" lands in Metal before "industrial" can claim it
 /// for Electronic.
 const UMBRELLA_KEYWORDS: &[(Umbrella, &[&str])] = &[
+    // Compounds that a broad keyword below would otherwise misfile.
+    (
+        Umbrella::Electronic,
+        &[
+            "hardcore techno",
+            "happy hardcore",
+            "uk hardcore",
+            "bouncy hardcore",
+            "gabber",
+            "digital hardcore",
+        ],
+    ),
+    (
+        Umbrella::Rock,
+        &[
+            "garage rock",
+            "symphonic rock",
+            "industrial rock",
+            "dance-rock",
+            "dance rock",
+            "pop rock",
+        ],
+    ),
+    (Umbrella::Other, &["dancehall", "reggae"]),
     (
         Umbrella::Soundtrack,
         &[
@@ -393,6 +422,7 @@ mod tests {
             " ",
             "145",
             "atrilli.net",
+            "www.x.org",
             "Unclassifiable",
             "Other",
             "K Theory",
@@ -413,6 +443,7 @@ mod tests {
             Some("Post-Hardcore")
         );
         assert_eq!(normalize_tag("EDM").as_deref(), Some("EDM"));
+        assert_eq!(normalize_tag("Prog.").as_deref(), Some("Prog."));
     }
 
     #[test]
@@ -456,6 +487,16 @@ mod tests {
             ("Celtic Folk", Umbrella::Folk),
             ("Country", Umbrella::Folk),
             ("New Age", Umbrella::NewAge),
+            ("Happy Hardcore", Umbrella::Electronic),
+            ("Hardcore Techno", Umbrella::Electronic),
+            ("Hardcore", Umbrella::Alternative),
+            ("Garage Rock", Umbrella::Rock),
+            ("UK Garage", Umbrella::Electronic),
+            ("Symphonic Rock", Umbrella::Rock),
+            ("Industrial Rock", Umbrella::Rock),
+            ("Dancehall", Umbrella::Other),
+            ("Reggae", Umbrella::Other),
+            ("Dub Techno", Umbrella::Electronic),
             ("Comedy", Umbrella::Other),
             ("Gospel", Umbrella::Other),
             ("Spoken Word", Umbrella::Other),

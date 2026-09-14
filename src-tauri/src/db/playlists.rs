@@ -320,6 +320,68 @@ pub async fn synced_smart_and_folder_ids(
     collect_ids(engine, sql, &[]).await
 }
 
+/// Names of regular playlists whose parent is one of `folder_ids`.
+/// Reported before a rebuild so the user knows which playlists lose
+/// their folder.
+pub async fn regular_children_of(
+    engine: &SqliteRawEngine,
+    folder_ids: &[i64],
+) -> Result<Vec<String>, PlaylistsError> {
+    if folder_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = vec!["?"; folder_ids.len()].join(",");
+    let sql = format!(
+        "SELECT name FROM playlists WHERE kind = 'regular' AND parent_id IN ({marks}) \
+         ORDER BY name COLLATE NOCASE"
+    );
+    let params: Vec<FilterValue> = folder_ids.iter().map(|id| FilterValue::Int(*id)).collect();
+    let rows = engine
+        .raw_sql_query(&sql, &params)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            r.into_json()
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+/// Hard-delete many playlists in one transaction, tombstoning every
+/// sync-sourced row first (the multi-row twin of [`delete`]). Either
+/// every row goes or none does. Ids are integers, so inlining them in
+/// the batch is safe.
+pub async fn delete_many(engine: &SqliteRawEngine, ids: &[i64]) -> Result<(), PlaylistsError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let list = ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "BEGIN IMMEDIATE;\n\
+         INSERT OR IGNORE INTO playlist_tombstones (sync_source_id, persistent_id) \
+         SELECT sync_source_id, persistent_id FROM playlists \
+         WHERE id IN ({list}) AND sync_source_id IS NOT NULL AND persistent_id IS NOT NULL;\n\
+         DELETE FROM playlists WHERE id IN ({list});\n\
+         COMMIT;"
+    );
+    let conn = engine
+        .pool()
+        .get()
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))?;
+    conn.execute_batch(&sql)
+        .await
+        .map_err(|e| PlaylistsError::Query(anyhow::Error::from(e)))
+}
+
 async fn collect_ids(
     engine: &SqliteRawEngine,
     sql: &str,
@@ -1430,6 +1492,50 @@ mod tests {
             Some("{}")
         );
         let _ = user;
+    }
+
+    #[tokio::test]
+    async fn delete_many_tombstones_synced_rows_and_unparents_children() {
+        let db = tmp().await;
+        let mk = |pid: u64, kind: PlaylistKind| PlaylistUpsert {
+            persistent_id: pid,
+            sync_source_id: 1,
+            name: "S",
+            kind,
+            parent_persistent_id: None,
+            sort_order: 0,
+            track_entries: &[],
+            smart_rule_json: None,
+        };
+        let folder = upsert(&db.engine, &mk(0xa1, PlaylistKind::Folder))
+            .await
+            .unwrap();
+        let smart = upsert(&db.engine, &mk(0xa2, PlaylistKind::Smart))
+            .await
+            .unwrap();
+        let child = create_regular(&db.engine, "Inside", Some(folder))
+            .await
+            .unwrap();
+        let user = create_regular(&db.engine, "Mine", None).await.unwrap();
+        assert_eq!(
+            regular_children_of(&db.engine, &[folder]).await.unwrap(),
+            vec!["Inside"]
+        );
+        delete_many(&db.engine, &[folder, smart, user])
+            .await
+            .unwrap();
+        let rows = list_all(&db.engine).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, child);
+        assert_eq!(rows[0].parent_id, None);
+        let dead = tombstoned_pids(&db.engine, 1).await.unwrap();
+        assert_eq!(dead.len(), 2);
+        assert!(dead.contains(&0xa1) && dead.contains(&0xa2));
+        delete_many(&db.engine, &[]).await.unwrap();
+        assert!(regular_children_of(&db.engine, &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

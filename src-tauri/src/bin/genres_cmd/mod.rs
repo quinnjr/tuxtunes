@@ -22,8 +22,8 @@ pub enum GenresCommand {
         refresh: bool,
     },
     /// Write the resolved genres onto every track (database row and
-    /// the file's own genre tag). Rows are flagged user-edited so a
-    /// later sync does not revert them.
+    /// the file's own genre tag). Rows get their genre locked so a
+    /// later sync does not revert it; other fields stay sync-owned.
     Apply {
         /// Update database rows only; leave file tags alone.
         #[arg(long)]
@@ -148,6 +148,15 @@ pub async fn run(db: &tuxtunes::db::Db, db_path: &Path, cmd: GenresCommand) -> a
                 println!("{folder} ({} artists)", artists.len());
                 for a in artists {
                     println!("  {a}");
+                }
+            }
+            if !summary.unfoldered.is_empty() {
+                eprintln!(
+                    "{} regular playlist(s) lose their synced folder and move to the top level:",
+                    summary.unfoldered.len()
+                );
+                for name in &summary.unfoldered {
+                    eprintln!("  {name}");
                 }
             }
             println!(

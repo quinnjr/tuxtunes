@@ -1,13 +1,13 @@
 //! Step two: push the resolved genres onto tracks (database rows and
 //! the files' own tags).
 
-use super::map::GenreMap;
-use super::resolve::{is_non_artist, ARTIST_KEY_SQL};
+use super::map::{ArtistGenre, GenreMap};
+use super::resolve::{fold_key, is_non_artist, ARTIST_FOLD_SQL};
 use super::taxonomy::normalize_tag;
-use crate::db::tracks::set_genre_user_edited;
+use crate::db::tracks::set_genres_locked;
 use crate::fs::tags::{write_genre, TagsError};
 use prax_sqlite::raw::SqliteRawEngine;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy)]
@@ -39,12 +39,21 @@ pub struct ApplySummary {
     pub by_genre: BTreeMap<String, u64>,
 }
 
+/// The map re-indexed by artist fold, for per-track lookups.
+pub fn by_fold(map: &GenreMap) -> HashMap<String, &ArtistGenre> {
+    map.artists.iter().map(|(k, v)| (fold_key(k), v)).collect()
+}
+
 /// The genre a track should carry: the artist's resolved genre when
 /// there is one, otherwise its own tag normalised, otherwise `None`
 /// (leave the row alone).
-pub fn target_genre(map: &GenreMap, key: &str, existing: Option<&str>) -> Option<String> {
-    if !is_non_artist(key) {
-        if let Some(entry) = map.artists.get(key) {
+pub fn target_genre(
+    folded: &HashMap<String, &ArtistGenre>,
+    fold: &str,
+    existing: Option<&str>,
+) -> Option<String> {
+    if !is_non_artist(fold) {
+        if let Some(entry) = folded.get(fold) {
             if entry.is_resolved() {
                 return Some(entry.genre.clone());
             }
@@ -68,20 +77,24 @@ pub async fn apply(
     opts: ApplyOpts,
     mut progress: impl FnMut(u64, u64),
 ) -> anyhow::Result<ApplySummary> {
-    let sql = format!("SELECT id, {ARTIST_KEY_SQL} AS k, genre, file_path FROM tracks ORDER BY id");
+    let folded = by_fold(map);
+    let sql =
+        format!("SELECT id, {ARTIST_FOLD_SQL} AS f, genre, file_path FROM tracks ORDER BY id");
     let rows = engine.raw_sql_query(&sql, &[]).await?;
     let mut summary = ApplySummary::default();
     let mut planned = Vec::new();
     for r in rows {
         let j = r.into_json();
         let id = j.get("id").and_then(|v| v.as_i64()).unwrap_or_default();
-        let key = j.get("k").and_then(|v| v.as_str()).unwrap_or("");
+        let fold = j.get("f").and_then(|v| v.as_str()).unwrap_or("");
         let existing = j.get("genre").and_then(|v| v.as_str());
         let path = j.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-        let Some(genre) = target_genre(map, key, existing) else {
+        let Some(genre) = target_genre(&folded, fold, existing) else {
             continue;
         };
-        if existing.map(str::trim) == Some(genre.as_str()) {
+        // Exact comparison on purpose: a padded "Metalcore " must be
+        // rewritten, or the "All <Genre>" rules (plain equality) miss it.
+        if existing == Some(genre.as_str()) {
             continue;
         }
         *summary.by_genre.entry(genre.clone()).or_default() += 1;
@@ -96,11 +109,8 @@ pub async fn apply(
         return Ok(summary);
     }
 
-    for p in &planned {
-        if set_genre_user_edited(engine, p.id, &p.genre).await? {
-            summary.db_updated += 1;
-        }
-    }
+    let changes: Vec<(i64, &str)> = planned.iter().map(|p| (p.id, p.genre.as_str())).collect();
+    summary.db_updated = set_genres_locked(engine, &changes).await?;
 
     if opts.write_tags {
         let total = planned.len() as u64;
@@ -135,7 +145,7 @@ pub async fn apply(
 mod tests {
     use super::*;
     use crate::db::Db;
-    use crate::library::genres::map::{ArtistGenre, Source};
+    use crate::library::genres::map::Source;
     use prax_query::filter::FilterValue as FV;
 
     async fn tmp_db() -> Db {
@@ -162,7 +172,7 @@ mod tests {
         let j = db
             .engine
             .raw_sql_first(
-                "SELECT genre, user_edited FROM tracks WHERE id = ?",
+                "SELECT genre, genre_locked FROM tracks WHERE id = ?",
                 &[FV::Int(id)],
             )
             .await
@@ -170,7 +180,7 @@ mod tests {
             .into_json();
         (
             j["genre"].as_str().map(str::to_string),
-            j["user_edited"].as_i64().unwrap(),
+            j["genre_locked"].as_i64().unwrap(),
         )
     }
 
@@ -188,22 +198,23 @@ mod tests {
     #[test]
     fn target_genre_prefers_artist_then_normalized_tag() {
         let m = map();
+        let f = by_fold(&m);
         assert_eq!(
-            target_genre(&m, "Band", Some("Alternative")).as_deref(),
+            target_genre(&f, "band", Some("Alternative")).as_deref(),
             Some("Metalcore")
         );
         assert_eq!(
-            target_genre(&m, "Nobody", Some("JPop")).as_deref(),
+            target_genre(&f, "nobody", Some("JPop")).as_deref(),
             Some("J-Pop")
         );
-        assert_eq!(target_genre(&m, "Nobody", Some("145")), None);
-        assert_eq!(target_genre(&m, "Nobody", None), None);
+        assert_eq!(target_genre(&f, "nobody", Some("145")), None);
+        assert_eq!(target_genre(&f, "nobody", None), None);
         assert_eq!(
-            target_genre(&m, "Various Artists", Some("rock")).as_deref(),
+            target_genre(&f, "various artists", Some("rock")).as_deref(),
             Some("Rock")
         );
         assert_eq!(
-            target_genre(&m, "Unmapped", Some("Rock")).as_deref(),
+            target_genre(&f, "unmapped", Some("Rock")).as_deref(),
             Some("Rock")
         );
     }
@@ -224,9 +235,10 @@ mod tests {
         let wav = dir.path().join("a.wav");
         write_minimal_wav(&wav);
         let a = insert(&db, "Band", Some("Alternative"), wav.to_str().unwrap()).await;
-        let b = insert(&db, "Band", Some("Metalcore"), "/tmp/already.flac").await;
+        let b = insert(&db, "BAND ", Some("Metalcore"), "/tmp/already.flac").await;
         let c = insert(&db, "Nobody", Some("JPop"), "/tmp/missing.flac").await;
         let d = insert(&db, "Nobody", Some("145"), "/tmp/junk.flac").await;
+        let e = insert(&db, "Nobody", Some("Trance "), "/tmp/padded.flac").await;
 
         let dry = apply(
             &db.engine,
@@ -239,7 +251,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(dry.planned, 2);
+        assert_eq!(dry.planned, 3);
         assert_eq!(dry.db_updated, 0);
         assert_eq!(row(&db, a).await, (Some("Alternative".into()), 0));
 
@@ -247,18 +259,24 @@ mod tests {
         let s = apply(&db.engine, &map(), ApplyOpts::default(), |_, _| ticks += 1)
             .await
             .unwrap();
-        assert_eq!(s.planned, 2);
-        assert_eq!(s.db_updated, 2);
+        assert_eq!(s.planned, 3);
+        assert_eq!(s.db_updated, 3);
         assert_eq!(s.tags_written, 1);
-        assert_eq!(s.tags_skipped_missing, 1);
+        assert_eq!(s.tags_skipped_missing, 2);
         assert!(s.tags_failed.is_empty());
         assert_eq!(s.by_genre["Metalcore"], 1);
         assert_eq!(s.by_genre["J-Pop"], 1);
+        assert_eq!(s.by_genre["Trance"], 1);
         assert_eq!(ticks, 1);
         assert_eq!(row(&db, a).await, (Some("Metalcore".into()), 1));
-        assert_eq!(row(&db, b).await, (Some("Metalcore".into()), 0));
+        assert_eq!(
+            row(&db, b).await,
+            (Some("Metalcore".into()), 0),
+            "case/padding variant of the artist still maps, and an exact row is untouched"
+        );
         assert_eq!(row(&db, c).await, (Some("J-Pop".into()), 1));
         assert_eq!(row(&db, d).await, (Some("145".into()), 0));
+        assert_eq!(row(&db, e).await, (Some("Trance".into()), 1));
         let tag = lofty::read_from_path(&wav).unwrap();
         use lofty::file::TaggedFileExt;
         use lofty::tag::Accessor;

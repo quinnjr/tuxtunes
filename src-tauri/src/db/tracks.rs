@@ -297,29 +297,55 @@ pub async fn update_metadata(
     Ok(())
 }
 
-/// Set one track's genre and mark the row `user_edited` so the sync
-/// reconciler leaves it alone. Returns `true` when the stored genre
-/// actually changed; an already-matching row is left untouched (no
-/// `date_modified` bump, no `user_edited` flip).
-pub async fn set_genre_user_edited(
+/// Write canonical genres onto many tracks in one transaction per
+/// 1,000 rows and lock each changed row's genre against the sync
+/// reconciler (`genre_locked`, not `user_edited`, so the source keeps
+/// correcting every other descriptive field). Rows already holding the
+/// exact genre are left untouched. Returns the number of rows changed.
+pub async fn set_genres_locked(
     engine: &SqliteRawEngine,
-    local_id: i64,
-    genre: &str,
-) -> Result<bool, TracksError> {
-    use prax_query::filter::FilterValue as FV;
-    let sql = "UPDATE tracks SET genre = ?, user_edited = 1, \
-        date_modified = CURRENT_TIMESTAMP \
-        WHERE id = ? AND COALESCE(genre, '') <> ?";
-    let params = vec![
-        FV::String(genre.to_string()),
-        FV::Int(local_id),
-        FV::String(genre.to_string()),
-    ];
-    let n = engine
-        .raw_sql_execute(sql, &params)
+    changes: &[(i64, &str)],
+) -> Result<u64, TracksError> {
+    if changes.is_empty() {
+        return Ok(0);
+    }
+    let q = |e: anyhow::Error| TracksError::Query(e);
+    let conn = engine.pool().get().await.map_err(|e| q(e.into()))?;
+    let before = total_changes(&conn).await?;
+    for chunk in changes.chunks(1000) {
+        let mut sql = String::with_capacity(chunk.len() * 96 + 64);
+        sql.push_str("BEGIN IMMEDIATE;\n");
+        for (id, genre) in chunk {
+            // Inlined because `execute_batch` takes no params; doubling
+            // single quotes is the only escape a SQLite literal needs.
+            let lit = genre.replace('\'', "''");
+            sql.push_str(&format!(
+                "UPDATE tracks SET genre = '{lit}', genre_locked = 1, \
+                 date_modified = CURRENT_TIMESTAMP \
+                 WHERE id = {id} AND COALESCE(genre, '') <> '{lit}';\n"
+            ));
+        }
+        sql.push_str("COMMIT;");
+        conn.execute_batch(&sql).await.map_err(|e| q(e.into()))?;
+    }
+    let after = total_changes(&conn).await?;
+    Ok(after.saturating_sub(before))
+}
+
+/// `sqlite3_total_changes()` on this connection: every row changed by
+/// every statement it ever ran, so a before/after difference counts
+/// exactly the rows a batch touched.
+async fn total_changes(conn: &prax_sqlite::SqliteConnection) -> Result<u64, TracksError> {
+    let rows = conn
+        .query("SELECT total_changes() AS n")
         .await
         .map_err(|e| TracksError::Query(anyhow::Error::from(e)))?;
-    Ok(n > 0)
+    Ok(rows
+        .first()
+        .and_then(|r| r.as_object())
+        .and_then(|o| o.get("n"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0))
 }
 
 /// Local-side view of a track used for conflict resolution: row id +
@@ -493,7 +519,7 @@ pub async fn update_descriptive_fields(
         album = CASE WHEN user_edited = 1 THEN album ELSE ? END, \
         album_artist = CASE WHEN user_edited = 1 THEN album_artist ELSE ? END, \
         composer = ?, \
-        genre = CASE WHEN user_edited = 1 THEN genre ELSE ? END, \
+        genre = CASE WHEN user_edited = 1 OR genre_locked = 1 THEN genre ELSE ? END, \
         kind = ?, duration_ms = ?, size_bytes = ?, bit_rate = ?, \
         sample_rate = ?, \
         track_number = CASE WHEN user_edited = 1 THEN track_number ELSE ? END, \
@@ -804,29 +830,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_genre_user_edited_only_touches_changed_rows() {
+    async fn set_genres_locked_batches_and_only_touches_changed_rows() {
         let db = tmp_db().await;
-        let id = insert_fixture(&db.engine, "T", "/tmp/g.flac").await;
-        assert!(set_genre_user_edited(&db.engine, id, "Metalcore")
+        let a = insert_fixture(&db.engine, "A", "/tmp/ga.flac").await;
+        let b = insert_fixture(&db.engine, "B", "/tmp/gb.flac").await;
+        let n = set_genres_locked(&db.engine, &[(a, "Metalcore"), (b, "Rock 'n' Roll")])
             .await
-            .unwrap());
-        let row: serde_json::Value = db
+            .unwrap();
+        assert_eq!(n, 2);
+        async fn row(db: &Db, id: i64) -> serde_json::Value {
+            db.engine
+                .raw_sql_first(
+                    "SELECT genre, genre_locked, user_edited FROM tracks WHERE id = ?",
+                    &[prax_query::filter::FilterValue::Int(id)],
+                )
+                .await
+                .unwrap()
+                .into_json()
+        }
+        let ra = row(&db, a).await;
+        assert_eq!(ra["genre"], "Metalcore");
+        assert_eq!(ra["genre_locked"], 1);
+        assert_eq!(ra["user_edited"], 0);
+        assert_eq!(row(&db, b).await["genre"], "Rock 'n' Roll");
+        let n = set_genres_locked(&db.engine, &[(a, "Metalcore"), (999_999, "X")])
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(set_genres_locked(&db.engine, &[]).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn sync_keeps_a_locked_genre_but_still_updates_other_fields() {
+        let db = tmp_db().await;
+        seed_source(&db).await;
+        let id = insert_from_itl(&db.engine, &itl_fixture(7, "Old", "/tmp/l.flac"))
+            .await
+            .unwrap();
+        set_genres_locked(&db.engine, &[(id, "Metalcore")])
+            .await
+            .unwrap();
+        let mut again = itl_fixture(7, "New Title", "/tmp/l.flac");
+        again.genre = Some("Pop");
+        update_descriptive_fields(&db.engine, id, &again, 0, 0)
+            .await
+            .unwrap();
+        let row = db
             .engine
             .raw_sql_first(
-                "SELECT genre, user_edited FROM tracks WHERE id = ?",
+                "SELECT title, genre FROM tracks WHERE id = ?",
                 &[prax_query::filter::FilterValue::Int(id)],
             )
             .await
             .unwrap()
             .into_json();
+        assert_eq!(row["title"], "New Title");
         assert_eq!(row["genre"], "Metalcore");
-        assert_eq!(row["user_edited"], 1);
-        assert!(!set_genre_user_edited(&db.engine, id, "Metalcore")
-            .await
-            .unwrap());
-        assert!(!set_genre_user_edited(&db.engine, 999_999, "X")
-            .await
-            .unwrap());
     }
 
     #[tokio::test]

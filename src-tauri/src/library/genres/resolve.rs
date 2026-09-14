@@ -1,5 +1,11 @@
-//! Step one: decide a genre for every artist key in the library and
-//! record it in the [`GenreMap`].
+//! Step one: decide a genre for every artist in the library and record
+//! it in the [`GenreMap`].
+//!
+//! Artists are grouped by a *fold* of their name — album artist when
+//! present, else artist, trimmed and ASCII-lowercased — so "ABBA",
+//! "abba" and "ABBA " are one artist. The map is keyed by the most
+//! common trimmed spelling, and `rebuild` matches every raw spelling
+//! that folds to it.
 
 use super::map::{ArtistGenre, GenreMap, Source};
 use super::musicbrainz::GenreLookup;
@@ -10,29 +16,51 @@ use std::collections::BTreeMap;
 /// Artist keys that are not one artist and must never be looked up.
 pub const NON_ARTIST_KEYS: &[&str] = &["", "various artists", "various", "va", "unknown artist"];
 
-/// Everything `resolve` needs to know about one artist key.
+/// The trimmed display spelling of an artist key: album artist, falling
+/// back to artist.
+pub const ARTIST_KEY_SQL: &str = "TRIM(COALESCE(NULLIF(TRIM(album_artist), ''), artist, ''))";
+
+/// The grouping fold of an artist key. SQLite's `LOWER` is ASCII-only;
+/// [`fold_key`] mirrors that exactly so both sides agree.
+pub const ARTIST_FOLD_SQL: &str =
+    "LOWER(TRIM(COALESCE(NULLIF(TRIM(album_artist), ''), artist, '')))";
+
+/// Rust twin of [`ARTIST_FOLD_SQL`].
+pub fn fold_key(s: &str) -> String {
+    s.trim().to_ascii_lowercase()
+}
+
+/// Everything `resolve` needs to know about one artist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtistStats {
+    /// Most common trimmed spelling; the map key.
     pub key: String,
+    pub fold: String,
     pub track_count: u64,
     /// Raw existing genre tags with per-tag track counts.
     pub tags: Vec<(String, u64)>,
 }
 
-/// The artist key is album artist, falling back to artist; the same
-/// expression the rebuilt playlists match on.
-pub const ARTIST_KEY_SQL: &str = "COALESCE(NULLIF(TRIM(album_artist), ''), TRIM(artist), '')";
-
-/// One GROUP BY over the whole library, folded per artist key.
+/// One GROUP BY over the whole library, folded per artist.
 pub async fn artist_stats(engine: &SqliteRawEngine) -> anyhow::Result<Vec<ArtistStats>> {
     let sql = format!(
-        "SELECT {ARTIST_KEY_SQL} AS k, COALESCE(genre, '') AS g, COUNT(*) AS c \
-         FROM tracks GROUP BY k, g ORDER BY k, c DESC"
+        "SELECT {ARTIST_FOLD_SQL} AS f, {ARTIST_KEY_SQL} AS k, COALESCE(genre, '') AS g, \
+         COUNT(*) AS c FROM tracks GROUP BY f, k, g ORDER BY f, c DESC"
     );
     let rows = engine.raw_sql_query(&sql, &[]).await?;
-    let mut by_key: BTreeMap<String, ArtistStats> = BTreeMap::new();
+    struct Acc {
+        spellings: BTreeMap<String, u64>,
+        track_count: u64,
+        tags: BTreeMap<String, u64>,
+    }
+    let mut by_fold: BTreeMap<String, Acc> = BTreeMap::new();
     for r in rows {
         let j = r.into_json();
+        let fold = j
+            .get("f")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let key = j
             .get("k")
             .and_then(|v| v.as_str())
@@ -44,17 +72,36 @@ pub async fn artist_stats(engine: &SqliteRawEngine) -> anyhow::Result<Vec<Artist
             .unwrap_or("")
             .to_string();
         let count = j.get("c").and_then(|v| v.as_u64()).unwrap_or(0);
-        let entry = by_key.entry(key.clone()).or_insert_with(|| ArtistStats {
-            key,
+        let acc = by_fold.entry(fold).or_insert_with(|| Acc {
+            spellings: BTreeMap::new(),
             track_count: 0,
-            tags: Vec::new(),
+            tags: BTreeMap::new(),
         });
-        entry.track_count += count;
+        *acc.spellings.entry(key).or_default() += count;
+        acc.track_count += count;
         if !tag.is_empty() {
-            entry.tags.push((tag, count));
+            *acc.tags.entry(tag).or_default() += count;
         }
     }
-    Ok(by_key.into_values().collect())
+    Ok(by_fold
+        .into_iter()
+        .map(|(fold, acc)| {
+            let key = acc
+                .spellings
+                .iter()
+                .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+                .map(|(k, _)| k.clone())
+                .unwrap_or_default();
+            let mut tags: Vec<(String, u64)> = acc.tags.into_iter().collect();
+            tags.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            ArtistStats {
+                key,
+                fold,
+                track_count: acc.track_count,
+                tags,
+            }
+        })
+        .collect())
 }
 
 /// The most common normalized tag, junk excluded. Ties break toward
@@ -73,13 +120,20 @@ pub fn dominant_tag(tags: &[(String, u64)]) -> Option<String> {
 }
 
 pub fn is_non_artist(key: &str) -> bool {
-    NON_ARTIST_KEYS.contains(&key.trim().to_lowercase().as_str())
+    NON_ARTIST_KEYS.contains(&fold_key(key).as_str())
+}
+
+/// The map key whose fold matches `fold`, if any. Linear over the map,
+/// which is a couple of thousand entries at most.
+pub fn key_for_fold(map: &GenreMap, fold: &str) -> Option<String> {
+    map.artists.keys().find(|k| fold_key(k) == fold).cloned()
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResolveOpts {
-    /// Re-query artists already resolved from MusicBrainz or tags.
-    /// Manual entries are never touched.
+    /// Re-query artists already resolved (from MusicBrainz or tags)
+    /// and artists that previously came up unresolved. Manual entries
+    /// are never touched.
     pub refresh: bool,
 }
 
@@ -96,9 +150,9 @@ pub struct ResolveSummary {
 /// resumes where it stopped.
 pub const SAVE_EVERY: u64 = 10;
 
-/// Fill `map` for every artist key. `save` is called every
-/// [`SAVE_EVERY`] lookups and once at the end; `progress` gets
-/// `(key, done, total)` before each artist is handled.
+/// Fill `map` for every artist. `save` is called every [`SAVE_EVERY`]
+/// lookups and once at the end; `progress` gets `(key, done, total)`
+/// before each artist is handled.
 pub async fn resolve<L: GenreLookup>(
     engine: &SqliteRawEngine,
     lookup: &L,
@@ -113,14 +167,17 @@ pub async fn resolve<L: GenreLookup>(
     let mut since_save = 0u64;
     for (i, a) in stats.iter().enumerate() {
         progress(&a.key, i, total);
-        if let Some(existing) = map.artists.get_mut(&a.key) {
+        // An entry from an earlier run may sit under another spelling
+        // of the same artist; adopt it under the current key.
+        if let Some(old_key) = key_for_fold(map, &a.fold) {
+            let mut existing = map.artists.remove(&old_key).expect("key came from the map");
             existing.track_count = a.track_count;
             let keep = match existing.source {
                 Source::Manual => true,
-                Source::Musicbrainz | Source::Tags => !opts.refresh,
-                Source::Unresolved => !opts.refresh && !existing.genre.is_empty(),
+                Source::Musicbrainz | Source::Tags | Source::Unresolved => !opts.refresh,
             };
             if keep {
+                map.artists.insert(a.key.clone(), existing);
                 summary.skipped += 1;
                 continue;
             }
@@ -235,21 +292,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn artist_stats_groups_by_album_artist_then_artist() {
+    async fn artist_stats_folds_case_and_padding_and_prefers_album_artist() {
         let db = tmp_db().await;
         insert(&db, "Skream feat. X", Some("Skream"), Some("Dubstep")).await;
-        insert(&db, "Skream", None, Some("Dubstep")).await;
-        insert(&db, "Skream", None, Some("Electronic")).await;
+        insert(&db, "skream", None, Some("Dubstep")).await;
+        insert(&db, "Skream ", None, Some("Electronic")).await;
+        insert(&db, "SKREAM", Some(" "), Some("Electronic")).await;
         insert(&db, "  ", Some(""), None).await;
         let stats = artist_stats(&db.engine).await.unwrap();
         assert_eq!(stats.len(), 2);
         assert_eq!(stats[0].key, "");
         assert_eq!(stats[0].track_count, 1);
-        assert_eq!(stats[1].key, "Skream");
-        assert_eq!(stats[1].track_count, 3);
+        assert_eq!(stats[1].key, "Skream", "most common trimmed spelling wins");
+        assert_eq!(stats[1].fold, "skream");
+        assert_eq!(stats[1].track_count, 4);
         assert_eq!(
             stats[1].tags,
-            vec![("Dubstep".to_string(), 2), ("Electronic".to_string(), 1)]
+            vec![("Dubstep".to_string(), 2), ("Electronic".to_string(), 2)]
         );
     }
 
@@ -265,11 +324,18 @@ mod tests {
         assert_eq!(dominant_tag(&[("145".to_string(), 9)]), None);
     }
 
+    #[test]
+    fn fold_is_ascii_only_like_sqlite_lower() {
+        assert_eq!(fold_key("  ABBA "), "abba");
+        assert_eq!(fold_key("Röyksopp"), "röyksopp");
+        assert!(is_non_artist(" VARIOUS ARTISTS "));
+    }
+
     #[tokio::test]
     async fn resolve_covers_hit_miss_soundtrack_manual_and_resume() {
         let db = tmp_db().await;
         insert(&db, "Asking Alexandria", None, Some("Alternative")).await;
-        insert(&db, "Asking Alexandria", None, Some("Alternative")).await;
+        insert(&db, "asking alexandria", None, Some("Alternative")).await;
         insert(&db, "Obscure Band", None, Some("Death Metal/Black Metal")).await;
         insert(&db, "Nothing Known", None, Some("145")).await;
         insert(&db, "Armored Core V", None, Some("Game")).await;
@@ -282,11 +348,14 @@ mod tests {
         .await;
         insert(&db, "Hand Fixed", None, Some("Pop")).await;
         insert(&db, "Already Done", None, Some("Pop")).await;
+        insert(&db, "ALREADY DONE", None, Some("Pop")).await;
+        insert(&db, "ALREADY DONE", None, Some("Pop")).await;
 
         let fake = Fake::new(vec![
             ("Asking Alexandria", hit(&[("metalcore", 10), ("rock", 5)])),
+            ("asking alexandria", hit(&[("metalcore", 10), ("rock", 5)])),
             ("Hand Fixed", hit(&[("pop", 1)])),
-            ("Already Done", hit(&[("pop", 1)])),
+            ("ALREADY DONE", hit(&[("pop", 1)])),
         ]);
         let mut map = GenreMap::default();
         let mut manual = ArtistGenre::new("Trance", Source::Manual, 0);
@@ -313,11 +382,18 @@ mod tests {
         .unwrap();
 
         let g = |k: &str| map.artists.get(k).unwrap().clone();
-        assert_eq!(g("Asking Alexandria").genre, "Metalcore");
-        assert_eq!(g("Asking Alexandria").source, Source::Musicbrainz);
-        assert_eq!(g("Asking Alexandria").mbid.as_deref(), Some("mbid"));
-        assert_eq!(g("Asking Alexandria").track_count, 2);
-        assert_eq!(g("Asking Alexandria").umbrella, "Metal");
+        let aa = map
+            .artists
+            .keys()
+            .filter(|k| fold_key(k) == "asking alexandria")
+            .count();
+        assert_eq!(aa, 1, "case variants fold into one entry");
+        let aa_key = key_for_fold(&map, "asking alexandria").unwrap();
+        assert_eq!(g(&aa_key).genre, "Metalcore");
+        assert_eq!(g(&aa_key).source, Source::Musicbrainz);
+        assert_eq!(g(&aa_key).mbid.as_deref(), Some("mbid"));
+        assert_eq!(g(&aa_key).track_count, 2);
+        assert_eq!(g(&aa_key).umbrella, "Metal");
         assert_eq!(g("Obscure Band").genre, "Death Metal");
         assert_eq!(g("Obscure Band").source, Source::Tags);
         assert_eq!(g("Nothing Known").source, Source::Unresolved);
@@ -331,13 +407,14 @@ mod tests {
             1,
             "counts refresh even on kept entries"
         );
-        assert_eq!(g("Already Done").genre, "Old Genre");
+        // The old entry was adopted under the now-dominant spelling.
+        assert!(!map.artists.contains_key("Already Done"));
+        assert_eq!(g("ALREADY DONE").genre, "Old Genre");
+        assert_eq!(g("ALREADY DONE").track_count, 3);
 
-        let calls = fake.calls.lock().unwrap().clone();
-        assert_eq!(
-            calls,
-            ["Asking Alexandria", "Nothing Known", "Obscure Band"]
-        );
+        let mut calls = fake.calls.lock().unwrap().clone();
+        calls.sort();
+        assert_eq!(calls, [aa_key.as_str(), "Nothing Known", "Obscure Band"]);
         assert_eq!(saves.get(), 1);
         assert_eq!(
             summary,
@@ -350,6 +427,21 @@ mod tests {
             }
         );
 
+        // Without --refresh an unresolved artist stays unresolved and
+        // is not queried again.
+        fake.calls.lock().unwrap().clear();
+        resolve(
+            &db.engine,
+            &fake,
+            &mut map,
+            ResolveOpts::default(),
+            |_| Ok(()),
+            |_, _, _| {},
+        )
+        .await
+        .unwrap();
+        assert!(fake.calls.lock().unwrap().is_empty());
+
         // --refresh re-queries everything except manual entries.
         let summary = resolve(
             &db.engine,
@@ -361,7 +453,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(map.artists["Already Done"].genre, "Pop");
+        assert_eq!(map.artists["ALREADY DONE"].genre, "Pop");
         assert_eq!(map.artists["Hand Fixed"].genre, "Trance");
         assert_eq!(summary.skipped, 1);
     }
