@@ -238,12 +238,23 @@ impl MusicBrainz {
         };
         for attempt in 1..=ATTEMPTS {
             self.pace().await;
-            let resp = self
+            let resp = match self
                 .http
                 .get(&url)
                 .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "5")])
                 .send()
-                .await?;
+                .await
+            {
+                Ok(r) => r,
+                Err(e) if attempt < ATTEMPTS => {
+                    // Timeouts and connection resets are as transient as
+                    // a "busy" reply over a run this long.
+                    log::warn!("musicbrainz: request failed for {artist:?}: {e}");
+                    tokio::time::sleep(backoff(attempt).max(Duration::from_secs(2))).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             let status = resp.status();
             let body: serde_json::Value = match resp.json().await {
                 Ok(v) => v,
