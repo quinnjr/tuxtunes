@@ -203,6 +203,7 @@ tuxtunes-cli source remove <id>
 # smart playlist per artist with at least --min-tracks tracks.
 tuxtunes-cli genres resolve
 tuxtunes-cli genres apply --dry-run     # then without --dry-run
+tuxtunes-cli genres apply --retag       # finish an interrupted file-tag pass
 tuxtunes-cli genres rebuild --min-tracks 5
 ```
 
