@@ -94,7 +94,7 @@ pub struct ResolveSummary {
 
 /// How often the map is flushed mid-run so an interrupted resolve
 /// resumes where it stopped.
-pub const SAVE_EVERY: u64 = 25;
+pub const SAVE_EVERY: u64 = 10;
 
 /// Fill `map` for every artist key. `save` is called every
 /// [`SAVE_EVERY`] lookups and once at the end; `progress` gets

@@ -222,10 +222,19 @@ impl MusicBrainz {
     async fn search(&self, artist: &str) -> anyhow::Result<serde_json::Value> {
         let query = format!("artist:{}", lucene_phrase(artist));
         let url = format!("{API_ROOT}/artist/");
-        // MusicBrainz sheds load with a "busy" reply that can persist
-        // for a minute or more; back off 5s, 10s, 20s, 40s, 60s, 60s…
-        const ATTEMPTS: u32 = 8;
-        let backoff = |attempt: u32| Duration::from_secs((5u64 << (attempt - 1)).min(60));
+        // MusicBrainz sheds load with a cheap "busy" reply that, under
+        // load, hits about half of all requests regardless of pacing.
+        // Retry quickly for a while (a 503 costs half a second), and
+        // only back off (5s, 10s, … 60s) once a run of them suggests a
+        // real outage.
+        const ATTEMPTS: u32 = 24;
+        let backoff = |attempt: u32| {
+            if attempt <= 12 {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_secs((5u64 << (attempt - 13)).min(60))
+            }
+        };
         for attempt in 1..=ATTEMPTS {
             self.pace().await;
             let resp = self
