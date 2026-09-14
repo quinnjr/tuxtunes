@@ -8,4 +8,5 @@
 
 pub mod map;
 pub mod musicbrainz;
+pub mod resolve;
 pub mod taxonomy;

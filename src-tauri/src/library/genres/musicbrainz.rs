@@ -222,7 +222,8 @@ impl MusicBrainz {
     async fn search(&self, artist: &str) -> anyhow::Result<serde_json::Value> {
         let query = format!("artist:{}", lucene_phrase(artist));
         let url = format!("{API_ROOT}/artist/");
-        for attempt in 0..2 {
+        const ATTEMPTS: usize = 3;
+        for attempt in 1..=ATTEMPTS {
             self.pace().await;
             let resp = self
                 .http
@@ -230,13 +231,35 @@ impl MusicBrainz {
                 .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "5")])
                 .send()
                 .await?;
-            if resp.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
+            let status = resp.status();
+            let body: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) if attempt < ATTEMPTS => {
+                    log::warn!("musicbrainz: unreadable body for {artist:?}: {e}");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            // MusicBrainz reports overload as `{"error": "... busy ..."}`,
+            // sometimes with a 200 and sometimes with a 503.
+            let busy = body.get("error").and_then(|e| e.as_str());
+            if status == reqwest::StatusCode::SERVICE_UNAVAILABLE || busy.is_some() {
+                if attempt < ATTEMPTS {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+                anyhow::bail!(
+                    "musicbrainz unavailable after {ATTEMPTS} attempts: {}",
+                    busy.unwrap_or(status.as_str())
+                );
             }
-            return Ok(resp.error_for_status()?.json().await?);
+            if !status.is_success() {
+                anyhow::bail!("musicbrainz returned {status} for {artist:?}");
+            }
+            return Ok(body);
         }
-        unreachable!("loop returns on the second attempt")
+        unreachable!("every attempt either returns or continues")
     }
 }
 
