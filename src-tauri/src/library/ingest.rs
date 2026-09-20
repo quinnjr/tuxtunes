@@ -45,6 +45,23 @@ struct ProbeResult {
     size_bytes: i64,
 }
 
+/// The leading integer of a track/disc number string, or `None` when it
+/// does not start with a number.
+///
+/// Taggers commonly write these as "current/total" (`"2/3"`, `"1/1"`).
+/// Lofty 0.22.4's Vorbis reader (its `src/ogg/read.rs` special-cases
+/// `TRACKNUMBER` only) splits `TRACKNUMBER` into its current/total halves
+/// but leaves `DISCNUMBER=2/3` verbatim, and its `Accessor::disk()`
+/// rejects the whole string with `parse::<u32>()`. Reading the raw item
+/// and taking the part before the slash recovers the disc number for
+/// FLAC/OGG/Opus files too. Remove the raw-first read once lofty splits
+/// `DISCNUMBER` like it splits `TRACKNUMBER`.
+fn parse_number(raw: Option<&str>) -> Option<i64> {
+    let raw = raw?;
+    let head = raw.split_once('/').map_or(raw, |(head, _)| head);
+    head.trim().parse::<u32>().ok().map(i64::from)
+}
+
 fn probe_blocking(path: &Path) -> Result<ProbeResult, IngestError> {
     let tagged = Probe::open(path)
         .map_err(|e| IngestError::Probe {
@@ -75,8 +92,8 @@ fn probe_blocking(path: &Path) -> Result<ProbeResult, IngestError> {
         album_artist: primary_tag.and_then(|t| t.get_string(&ItemKey::AlbumArtist).and_then(text)),
         genre: primary_tag.and_then(|t| t.genre().and_then(|s| text(&s))),
         year: primary_tag.and_then(|t| t.year().map(|y| y as i64)),
-        track_number: primary_tag.and_then(|t| t.track().map(|n| n as i64)),
-        disc_number: primary_tag.and_then(|t| t.disk().map(|n| n as i64)),
+        track_number: primary_tag.and_then(|t| parse_number(t.get_string(&ItemKey::TrackNumber))),
+        disc_number: primary_tag.and_then(|t| parse_number(t.get_string(&ItemKey::DiscNumber))),
         duration_ms: props.duration().as_millis() as i64,
         sample_rate: props.sample_rate().map(|r| r as i64),
         bit_depth: props.bit_depth().map(|b| b as i64),
@@ -84,6 +101,14 @@ fn probe_blocking(path: &Path) -> Result<ProbeResult, IngestError> {
         bit_rate: props.audio_bitrate().map(|b| b as i64),
         size_bytes: std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0),
     })
+}
+
+/// Re-read only the track and disc numbers from `path`'s tags. Used by
+/// the [`crate::library::rescan`] pass to fill rows imported before the
+/// probe read these fields.
+pub(crate) fn probe_numbers(path: &Path) -> Result<(Option<i64>, Option<i64>), IngestError> {
+    let probed = probe_blocking(path)?;
+    Ok((probed.track_number, probed.disc_number))
 }
 
 pub async fn probe_and_add(engine: &SqliteRawEngine, path: &Path) -> Result<i64, IngestError> {
@@ -377,6 +402,7 @@ pub async fn add_folder(
 mod tests {
     use super::*;
     use crate::db::Db;
+    use crate::library::test_support::{write_minimal_flac, write_taggable_wav};
 
     /// Build a tiny synthetic WAV that lofty will happily parse.
     fn write_minimal_wav(path: &Path) {
@@ -416,17 +442,40 @@ mod tests {
         assert_eq!(row.file_path, wav.display().to_string());
     }
 
-    /// Like `write_minimal_wav` but with an even-length data chunk: RIFF
-    /// requires odd chunks to be padded, and `write_minimal_wav`'s
-    /// one-byte chunk has no pad, so a tag appended after it is not
-    /// found on re-read. Fine for the untagged tests above; not here.
-    fn write_taggable_wav(path: &Path) {
-        let bytes: &[u8] = &[
-            b'R', b'I', b'F', b'F', 0x26, 0, 0, 0, b'W', b'A', b'V', b'E', b'f', b'm', b't', b' ',
-            0x10, 0, 0, 0, 0x01, 0, 0x01, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 0x01, 0, 0x08, 0,
-            b'd', b'a', b't', b'a', 0x02, 0, 0, 0, 0x80, 0x80,
-        ];
-        std::fs::write(path, bytes).unwrap();
+    #[test]
+    fn parse_number_reads_the_leading_integer() {
+        assert_eq!(parse_number(Some("2/3")), Some(2));
+        assert_eq!(parse_number(Some("1/1")), Some(1));
+        assert_eq!(parse_number(Some("5")), Some(5));
+        assert_eq!(parse_number(Some(" 7 ")), Some(7));
+        // A vinyl-style number is not an integer; leave it unset rather
+        // than inventing one.
+        assert_eq!(parse_number(Some("A1")), None);
+        assert_eq!(parse_number(Some("")), None);
+        assert_eq!(parse_number(None), None);
+    }
+
+    /// The regression this change exists for, through the real probe path.
+    /// The fixture's `DISCNUMBER=2/3` is left verbatim by lofty's Vorbis
+    /// reader, so the old `Accessor::disk()` stored `NULL`; the raw-item
+    /// read recovers the `2`.
+    #[tokio::test]
+    async fn probe_and_add_reads_a_vorbis_pair_form_disc_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let flac = dir.path().join("pair.flac");
+        write_minimal_flac(
+            &flac,
+            &["TITLE=Minimal", "TRACKNUMBER=5/12", "DISCNUMBER=2/3"],
+        );
+
+        let tmp_db = tempfile::NamedTempFile::new().unwrap();
+        let db = Db::open(tmp_db.path()).await.unwrap();
+        let id = probe_and_add(&db.engine, &flac).await.unwrap();
+        let row = crate::db::tracks::get(&db.engine, id).await.unwrap();
+
+        assert_eq!(row.title, "Minimal");
+        assert_eq!(row.track_number, Some(5));
+        assert_eq!(row.disc_number, Some(2));
     }
 
     #[tokio::test]

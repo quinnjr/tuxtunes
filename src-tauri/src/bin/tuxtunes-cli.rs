@@ -8,7 +8,7 @@ mod import_cmd;
 #[command(
     name = "tuxtunes-cli",
     about = "Manage the TuxTunes library: import audio, manage iTunes .itl sync sources, \
-             resolve genres and rebuild genre playlists"
+             backfill missing track numbers, resolve genres and rebuild genre playlists"
 )]
 struct Cli {
     /// Path to the library database (defaults to the desktop app's DB).
@@ -40,6 +40,11 @@ enum Command {
     /// first and goes to the system trash, never unlink — the GUI's
     /// Reclaim Originals, headless.
     Reclaim,
+    /// Re-read each track's file tags and fill in any track/disc number
+    /// the library is missing (rows imported before the probe read them).
+    /// Rows the user has edited are left alone; numbers already set are
+    /// never overwritten.
+    RescanTags,
     /// Resolve artist genres and rebuild the per-genre playlist tree.
     #[command(subcommand)]
     Genres(genres_cmd::GenresCommand),
@@ -241,6 +246,22 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Genres(_) => unreachable!("dispatched above"),
+        Command::RescanTags => {
+            let stats = tuxtunes::library::rescan::rescan_numbers_all(&db.engine).await?;
+            println!(
+                "updated={} unchanged={} missing={} failed={} skipped={} user_edited={}",
+                stats.updated,
+                stats.unchanged,
+                stats.missing,
+                stats.failed,
+                stats.skipped,
+                stats.user_edited
+            );
+            if stats.failed > 0 {
+                anyhow::bail!("{} row(s) could not be read or updated", stats.failed);
+            }
+            Ok(())
+        }
         Command::Reclaim => {
             let stats = tuxtunes::fs::reclaim::reclaim_all_headless(&db.engine).await?;
             println!(
@@ -380,5 +401,64 @@ mod tests {
     fn parses_reclaim() {
         let cli = Cli::try_parse_from(["tuxtunes-cli", "reclaim"]).unwrap();
         assert!(matches!(cli.command, Command::Reclaim));
+    }
+
+    #[test]
+    fn parses_rescan_tags() {
+        let cli = Cli::try_parse_from(["tuxtunes-cli", "rescan-tags"]).unwrap();
+        assert!(matches!(cli.command, Command::RescanTags));
+    }
+
+    /// Seed a temp database with one track pointing at `file_path`.
+    /// `run_async` owns its runtime (`#[tokio::main]`), so seeding gets
+    /// its own and drops it before the command runs.
+    fn seed_one_track(db_path: &std::path::Path, file_path: &str) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let db = tuxtunes::db::Db::open(db_path).await.unwrap();
+            db.engine
+                .raw_sql_execute(
+                    "INSERT INTO tracks (title, duration_ms, size_bytes, file_path, playlist_ids) \
+                     VALUES ('row', 1000, 0, ?, '[]')",
+                    &[prax_query::filter::FilterValue::String(
+                        file_path.to_string(),
+                    )],
+                )
+                .await
+                .unwrap();
+        });
+    }
+
+    fn rescan_cli(db_path: &std::path::Path) -> Cli {
+        Cli::try_parse_from([
+            "tuxtunes-cli",
+            "--db",
+            db_path.to_str().unwrap(),
+            "rescan-tags",
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn rescan_tags_exits_zero_when_only_files_are_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("t.db");
+        seed_one_track(&db_path, "/no/such/file.flac");
+        assert!(run_async(rescan_cli(&db_path)).is_ok());
+    }
+
+    #[test]
+    fn rescan_tags_fails_when_a_file_cannot_be_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("t.db");
+        let broken = dir.path().join("broken.flac");
+        std::fs::write(&broken, b"not actually audio").unwrap();
+        seed_one_track(&db_path, &broken.display().to_string());
+
+        let err = run_async(rescan_cli(&db_path)).unwrap_err();
+        assert!(
+            err.to_string().contains("could not be read"),
+            "unexpected error: {err}"
+        );
     }
 }
