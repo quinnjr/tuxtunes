@@ -184,6 +184,13 @@ tuxtunes-cli import ~/Music/_incoming
 # trash, never unlink.
 tuxtunes-cli reclaim
 
+# Re-read each track's file tags and fill in any track/disc number the
+# library is missing — rows imported before the probe read them, or
+# FLAC/OGG files whose DISCNUMBER is written as "current/total". Numbers
+# already set are never overwritten and user-edited rows are left alone;
+# safe to re-run.
+tuxtunes-cli rescan-tags
+
 # Point at an iTunes library and remap its media paths
 tuxtunes-cli source add \
   --name "Old Windows library" \
