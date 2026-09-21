@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod device;
 pub mod fs;
+pub mod gui_args;
 pub mod integration;
 pub mod library;
 pub mod playback;
