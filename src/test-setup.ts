@@ -44,3 +44,25 @@ for (const name of ['localStorage', 'sessionStorage'] as const) {
     });
   }
 }
+
+// The Tauri runtime global the real `@tauri-apps/api/core` reads.
+// Specs also `vi.mock` that module, but a filtered run
+// (`ng test --include <one file>`) serves some import graphs the
+// unmocked copy, so artwork tests fail solo while passing in the full
+// suite. This stub makes the real `convertFileSrc` behave identically
+// in every mode. Keep the return shape in sync with the `vi.mock`
+// factories in the component specs (`asset://` prefix); `invoke` is
+// deliberately unstubbed — every test reaches it through the
+// `TauriService` stub instead, and an unmocked call should stay loud.
+{
+  const globals = globalThis as unknown as Record<string, unknown>;
+  if (globals['__TAURI_INTERNALS__'] === undefined) {
+    Object.defineProperty(globalThis, '__TAURI_INTERNALS__', {
+      value: {
+        convertFileSrc: (filePath: string) => `asset://${filePath}`,
+      },
+      configurable: true,
+      writable: true,
+    });
+  }
+}

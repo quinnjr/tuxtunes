@@ -128,6 +128,15 @@ All custom; no shadcn/component library. Canonical classes in `styles.css`:
 - `win-control` — frameless caption buttons (Linux/Windows)
 - `appModalSheet` — dialog semantics + focus trap for every sheet
 - `appRovingFocus` — the shared keyboard model for `radiogroup`/`listbox`/`menu`
+- Playlist album picker — master-detail, never an expanding grid: a stable
+  artwork grid (single-click selects with `ring-accent` + `text-accent-text`,
+  double-click plays) beside a 340px inspector (`bg-surface`, hairline-l)
+  with large art, headline/footnote/caption meta, Play and Add-to-queue
+  actions (`bg-accent-strong` primary), and a `divide-y` track list (no
+  boxed card — dashboard hardening). The inspector falls back to the first
+  album so it is never
+  an empty well; track rows are focusable (`tabindex`, Enter plays) so the
+  global `:focus-visible` ring reaches them.
 - Icons: FontAwesome (`@fortawesome/*`) for semantic glyphs;
   typographic marks (`♫ ✓ ▲▼ → × ⤢ ⚙`) stay as type, not icons
 
@@ -180,3 +189,10 @@ empty/loading states.
 segmented controls, artist listbox, context menu, and menu bar;
 `menuitemcheckbox`/`aria-haspopup`/`aria-expanded` on context-menu items;
 menu focus save/restore.
+2026-09-21 — rebuilt the playlist album view as master-detail: the old
+`col-span-full` expanding grid reflowed sibling cards on every click, so
+selection now drives a 340px inspector while the grid stays put
+(single-select with first-album fallback, replacing the multi-expand
+set). Track rows gained keyboard access (`tabindex` + Enter). Play and
+queue actions re-resolve the album and no-op if it regrouped away; the
+selection resets when a different playlist opens.

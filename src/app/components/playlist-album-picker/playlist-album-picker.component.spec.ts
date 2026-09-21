@@ -58,11 +58,14 @@ const PLAYLIST = (overrides: Partial<Playlist> = {}): Playlist => ({
 
 interface Internals {
   albums(): PlaylistAlbum[];
-  isExpanded(a: PlaylistAlbum): boolean;
-  toggle(a: PlaylistAlbum): void;
+  selectedAlbum(): PlaylistAlbum | null;
+  isSelected(a: PlaylistAlbum): boolean;
+  select(a: PlaylistAlbum): void;
   onCardVisible(a: PlaylistAlbum): void;
   playFrom(a: PlaylistAlbum, t: TrackRow): Promise<void>;
   playAlbum(a: PlaylistAlbum): Promise<void>;
+  queueAlbum(a: PlaylistAlbum): void;
+  playNextAlbum(a: PlaylistAlbum): void;
   onAlbumContextMenu(a: PlaylistAlbum, event: MouseEvent): void;
   onTrackContextMenu(a: PlaylistAlbum, t: TrackRow, event: MouseEvent): void;
   coverUrl(p: string | null): string | null;
@@ -385,27 +388,83 @@ describe('PlaylistAlbumPickerComponent', () => {
     expect(el.textContent).toContain('No songs match “zzz”');
   });
 
-  it('toggle() opens and closes cards independently', () => {
+  it('select() moves the inspector between albums; exactly one track list renders', () => {
     const { cmp, fixture, el } = setup([TRACK(1, { album: 'A' }), TRACK(2, { album: 'B' })]);
     const [a, b] = cmp.albums();
-    cmp.toggle(a);
-    cmp.toggle(b);
+    expect(cmp.selectedAlbum()?.key).toBe(a.key);
+    expect(cmp.isSelected(a)).toBe(true);
+    cmp.select(b);
     fixture.detectChanges();
-    expect(el.querySelectorAll('[data-tracks-for]')).toHaveLength(2);
-    cmp.toggle(a);
-    fixture.detectChanges();
-    expect(cmp.isExpanded(a)).toBe(false);
-    expect(cmp.isExpanded(b)).toBe(true);
+    expect(cmp.isSelected(a)).toBe(false);
+    expect(cmp.isSelected(b)).toBe(true);
     expect(el.querySelectorAll('[data-tracks-for]')).toHaveLength(1);
+    expect(el.querySelector('[data-tracks-for]')?.getAttribute('data-tracks-for')).toBe(b.key);
   });
 
-  it('lists the expanded album 1..N, showing only real track numbers', () => {
-    const { cmp, fixture, el } = setup([
+  it('marks exactly one card as selected in the grid', () => {
+    const { cmp, fixture, el } = setup([TRACK(1, { album: 'A' }), TRACK(2, { album: 'B' })]);
+    const b = cmp.albums()[1];
+    cmp.select(b);
+    fixture.detectChanges();
+    const cards = [...el.querySelectorAll<HTMLElement>('[data-album]')];
+    expect(cards).toHaveLength(2);
+    const marked = (card: HTMLElement) => ({
+      current: card.querySelector('button')?.getAttribute('aria-current'),
+      ring: card.querySelector('.mac-card')?.classList.contains('ring-accent') ?? false,
+      title: card.querySelector('button')?.getAttribute('title'),
+    });
+    expect(marked(cards[0])).toEqual({
+      current: null,
+      ring: false,
+      title: 'Show tracks — double-click to play',
+    });
+    const selected = marked(cards[1]);
+    expect(selected.current).toBe('true');
+    expect(selected.ring).toBe(true);
+    expect(selected.title).toBe(b.album);
+    expect(cards[1].querySelector('.text-accent-text')).not.toBeNull();
+    expect(cards[0].querySelector('.text-accent-text')).toBeNull();
+  });
+
+  it('resets the selection when another playlist opens', async () => {
+    const { cmp, fixture, library } = setup([
+      TRACK(1, { album: 'Shared' }),
+      TRACK(2, { album: 'B' }),
+    ]);
+    cmp.select(cmp.albums()[1]);
+    expect(cmp.selectedAlbum()?.album).toBe('B');
+    // The new playlist still contains B, but not first: without the
+    // reset the inspector would stick on B instead of starting over.
+    library.activePlaylistId.set(7);
+    library.tracks.set([
+      TRACK(3, { album: 'C', trackNumber: 1 }),
+      TRACK(4, { album: 'B', trackNumber: 1 }),
+    ]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(cmp.selectedAlbum()?.album).toBe('C');
+  });
+
+  it('returns null and renders no inspector when the playlist is empty', () => {
+    const { cmp, el } = setup([]);
+    expect(cmp.selectedAlbum()).toBeNull();
+    expect(el.querySelectorAll('[data-tracks-for]')).toHaveLength(0);
+    expect(el.querySelector('aside')).toBeNull();
+  });
+
+  it('falls back to the first album when the selection goes stale', () => {
+    const { cmp, library } = setup([TRACK(1, { album: 'A' }), TRACK(2, { album: 'B' })]);
+    cmp.select(cmp.albums()[1]);
+    library.tracks.set([TRACK(1, { album: 'A' })]);
+    expect(cmp.selectedAlbum()?.album).toBe('A');
+  });
+
+  it('lists the selected album 1..N, showing only real track numbers', () => {
+    const { fixture, el } = setup([
       TRACK(1, { trackNumber: 2, title: 'Second' }),
       TRACK(2, { trackNumber: 1, title: 'First' }),
       TRACK(3, { title: 'Untagged' }),
     ]);
-    cmp.toggle(cmp.albums()[0]);
     fixture.detectChanges();
     const rows = [...el.querySelectorAll('[data-tracks-for] li')].map((li) =>
       li.textContent?.replace(/\s+/g, ' ').trim(),
@@ -416,11 +475,10 @@ describe('PlaylistAlbumPickerComponent', () => {
   });
 
   it('highlights the playing track like the all-songs list', () => {
-    const { cmp, fixture, el, playback } = setup([
+    const { fixture, el, playback } = setup([
       TRACK(1, { trackNumber: 1 }),
       TRACK(2, { trackNumber: 2 }),
     ]);
-    cmp.toggle(cmp.albums()[0]);
     playback.currentTrackId.set(2);
     fixture.detectChanges();
     const rows = el.querySelectorAll('[data-tracks-for] li');
@@ -436,8 +494,7 @@ describe('PlaylistAlbumPickerComponent', () => {
   });
 
   it('marks only the first copy of a duplicated track as current', () => {
-    const { cmp, fixture, el, playback } = setup([TRACK(7), TRACK(7)]);
-    cmp.toggle(cmp.albums()[0]);
+    const { fixture, el, playback } = setup([TRACK(7), TRACK(7)]);
     playback.currentTrackId.set(7);
     fixture.detectChanges();
     expect(el.querySelectorAll('[data-tracks-for] li[aria-current="true"]')).toHaveLength(1);
@@ -445,8 +502,7 @@ describe('PlaylistAlbumPickerComponent', () => {
   });
 
   it('dims a missing row with opacity so the current colour still shows', () => {
-    const { cmp, fixture, el, playback } = setup([TRACK(1, { missing: true })]);
-    cmp.toggle(cmp.albums()[0]);
+    const { fixture, el, playback } = setup([TRACK(1, { missing: true })]);
     playback.currentTrackId.set(1);
     fixture.detectChanges();
     const row = el.querySelector('[data-tracks-for] li')!;
@@ -456,8 +512,7 @@ describe('PlaylistAlbumPickerComponent', () => {
   });
 
   it('renders a duplicated track twice without a keying error', () => {
-    const { cmp, fixture, el } = setup([TRACK(1), TRACK(1)]);
-    cmp.toggle(cmp.albums()[0]);
+    const { fixture, el } = setup([TRACK(1), TRACK(1)]);
     fixture.detectChanges();
     expect(el.querySelectorAll('[data-tracks-for] li')).toHaveLength(2);
   });
@@ -537,18 +592,138 @@ describe('PlaylistAlbumPickerComponent', () => {
   });
 
   it('double-clicking a track plays it and queues the rest of the card after it', async () => {
-    const { cmp, fixture, el, playback } = setup([
+    const { fixture, el, playback } = setup([
       TRACK(1, { trackNumber: 1 }),
       TRACK(2, { trackNumber: 2 }),
       TRACK(3, { trackNumber: 3 }),
     ]);
     const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
-    cmp.toggle(cmp.albums()[0]);
     fixture.detectChanges();
     el.querySelectorAll('[data-tracks-for] li')[1].dispatchEvent(new MouseEvent('dblclick'));
     await fixture.whenStable();
     expect(play).toHaveBeenCalledWith(2);
     expect(playback.queue().map((t) => t.id)).toEqual([3]);
+  });
+
+  it('single-clicking a card only selects, never plays', async () => {
+    const { fixture, el, playback } = setup([
+      TRACK(1, { album: 'A', trackNumber: 1 }),
+      TRACK(2, { album: 'B', trackNumber: 1 }),
+    ]);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
+    el.querySelectorAll<HTMLElement>('[data-album] button')[1].dispatchEvent(
+      new MouseEvent('click'),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(play).not.toHaveBeenCalled();
+    expect(el.querySelector('[data-tracks-for]')?.getAttribute('data-tracks-for')).toBe(
+      'Artist\nB',
+    );
+  });
+
+  it('double-clicking a card plays that album', async () => {
+    const { fixture, el, playback } = setup([
+      TRACK(1, { album: 'A', trackNumber: 1 }),
+      TRACK(2, { album: 'B', trackNumber: 1 }),
+      TRACK(3, { album: 'B', trackNumber: 2 }),
+    ]);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
+    el.querySelectorAll('[data-album] button')[1].dispatchEvent(new MouseEvent('dblclick'));
+    await fixture.whenStable();
+    expect(play).toHaveBeenCalledWith(2);
+    expect(playback.queue().map((t) => t.id)).toEqual([3]);
+  });
+
+  it('Enter on a track row plays it like double-click', async () => {
+    const { fixture, el, playback } = setup([
+      TRACK(1, { trackNumber: 1 }),
+      TRACK(2, { trackNumber: 2 }),
+      TRACK(3, { trackNumber: 3 }),
+    ]);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
+    fixture.detectChanges();
+    el.querySelectorAll('[data-tracks-for] li')[1].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter' }),
+    );
+    await fixture.whenStable();
+    expect(play).toHaveBeenCalledWith(2);
+    expect(playback.queue().map((t) => t.id)).toEqual([3]);
+  });
+
+  it('the inspector Add to queue button enqueues the shown album', () => {
+    const { cmp, fixture, el, playback } = setup([
+      TRACK(1, { album: 'A', trackNumber: 1 }),
+      TRACK(2, { album: 'B', trackNumber: 1 }),
+      TRACK(3, { album: 'B', trackNumber: 2 }),
+    ]);
+    cmp.select(cmp.albums()[1]);
+    fixture.detectChanges();
+    const buttons = [...el.querySelectorAll<HTMLButtonElement>('aside button')];
+    buttons.find((b) => b.textContent?.includes('Add to queue'))!.click();
+    expect(playback.queue().map((t) => t.id)).toEqual([2, 3]);
+  });
+
+  it('the inspector Play button plays the first track and queues the tail', async () => {
+    const { cmp, fixture, el, playback } = setup([
+      TRACK(1, { album: 'A', trackNumber: 1 }),
+      TRACK(2, { album: 'B', trackNumber: 1 }),
+      TRACK(3, { album: 'B', trackNumber: 2 }),
+    ]);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
+    cmp.select(cmp.albums()[1]);
+    fixture.detectChanges();
+    const buttons = [...el.querySelectorAll<HTMLButtonElement>('aside button')];
+    buttons.find((b) => b.textContent?.trim() === 'Play')!.click();
+    await fixture.whenStable();
+    expect(play).toHaveBeenCalledWith(2);
+    expect(playback.queue().map((t) => t.id)).toEqual([3]);
+  });
+
+  it('queueAlbum re-reads the card so a refresh before the click drops removed rows', () => {
+    const { cmp, library, playback } = setup([
+      TRACK(1, { trackNumber: 1 }),
+      TRACK(2, { trackNumber: 2 }),
+      TRACK(3, { trackNumber: 3 }),
+    ]);
+    const [stale] = cmp.albums();
+    library.tracks.set([TRACK(1, { trackNumber: 1 }), TRACK(3, { trackNumber: 3 })]);
+    cmp.queueAlbum(stale);
+    expect(playback.queue().map((t) => t.id)).toEqual([1, 3]);
+  });
+
+  it('playNextAlbum lines up the fresh tracks ahead of the queue', () => {
+    const { cmp, playback } = setup([TRACK(1, { trackNumber: 1 }), TRACK(2, { trackNumber: 2 })]);
+    playback.queue.set([TRACK(99, { album: 'Other' })]);
+    cmp.playNextAlbum(cmp.albums()[0]);
+    expect(playback.queue().map((t) => t.id)).toEqual([1, 2, 99]);
+  });
+
+  it('playFrom with a fully-removed album plays nothing and queues nothing', async () => {
+    const { cmp, library, playback } = setup([
+      TRACK(1, { trackNumber: 1 }),
+      TRACK(2, { trackNumber: 2 }),
+    ]);
+    const play = vi.spyOn(playback, 'play').mockResolvedValue(true);
+    const [stale] = cmp.albums();
+    const staleRow = stale.tracks[0];
+    library.tracks.set([]);
+    await cmp.playFrom(stale, staleRow);
+    expect(play).not.toHaveBeenCalled();
+    expect(playback.queue()).toEqual([]);
+  });
+
+  it('queueing a fully-removed album queues nothing', () => {
+    const { cmp, library, playback } = setup([
+      TRACK(1, { album: 'A', trackNumber: 1 }),
+      TRACK(2, { album: 'B', trackNumber: 1 }),
+    ]);
+    const staleB = cmp.albums()[1];
+    // B regroups away entirely (e.g. a narrowing search); the key is gone.
+    library.tracks.set([TRACK(1, { album: 'A', trackNumber: 1 })]);
+    cmp.queueAlbum(staleB);
+    cmp.playNextAlbum(staleB);
+    expect(playback.queue()).toEqual([]);
   });
 
   it('playFrom puts the card tail ahead of the queue and drops its own stale entries', async () => {
