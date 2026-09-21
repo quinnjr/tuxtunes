@@ -123,6 +123,13 @@ fn tray_icon_asset_decodes_to_expected_size() {
 }
 
 #[test]
+fn tray_icon_corrupt_bytes_return_err() {
+    assert!(integration::tray::load_tray_icon_from(&[0, 1, 2, 3]).is_err());
+    let icon = integration::tray::load_tray_icon().expect("tray icon must decode");
+    assert!(integration::tray::load_tray_icon_from(&icon.rgba()[..64]).is_err());
+}
+
+#[test]
 fn notify_show_track_handles_full_metadata() {
     // Best-effort: notification daemon may not exist in CI. We don't
     // assert on success; the function returns Result<(), _>.

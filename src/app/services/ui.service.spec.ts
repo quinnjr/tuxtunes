@@ -29,10 +29,18 @@ describe('UiService', () => {
 
   it('accepts every LibraryView variant', () => {
     const svc = new UiService();
-    for (const view of ['tracks', 'albums', 'artists', 'genres', 'device'] as const) {
+    for (const view of ['tracks', 'albums', 'artists', 'genres', 'queue', 'device'] as const) {
       svc.libraryView.set(view);
       expect(svc.libraryView()).toBe(view);
     }
+  });
+
+  it('setLibraryView("queue") closes the column browser', () => {
+    const svc = new UiService();
+    svc.columnBrowserOpen.set(true);
+    svc.setLibraryView('queue');
+    expect(svc.libraryView()).toBe('queue');
+    expect(svc.columnBrowserOpen()).toBe(false);
   });
 
   describe('error reporting', () => {

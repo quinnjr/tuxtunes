@@ -51,12 +51,17 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Decode the tray icon. Separate function so tests can pin the
-/// asset (present, decodable, tray-sized) without standing up a
-/// tray. Hidden from rustdoc — not part of the public API.
+/// Decode raw PNG bytes into a tray icon. Split out so the corrupt-
+/// bytes failure branch is unit-testable without touching the asset.
+#[doc(hidden)]
+pub fn load_tray_icon_from(bytes: &[u8]) -> tauri::Result<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(bytes).map(|img| img.to_owned())
+}
+
+/// Decode the tray icon asset without standing up a tray.
 #[doc(hidden)]
 pub fn load_tray_icon() -> tauri::Result<tauri::image::Image<'static>> {
-    tauri::image::Image::from_bytes(TRAY_ICON_PNG).map(|img| img.to_owned())
+    load_tray_icon_from(TRAY_ICON_PNG)
 }
 
 fn try_install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {

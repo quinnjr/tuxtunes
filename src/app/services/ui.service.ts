@@ -72,6 +72,16 @@ export class UiService {
   /** Top-level view selection. Drives main-content's active component. */
   readonly libraryView = signal<LibraryView>('tracks');
 
+  /**
+   * Single owner for the "queue implies browser closed" invariant: the
+   * column browser filters the library list, not the queue, so leaving
+   * it open over the queue would imply a filtering that is not applied.
+   */
+  setLibraryView(view: LibraryView): void {
+    this.libraryView.set(view);
+    if (view === 'queue') this.columnBrowserOpen.set(false);
+  }
+
   /** Presentation of the active playlist; sticky across playlists. */
   readonly playlistView = signal<PlaylistView>('albums');
 

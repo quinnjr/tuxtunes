@@ -1,20 +1,21 @@
+@let q = playback.queue();
 <section class="flex h-full flex-col" data-testid="queue-view">
   <header class="mac-toolbar flex items-center gap-2 px-4 py-2">
     <h2 class="text-body font-medium text-text-primary">
       Queue
-      <span class="text-caption text-text-muted">({{ playback.queue().length }})</span>
+      <span class="text-caption text-text-muted">({{ q.length }})</span>
     </h2>
     <div class="ml-auto flex items-center gap-2">
       <button
         type="button"
         data-testid="save-queue"
-        [disabled]="playback.queue().length === 0"
+        [disabled]="q.length === 0"
         (click)="saveAsPlaylist()"
         class="rounded-md bg-accent-strong px-3 py-1 text-body font-medium text-white hover:bg-accent-strong-hover disabled:opacity-50"
       >
         Save as Playlist…
       </button>
-      @if (playback.queue().length > 0) {
+      @if (q.length > 0) {
         <button
           type="button"
           data-testid="clear-queue"
@@ -26,7 +27,7 @@
       }
     </div>
   </header>
-  @if (playback.queue().length === 0) {
+  @if (q.length === 0) {
     <div class="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center">
       <p class="text-body text-text-secondary">Queue is empty.</p>
       <p class="text-caption text-text-muted">
@@ -36,20 +37,18 @@
     </div>
   } @else {
     <ul class="flex-1 overflow-y-auto">
-      @for (t of playback.queue(); track t.id; let i = $index) {
+      @for (t of q; track $index; let i = $index) {
+        @let current = isCurrent(t);
         <li
           data-queue-row
           role="row"
           tabindex="0"
-          (dblclick)="playFromQueue(i)"
-          (keydown.enter)="playFromQueue(i)"
+          (dblclick)="onRowActivate($event, i)"
+          (keydown.enter)="onRowActivate($event, i)"
           [attr.title]="rowTitle(t)"
-          [class]="
-            'group flex h-[30px] cursor-pointer items-center gap-1 px-4 text-body hover:bg-bg-elevated ' +
-            (t.missing ? 'opacity-50' : '')
-          "
+          [class]="rowClass(t)"
         >
-          <span class="w-6 shrink-0 tabular-nums text-caption text-text-muted">{{ i + 1 }}</span>
+          <span class="tnum w-6 shrink-0 text-caption text-text-muted">{{ i + 1 }}</span>
           <span class="flex min-w-0 flex-1 items-center gap-1.5">
             @if (t.missing) {
               <!-- The icon is decorative; the name lives in an sr-only
@@ -61,13 +60,12 @@
                 class="text-caption2 leading-none text-accent-text"
               />
               <span class="sr-only">File not found</span>
-            } @else if (isCurrent(t)) {
+            } @else if (current) {
               <span aria-hidden="true" class="text-caption2 leading-none text-accent-text">♫</span>
             }
-            <span
-              [class]="'truncate ' + (isCurrent(t) ? 'text-accent-text' : 'text-text-primary')"
-              >{{ t.title }}</span
-            >
+            <span [class]="'truncate ' + (current ? 'text-accent-text' : 'text-text-primary')">{{
+              t.title
+            }}</span>
           </span>
           <span class="hidden w-48 truncate text-text-secondary md:block">{{
             t.artist ?? ''
@@ -80,25 +78,20 @@
             (click)="move(i, -1)"
             [disabled]="i === 0"
             aria-label="Move up"
-            class="mac-btn h-6 w-6 text-text-muted opacity-0 transition hover:text-accent-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 disabled:opacity-30"
+            [class]="rowBtn + ' disabled:opacity-50'"
           >
             ▲
           </button>
           <button
             type="button"
             (click)="move(i, 1)"
-            [disabled]="i === playback.queue().length - 1"
+            [disabled]="i === q.length - 1"
             aria-label="Move down"
-            class="mac-btn h-6 w-6 text-text-muted opacity-0 transition hover:text-accent-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 disabled:opacity-30"
+            [class]="rowBtn + ' disabled:opacity-50'"
           >
             ▼
           </button>
-          <button
-            type="button"
-            (click)="remove(i)"
-            aria-label="Remove from queue"
-            class="mac-btn h-6 w-6 text-text-muted opacity-0 transition hover:text-accent-text group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
-          >
+          <button type="button" (click)="remove(i)" aria-label="Remove from queue" [class]="rowBtn">
             ✕
           </button>
         </li>

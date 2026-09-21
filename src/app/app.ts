@@ -215,11 +215,12 @@ const pickColumns = ({ genres, artists, albums }: TrackFilters): SavedView['colu
 const isStringArray = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((s) => typeof s === 'string');
 
-const LIBRARY_VIEWS: ReadonlySet<string> = new Set<LibraryView>([
+const LIBRARY_VIEWS: ReadonlySet<LibraryView> = new Set<LibraryView>([
   'tracks',
   'albums',
   'artists',
   'genres',
+  'queue',
   'device',
 ]);
 

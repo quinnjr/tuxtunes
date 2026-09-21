@@ -64,6 +64,30 @@ describe('MainContentComponent', () => {
     expect(ui.columnBrowserOpen()).toBe(false);
   });
 
+  it('toggleBrowser is a no-op over the queue', () => {
+    const { cmp, ui } = setup();
+    cmp.setMode('queue');
+    cmp.toggleBrowser();
+    expect(ui.columnBrowserOpen()).toBe(false);
+  });
+
+  it('playlist → queue → tracks ends with a track refresh', () => {
+    const { cmp, library } = setup();
+    const refresh = vi.spyOn(library, 'refreshTracks').mockResolvedValue();
+    library.activePlaylistId.set(6);
+    cmp.setMode('queue');
+    expect(refresh).toHaveBeenCalledTimes(1);
+    cmp.setMode('tracks');
+    // Queue → tracks must not render the old playlist's rows; the
+    // eager refresh on playlist → queue already reloaded them.
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(ui_libraryView(cmp)).toBe('tracks');
+    function ui_libraryView(c: MainInternals): string {
+      void c;
+      return TestBed.inject(UiService).libraryView();
+    }
+  });
+
   it('onSearchInput sets the search and debounces refreshTracks by 200ms', () => {
     const { cmp, library } = setup();
     const refresh = vi.spyOn(library, 'refreshTracks').mockResolvedValue();

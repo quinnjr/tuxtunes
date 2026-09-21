@@ -255,15 +255,13 @@ export class SidebarComponent implements OnInit {
       this.ui.libraryView.set('tracks');
       this.ui.columnBrowserOpen.set(true);
     } else {
-      this.ui.libraryView.set(view);
-      // The column browser filters the library list, not the queue —
-      // leaving it open over the queue would imply a filtering that
-      // is not applied.
-      if (view === 'queue') this.ui.columnBrowserOpen.set(false);
+      this.ui.setLibraryView(view);
     }
     // The track list only fetches on mount; when it stays mounted we
-    // must reload it ourselves to drop the playlist's rows.
-    if (hadPlaylist && this.ui.libraryView() === 'tracks') {
+    // must reload it ourselves to drop the playlist's rows. Refresh
+    // eagerly on playlist → queue too, so a later queue → tracks hop
+    // (where hadPlaylist is already false) lands on clean rows.
+    if (hadPlaylist && (this.ui.libraryView() === 'tracks' || view === 'queue')) {
       void this.ui.guard(this.library.refreshTracks());
     }
   }

@@ -90,9 +90,10 @@ export class MainContentComponent implements OnDestroy {
   protected setMode(mode: LibraryView): void {
     const hadPlaylist = this.library.activePlaylistId() !== null;
     this.library.activePlaylistId.set(null);
-    this.ui.libraryView.set(mode);
-    if (mode === 'queue') this.ui.columnBrowserOpen.set(false);
-    if (hadPlaylist && mode === 'tracks') void this.ui.guard(this.library.refreshTracks());
+    this.ui.setLibraryView(mode);
+    if (hadPlaylist && (mode === 'tracks' || mode === 'queue')) {
+      void this.ui.guard(this.library.refreshTracks());
+    }
   }
 
   /** Switch how the open playlist is presented; the rows are shared. */
@@ -112,6 +113,8 @@ export class MainContentComponent implements OnDestroy {
   }
 
   protected toggleBrowser(): void {
+    // The browser filters the library list, not the queue.
+    if (this.viewMode() === 'queue') return;
     this.ui.columnBrowserOpen.update((v) => !v);
   }
 
