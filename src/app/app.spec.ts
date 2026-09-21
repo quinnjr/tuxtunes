@@ -22,6 +22,22 @@ describe('App', () => {
     expect(spy).toHaveBeenCalled();
   });
 
+  describe('modal inertness', () => {
+    it('marks the app shell inert while a modal is open', () => {
+      const stub = tauriStub();
+      TestBed.configureTestingModule({ imports: [App], providers: appProviders(stub) });
+      const fixture = TestBed.createComponent(App);
+      fixture.detectChanges();
+      const ui = TestBed.inject(UiService);
+      const shell = (fixture.nativeElement as HTMLElement).firstElementChild as HTMLElement;
+
+      expect((shell as { inert: boolean }).inert).toBe(false);
+      ui.settingsOpen.set(true);
+      fixture.detectChanges();
+      expect((shell as { inert: boolean }).inert).toBe(true);
+    });
+  });
+
   describe('media keys', () => {
     function setup() {
       const stub = tauriStub();

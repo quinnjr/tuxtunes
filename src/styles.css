@@ -15,7 +15,16 @@
    is reserved for selection, playing state, and primary actions; every
    other surface, glyph, and border is grayscale. The three near-identical
    dark grays are deliberate: content, panel, and toolbar must separate by
-   a hair, not by a step. */
+   a hair, not by a step.
+
+   Red has three cuts. `--color-accent` is the brand red for fills,
+   rings, and links, where it never has to carry small text alone.
+   `--color-accent-text` is the lighter/darker cut used when red *is*
+   the text or an icon (current track, destructive menu items, errors):
+   the brand red is only 4.26:1 on the dark background and 3.91:1 on
+   white, both under AA for 11–13px. `--color-accent-strong` is the
+   darker fill for surfaces that carry white text (selected track rows,
+   accent buttons), where the brand red gives white only 3.91:1. */
 @theme {
   --color-bg-primary: #1e1e1e; /* content */
   --color-bg-surface: #28282a; /* panels, cards */
@@ -24,9 +33,13 @@
   --color-bg-tertiary: #3a3a3c; /* art placeholders, chips */
   --color-accent: #fa233b; /* Apple Music red */
   --color-accent-hover: #fb4d5c;
+  --color-accent-text: #ff6b77; /* red as text/icon on dark: 6.05:1 */
+  --color-accent-text-hover: #ff8a94; /* lighter; still 6.53:1 on surface */
+  --color-accent-strong: #e01f37; /* red fill under white text: 4.75:1 */
+  --color-accent-strong-hover: #c4121f; /* darker, still 6.08:1 under white */
   --color-text-primary: #f5f5f7;
   --color-text-secondary: #a1a1a6;
-  --color-text-muted: #6e6e73;
+  --color-text-muted: #9a9a9f; /* 5.95:1 on content, 4.57:1 on elevated */
   --color-border: #38383a; /* hairline */
   --color-border-strong: #48484a;
 
@@ -65,12 +78,26 @@
   --color-bg-tertiary: #e3e3e8;
   --color-accent: #fa233b;
   --color-accent-hover: #d31e33;
+  --color-accent-text: #c4121f; /* red as text/icon on white: 6.08:1 */
+  --color-accent-text-hover: #a30f1b; /* darker; 7.95:1 on white */
+  --color-accent-strong: #c4121f; /* red fill under white text: 6.08:1 */
+  --color-accent-strong-hover: #a30f1b; /* darker; white stays ≥ 7:1 */
   --color-text-primary: #1d1d1f;
   --color-text-secondary: #6e6e73;
-  --color-text-muted: #aeaeb2;
+  --color-text-muted: #6a6a70; /* dimmer than secondary; 4.55:1 on elevated */
   --color-border: #e5e5ea;
   --color-border-strong: #d1d1d6;
 }
+
+/* Red comes in three cuts, set in the @theme block above:
+   `accent` (brand red — fills, rings, borders), `accent-text` (red as
+   text or an icon, the only cut that clears AA at 11–13px), and
+   `accent-strong` (a fill carrying white text, where the brand red
+   gives white only 3.91:1). `text-accent-text`, `bg-accent-strong`, and
+   its `hover:bg-accent-strong-hover` are the utilities to reach for;
+   plain `text-accent` on small text fails contrast and should not be
+   used, and `hover:bg-accent-hover` is banned on any fill that carries
+   white text (white on it is only 3.32:1). */
 
 html,
 body {
@@ -254,7 +281,10 @@ input[type='range'] {
 
   :focus-within > .mac-row-selected,
   .mac-row-selected:focus {
-    background-color: var(--color-accent);
+    /* accent-strong, not accent: white 13px text on the brand red is
+       only 3.91:1, under AA. The darker cut gives 4.75:1 (dark) / 6.08:1
+       (light). */
+    background-color: var(--color-accent-strong);
     color: #ffffff;
   }
   /* Cell text colors for the red state live in the unlayered block at
@@ -420,6 +450,22 @@ input[type='range'] {
   }
 }
 
+/* Motion off for users who ask. The app's motion is small (hover
+   fills, a 2px card lift, the folder chevron), but it is still motion —
+   and the card lift in particular can read as wobble at a large list.
+   Truncating every transition and animation to a blink keeps state
+   changes instant without removing the styling itself. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Overlay scrollbars. macOS hides the thumb until the pointer is in
    the scrolling region, and the bar never takes layout width — so the
    track stays transparent and only the thumb fades in. */
@@ -427,7 +473,6 @@ input[type='range'] {
   width: 8px;
   height: 8px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -452,16 +497,18 @@ input[type='range'] {
 }
 
 /* Unlayered on purpose. The track-list cells carry their own color
-   utilities (text-text-primary / text-text-secondary / text-accent),
+   utilities (text-text-primary / text-text-secondary / text-accent-text),
    and Tailwind's utilities layer is declared after @layer components,
    so a layered override never applies — white-on-red selection ended
    up as dark-on-red. Unlayered rules beat every layer regardless of
    specificity, which is exactly the "selection state wins" semantics
-   this needs. */
+   this needs. `.text-accent-text` must be listed: the current-track title
+   uses it, and without this the title would be red-on-red when a selected
+   row is also the playing one. */
 :focus-within > .mac-row-selected .text-text-primary,
-:focus-within > .mac-row-selected .text-accent,
+:focus-within > .mac-row-selected .text-accent-text,
 .mac-row-selected:focus .text-text-primary,
-.mac-row-selected:focus .text-accent {
+.mac-row-selected:focus .text-accent-text {
   color: #ffffff;
 }
 

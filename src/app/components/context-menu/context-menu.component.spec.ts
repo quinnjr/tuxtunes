@@ -310,4 +310,171 @@ describe('ContextMenuComponent', () => {
     button.click();
     expect(action).toHaveBeenCalled();
   });
+
+  describe('keyboard model', () => {
+    const show = (
+      ctx: ContextMenuService,
+      items: { label: string; children?: { label: string }[] }[],
+    ) => {
+      ctx.show(
+        {
+          clientX: 0,
+          clientY: 0,
+          preventDefault: () => undefined,
+          stopPropagation: () => undefined,
+        } as unknown as MouseEvent,
+        items,
+      );
+    };
+
+    it('gives every item a menuitem role and moves focus in with arrows', () => {
+      const { fixture, el, ctx } = setup();
+      show(ctx, [{ label: 'Play' }, { label: 'Queue' }, { label: 'Delete' }]);
+      fixture.detectChanges();
+      const items = [...el.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+      expect(items).toHaveLength(3);
+
+      items[0].focus();
+      items[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      expect(document.activeElement).toBe(items[1]);
+
+      items[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+      expect(document.activeElement).toBe(items[2]);
+    });
+
+    it('marks a checkable item as menuitemcheckbox with aria-checked', () => {
+      const { fixture, el, ctx } = setup();
+      show(ctx, [
+        { label: 'Title', checked: true },
+        { label: 'Plays', checked: false },
+      ] as never);
+      fixture.detectChanges();
+      const checks = [...el.querySelectorAll('[role="menuitemcheckbox"]')];
+      expect(checks).toHaveLength(2);
+      expect(checks[0].getAttribute('aria-checked')).toBe('true');
+      expect(checks[1].getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('opens a submenu with ArrowRight, moves focus to its first item, and closes with ArrowLeft', async () => {
+      const { fixture, el, ctx } = setup();
+      show(ctx, [{ label: 'Add to Playlist', children: [{ label: 'Mix' }] }]);
+      fixture.detectChanges();
+      const parent = el.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+      expect(parent.getAttribute('aria-haspopup')).toBe('menu');
+      expect(parent.getAttribute('aria-expanded')).toBe('false');
+
+      parent.focus();
+      parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      fixture.detectChanges();
+      await new Promise((r) => setTimeout(r));
+      fixture.detectChanges();
+      expect(parent.getAttribute('aria-expanded')).toBe('true');
+      const child = el.querySelector<HTMLButtonElement>('[data-submenu] [role="menuitem"]')!;
+      expect(child).not.toBeNull();
+      // APG: opening a submenu moves focus into it.
+      expect(document.activeElement).toBe(child);
+
+      // ArrowLeft from inside the flyout closes it and refocuses the parent.
+      child.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+      fixture.detectChanges();
+      expect(parent.getAttribute('aria-expanded')).toBe('false');
+      expect(el.querySelector('[data-submenu]')).toBeNull();
+      expect(document.activeElement).toBe(parent);
+    });
+
+    it('cycles arrows within the open flyout without leaving it', async () => {
+      const { fixture, el, ctx } = setup();
+      show(ctx, [
+        {
+          label: 'Add to Playlist',
+          children: [{ label: 'Mix' }, { label: 'Queue' }],
+        },
+        { label: 'Play' },
+      ]);
+      fixture.detectChanges();
+      const parent = el.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+      parent.focus();
+      parent.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      fixture.detectChanges();
+      await new Promise((r) => setTimeout(r));
+      fixture.detectChanges();
+
+      const children = [
+        ...el.querySelectorAll<HTMLButtonElement>('[data-submenu] [role="menuitem"]'),
+      ];
+      expect(children).toHaveLength(2);
+      expect(document.activeElement).toBe(children[0]);
+
+      // Down moves to the second child, not out to the "Play" item.
+      children[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      expect(document.activeElement).toBe(children[1]);
+
+      // Down from the last child wraps within the flyout.
+      children[1].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      expect(document.activeElement).toBe(children[0]);
+      // The flyout stays open throughout.
+      expect(el.querySelector('[data-submenu]')).not.toBeNull();
+    });
+
+    it('returns focus to the element focused before the menu opened, on hide', async () => {
+      const { fixture, ctx } = setup();
+      const opener = document.createElement('button');
+      document.body.append(opener);
+      opener.focus();
+      try {
+        show(ctx, [{ label: 'Play' }]);
+        fixture.detectChanges();
+        ctx.hide();
+        await Promise.resolve();
+        expect(document.activeElement).toBe(opener);
+      } finally {
+        opener.remove();
+      }
+    });
+
+    it('a disabled item is a no-op on click: no action, menu stays open', () => {
+      const { fixture, el, ctx } = setup();
+      const action = vi.fn();
+      show(ctx, [{ label: 'Sync Now', disabled: true, action }, { label: 'Forget' }] as never);
+      fixture.detectChanges();
+      const disabled = el.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+      expect(disabled.getAttribute('aria-disabled')).toBe('true');
+      disabled.click();
+      fixture.detectChanges();
+      expect(action).not.toHaveBeenCalled();
+      // The menu must not dismiss on a disabled activation.
+      expect(ctx.open()).not.toBeNull();
+    });
+
+    it('a disabled parent does not open its flyout on click or hover', () => {
+      const { fixture, el, ctx } = setup();
+      show(ctx, [
+        { label: 'Convert', disabled: true, children: [{ label: 'FLAC' }] },
+        { label: 'Play' },
+      ] as never);
+      fixture.detectChanges();
+      const parent = el.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+      parent.click();
+      fixture.detectChanges();
+      expect(el.querySelector('[data-submenu]')).toBeNull();
+      parent.dispatchEvent(new MouseEvent('mouseenter'));
+      fixture.detectChanges();
+      expect(el.querySelector('[data-submenu]')).toBeNull();
+    });
+
+    it('a disabled parent does not open its flyout by keyboard', () => {
+      const { fixture, el, ctx } = setup();
+      show(ctx, [
+        { label: 'Convert', disabled: true, children: [{ label: 'FLAC' }] },
+        { label: 'Play' },
+      ] as never);
+      fixture.detectChanges();
+      const parent = el.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+      for (const key of ['ArrowRight', 'Enter', ' ']) {
+        parent.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+        fixture.detectChanges();
+        expect(el.querySelector('[data-submenu]')).toBeNull();
+      }
+    });
+  });
 });

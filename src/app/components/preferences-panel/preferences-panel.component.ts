@@ -1,5 +1,7 @@
 import { Component, effect, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { ModalSheetDirective } from '../../directives/modal-sheet.directive';
+import { RovingFocusDirective } from '../../directives/roving-focus.directive';
 import { LibraryService } from '../../services/library.service';
 import { PreferencesService } from '../../services/preferences.service';
 import { ColorMode, ThemeService } from '../../services/theme.service';
@@ -8,7 +10,7 @@ import { formatByteSize } from '../../utils/format';
 
 @Component({
   selector: 'app-preferences-panel',
-  imports: [FormsModule],
+  imports: [FormsModule, ModalSheetDirective, RovingFocusDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './preferences-panel.component.html',
 })

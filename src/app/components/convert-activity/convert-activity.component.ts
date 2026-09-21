@@ -16,7 +16,7 @@ import { UiService } from '../../services/ui.service';
       <button
         type="button"
         (click)="cancel()"
-        class="rounded px-1.5 text-accent hover:bg-bg-elevated"
+        class="rounded px-1.5 text-accent-text hover:bg-bg-elevated"
       >
         Cancel
       </button>

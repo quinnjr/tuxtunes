@@ -1,16 +1,24 @@
 import {
   Component,
+  ElementRef,
   HostListener,
   effect,
   inject,
   signal,
+  viewChild,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import {
+  ROVING_FOCUS_ORIENTATION,
+  RovingFocusDirective,
+} from '../../directives/roving-focus.directive';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
 
 @Component({
   selector: 'app-context-menu',
-  imports: [],
+  imports: [RovingFocusDirective],
+  // A menu is vertical: Up/Down move, Left/Right belong to submenu open/close.
+  providers: [{ provide: ROVING_FOCUS_ORIENTATION, useValue: 'vertical' as const }],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './context-menu.component.html',
 })
@@ -42,6 +50,13 @@ export class ContextMenuComponent {
   /** Index (into the open menu's items) of the expanded submenu. */
   protected readonly submenuIndex = signal<number | null>(null);
 
+  /**
+   * The menu element, focused on open. A context menu is keyboard-first:
+   * without this the arrows would have nothing to move from and the menu
+   * would be mouse-only despite `role="menu"`.
+   */
+  private readonly menuEl = viewChild<ElementRef<HTMLElement>>('menu');
+
   /** Pending grace-delay close of the flyout (hover intent). */
   private closeTimer: ReturnType<typeof setTimeout> | null = null;
   private static readonly SUBMENU_CLOSE_DELAY_MS = 300;
@@ -50,10 +65,19 @@ export class ContextMenuComponent {
     // A freshly opened (or closed) menu must never inherit the last
     // one's expanded flyout.
     effect(() => {
-      this.ctx.open();
+      const open = this.ctx.open();
       this.cancelPendingClose();
       this.submenuIndex.set(null);
+      if (open !== null) {
+        // Move focus to the first item once the menu is in the DOM (APG:
+        // a menu opens with focus on its first item).
+        setTimeout(() => this.firstItem()?.focus());
+      }
     });
+  }
+
+  private firstItem(): HTMLElement | null {
+    return this.menuEl()?.nativeElement.querySelector<HTMLElement>('[role^="menuitem"]') ?? null;
   }
 
   protected isDivider(item: ContextMenuItem): boolean {
@@ -88,6 +112,10 @@ export class ContextMenuComponent {
    * the parent) cancels the pending close.
    */
   protected onItemEnter(index: number, item: ContextMenuItem): void {
+    // A disabled entry must not react at all — no flyout, no close
+    // scheduling. (It stays focusable so AT can announce it — see the
+    // `aria-disabled` note on the template.)
+    if (item.disabled) return;
     if (this.hasChildren(item)) {
       this.cancelPendingClose();
       this.submenuIndex.set(index);
@@ -112,6 +140,10 @@ export class ContextMenuComponent {
   }
 
   protected async onItemClick(index: number, item: ContextMenuItem): Promise<void> {
+    // A disabled item is a no-op: it must not dismiss the menu (that is
+    // what `run()` would do before its own disabled guard) nor open a
+    // flyout.
+    if (item.disabled) return;
     if (this.hasChildren(item)) {
       this.cancelPendingClose();
       this.submenuIndex.set(index);
@@ -122,7 +154,84 @@ export class ContextMenuComponent {
   }
 
   protected async onChildClick(item: ContextMenuItem): Promise<void> {
+    if (item.disabled) return;
     this.submenuIndex.set(null);
     await this.ctx.run(item);
+  }
+
+  /**
+   * Menu-model keys beyond the roving Up/Down. On a top-level item,
+   * ArrowRight opens its flyout and moves focus to its first item; Enter
+   * or Space on a parent does the same. Inside a flyout, ArrowLeft closes
+   * it and returns focus to the parent. ArrowLeft on a top-level item is
+   * left alone (nothing to close).
+   */
+  protected onMenuKeydown(event: KeyboardEvent): void {
+    const target = event.target as HTMLElement | null;
+    const inSubmenu = target?.closest('[data-submenu]') !== null && target !== null;
+
+    if (inSubmenu) {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        this.closeSubmenuAndRefocusParent();
+      }
+      return;
+    }
+
+    const item = this.itemAt(event);
+    if (item === null) return;
+    // A disabled parent must not open its flyout by keyboard either — the
+    // click and hover paths guard this; the key path must too.
+    if (item.disabled) return;
+
+    const opensSubmenu =
+      this.hasChildren(item) &&
+      (event.key === 'ArrowRight' || event.key === 'Enter' || event.key === ' ');
+    if (opensSubmenu) {
+      event.preventDefault();
+      this.openSubmenu(this.indexOf(item));
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      // A childless item is not a submenu parent; swallow the key rather
+      // than let it fall through to nothing.
+      event.preventDefault();
+    }
+  }
+
+  /** Expand item `index`'s flyout and move focus into it. */
+  private openSubmenu(index: number): void {
+    this.cancelPendingClose();
+    this.submenuIndex.set(index);
+    // The flyout renders after this tick; focus its first item then.
+    setTimeout(() => {
+      this.menuEl()
+        ?.nativeElement.querySelector<HTMLElement>('[data-submenu] [role^="menuitem"]')
+        ?.focus();
+    });
+  }
+
+  /** Collapse the open flyout and put focus back on its parent item. */
+  private closeSubmenuAndRefocusParent(): void {
+    const index = this.submenuIndex();
+    this.cancelPendingClose();
+    this.submenuIndex.set(null);
+    if (index === null) return;
+    const parent = this.menuEl()?.nativeElement.querySelector<HTMLElement>(
+      `[data-item-index="${index}"]`,
+    );
+    parent?.focus();
+  }
+
+  private itemAt(event: KeyboardEvent): ContextMenuItem | null {
+    const state = this.ctx.open();
+    if (state === null) return null;
+    const target = event.target as HTMLElement | null;
+    const index = Number(target?.getAttribute('data-item-index') ?? Number.NaN);
+    return Number.isNaN(index) ? null : (state.items[index] ?? null);
+  }
+
+  private indexOf(item: ContextMenuItem): number {
+    return this.ctx.open()?.items.indexOf(item) ?? -1;
   }
 }

@@ -9,6 +9,7 @@ import {
   signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { ModalSheetDirective } from '../../directives/modal-sheet.directive';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
 import { ConvertFormat, ConvertService } from '../../services/convert.service';
 import { LibraryService, SortColumn } from '../../services/library.service';
@@ -16,6 +17,11 @@ import { PlaybackService, TrackRow } from '../../services/playback.service';
 import { TauriService } from '../../services/tauri.service';
 import { UiService } from '../../services/ui.service';
 import { formatMmSs } from '../../utils/time';
+import { FaIconComponent } from '@fortawesome/angular-fontawesome';
+import { faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
+
+/** Row indexes for the loading skeleton; enough to fill a tall window. */
+const SKELETON_ROWS = Object.freeze(Array.from({ length: 12 }, (_, i) => i));
 
 interface Column {
   id: SortColumn;
@@ -72,7 +78,7 @@ const ALL_COLUMNS: Column[] = [
 
 @Component({
   selector: 'app-track-list-view',
-  imports: [ScrollingModule],
+  imports: [ScrollingModule, ModalSheetDirective, FaIconComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './track-list-view.component.html',
 })
@@ -86,6 +92,12 @@ export class TrackListViewComponent implements OnInit {
 
   /** All columns the user can choose from. */
   protected readonly allColumns = ALL_COLUMNS;
+
+  /** Warn glyph for a track whose file is not on disk. */
+  protected readonly faTriangleExclamation = faTriangleExclamation;
+
+  /** Fixed row count for the loading skeleton; enough to fill the view. */
+  protected readonly skeletonRows = SKELETON_ROWS;
 
   /** Currently-shown column ids. The picker writes here. */
   protected readonly visibleColumnIds = signal<SortColumn[]>([
@@ -105,8 +117,9 @@ export class TrackListViewComponent implements OnInit {
   /** Anchor row index for shift-click range selection. */
   private anchorIndex: number | null = null;
 
-  /** Column-picker [⚙] popover. */
-  protected readonly pickerOpen = signal(false);
+  /** Column-picker [⚙] popover. Lives on UiService so the shared
+   * shortcut guard (`shortcutsBlocked`) can see it. */
+  protected readonly pickerOpen = this.ui.columnPickerOpen;
 
   constructor() {
     // Whatever replaces the list — a different playlist, a column-browser
@@ -144,7 +157,7 @@ export class TrackListViewComponent implements OnInit {
     const base = 'flex h-[30px] cursor-pointer items-center px-4 text-body ';
     const dim = t.missing ? 'opacity-50 ' : '';
     if (this.isSelected(t)) return base + dim + 'mac-row-selected';
-    return base + dim + 'hover:bg-bg-elevated ' + (this.isCurrent(t) ? 'text-accent' : '');
+    return base + dim + 'hover:bg-bg-elevated ' + (this.isCurrent(t) ? 'text-accent-text' : '');
   }
 
   /** Tooltip explaining a dimmed row; null for healthy rows. */
@@ -223,7 +236,13 @@ export class TrackListViewComponent implements OnInit {
    */
   @HostListener('document:keydown', ['$event'])
   onKeydown(event: KeyboardEvent): void {
-    if (this.isTypingTarget(event.target) || this.ui.anyModalOpen()) return;
+    if (
+      this.isTypingTarget(event.target) ||
+      this.ui.shortcutsBlocked() ||
+      this.ctx.open() !== null
+    ) {
+      return;
+    }
 
     const isMulti = event.ctrlKey || event.metaKey;
     if (isMulti && (event.key === 'a' || event.key === 'A')) {

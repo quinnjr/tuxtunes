@@ -9,7 +9,7 @@
           <button
             type="button"
             (click)="clearPane(pane.column)"
-            class="text-caption2 normal-case text-accent hover:text-accent-hover"
+            class="text-caption2 normal-case text-accent-text hover:text-accent-text-hover"
           >
             Clear
           </button>
@@ -19,6 +19,7 @@
         <input
           type="search"
           placeholder="Filter…"
+          [attr.aria-label]="'Filter ' + paneTitle(pane.column)"
           [value]="paneSearchValue(i)"
           (input)="onPaneSearchInput(i, $event)"
           class="w-full rounded-md bg-bg-primary px-2 py-0.5 text-body text-text-primary outline-none focus-visible:ring-1 focus-visible:ring-accent"
@@ -36,7 +37,7 @@
                 [class]="
                   'flex w-full items-baseline justify-between rounded-md px-3 py-1 text-left ' +
                   (isSelected(pane.column, v.value)
-                    ? 'bg-accent text-white'
+                    ? 'bg-accent-strong text-white'
                     : 'hover:bg-bg-elevated')
                 "
               >

@@ -44,7 +44,7 @@
                 {{ a.tracks.length }} {{ a.tracks.length === 1 ? 'song' : 'songs' }} ·
                 {{ formatTotal(a.totalDurationMs) }}
                 @if (rating(a); as stars) {
-                  <span class="text-accent" [attr.data-rating]="a.rating"> · {{ stars }}</span>
+                  <span class="text-accent-text" [attr.data-rating]="a.rating"> · {{ stars }}</span>
                 }
               </span>
             </div>
@@ -62,12 +62,12 @@
                   (contextmenu)="onTrackContextMenu(a, t, $event); $event.stopPropagation()"
                   class="flex cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-bg-elevated"
                   [class.opacity-50]="t.missing"
-                  [class.text-accent]="current"
+                  [class.text-accent-text]="current"
                   [attr.aria-current]="current ? 'true' : null"
                 >
                   <span class="tnum w-6 shrink-0 text-right text-text-muted">
                     @if (current) {
-                      <span aria-hidden="true" class="text-caption2 leading-none text-accent"
+                      <span aria-hidden="true" class="text-caption2 leading-none text-accent-text"
                         >♫</span
                       >
                     } @else {

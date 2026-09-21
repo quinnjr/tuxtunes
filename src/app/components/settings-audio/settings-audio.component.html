@@ -33,7 +33,7 @@
             </span>
           }
           @if (selectedId() === dev.id) {
-            <span class="text-accent">✓</span>
+            <span class="text-accent-text">✓</span>
           }
         </div>
       </button>
@@ -62,10 +62,18 @@
       Apply normalized loudness gain so tracks play at consistent volume. Track gain levels each
       file individually; album gain preserves intra-album dynamics.
     </p>
-    <div class="mac-segmented w-fit">
+    <div
+      class="mac-segmented w-fit"
+      role="radiogroup"
+      aria-label="ReplayGain mode"
+      appRovingFocus
+      (appRovingFocusSelect)="setReplayGain(replayGainOptions[$event].id)"
+    >
       @for (opt of replayGainOptions; track opt.id) {
         <button
           type="button"
+          role="radio"
+          [attr.aria-checked]="replayGainMode() === opt.id"
           (click)="setReplayGain(opt.id)"
           [class]="'mac-segment ' + (replayGainMode() === opt.id ? 'selected' : '')"
         >

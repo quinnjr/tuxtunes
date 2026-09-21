@@ -18,6 +18,7 @@ import { NamePromptComponent } from './components/name-prompt/name-prompt.compon
 import { NowPlayingPanelComponent } from './components/now-playing-panel/now-playing-panel.component';
 import { PreferencesPanelComponent } from './components/preferences-panel/preferences-panel.component';
 import { SidebarComponent } from './components/sidebar/sidebar.component';
+import { SettingsRouteComponent } from './components/settings-route/settings-route.component';
 import { SmartPlaylistEditorComponent } from './components/smart-playlist-editor/smart-playlist-editor.component';
 import { StatusBarComponent } from './components/status-bar/status-bar.component';
 import { TrackInfoComponent } from './components/track-info/track-info.component';
@@ -46,6 +47,7 @@ import { WindowService } from './services/window.service';
     NowPlayingPanelComponent,
     PreferencesPanelComponent,
     SidebarComponent,
+    SettingsRouteComponent,
     SmartPlaylistEditorComponent,
     StatusBarComponent,
     TrackInfoComponent,
@@ -218,7 +220,6 @@ const LIBRARY_VIEWS: ReadonlySet<string> = new Set<LibraryView>([
   'albums',
   'artists',
   'genres',
-  'settings',
   'device',
 ]);
 

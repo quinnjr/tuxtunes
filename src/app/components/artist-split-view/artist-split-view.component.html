@@ -1,11 +1,20 @@
 <div class="flex h-full">
-  <aside class="mac-vibrancy flex w-64 flex-col overflow-y-auto p-2">
-    @if (library.artists().length === 0) {
+  @if (library.artists().length === 0) {
+    <aside class="mac-vibrancy flex w-64 flex-col overflow-y-auto p-2">
       <div class="p-2 text-body text-text-muted">No artists in library</div>
-    } @else {
+    </aside>
+  } @else {
+    <aside
+      class="mac-vibrancy flex w-64 flex-col overflow-y-auto p-2"
+      role="listbox"
+      aria-label="Artists"
+      appRovingFocus
+      (appRovingFocusSelect)="select(library.artists()[$event])"
+    >
       @for (a of library.artists(); track trackByArtist($index, a)) {
         <button
           type="button"
+          role="option"
           (click)="select(a)"
           [attr.aria-selected]="selected() === a.artist"
           class="mac-sidebar-item flex items-baseline justify-between"
@@ -16,8 +25,8 @@
           </span>
         </button>
       }
-    }
-  </aside>
+    </aside>
+  }
   <div class="flex flex-1 flex-col overflow-y-auto bg-bg-primary p-6">
     @if (selected(); as artist) {
       <h2 class="mb-2 text-lg font-medium text-text-primary">{{ artist }}</h2>

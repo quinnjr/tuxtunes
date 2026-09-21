@@ -9,11 +9,12 @@ import {
 import { LibraryService, AlbumSummary, ArtistSummary } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
 import { UiService } from '../../services/ui.service';
+import { RovingFocusDirective } from '../../directives/roving-focus.directive';
 import { formatMmSs } from '../../utils/time';
 
 @Component({
   selector: 'app-artist-split-view',
-  imports: [],
+  imports: [RovingFocusDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './artist-split-view.component.html',
 })

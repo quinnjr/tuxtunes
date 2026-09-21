@@ -1,4 +1,5 @@
 import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { RovingFocusDirective } from '../../directives/roving-focus.directive';
 import { TauriService } from '../../services/tauri.service';
 import { UiService } from '../../services/ui.service';
 
@@ -19,7 +20,7 @@ interface AudioPrefsSnapshot {
 
 @Component({
   selector: 'app-settings-audio',
-  imports: [],
+  imports: [RovingFocusDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './settings-audio.component.html',
 })

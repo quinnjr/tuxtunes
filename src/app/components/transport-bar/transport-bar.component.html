@@ -4,7 +4,7 @@
       <fa-icon [icon]="faPrev" />
     </button>
     <button
-      class="mac-btn h-9 w-9 text-xl text-accent hover:text-accent-hover"
+      class="mac-btn h-9 w-9 text-xl text-accent-text hover:text-accent-text-hover"
       (click)="togglePlay()"
       [attr.aria-label]="playback.isActive() ? 'Pause' : 'Play'"
     >
@@ -55,7 +55,7 @@
       type="button"
       (click)="toggleNowPlaying()"
       title="Open Now Playing (Q)"
-      class="mac-btn h-6 w-6 flex-shrink-0 text-xs opacity-0 transition group-hover:opacity-100"
+      class="mac-btn h-6 w-6 flex-shrink-0 text-xs opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
       aria-label="Open Now Playing"
     >
       ⤢
@@ -67,7 +67,7 @@
       <span
         [class]="
           'rounded-md border px-1.5 py-0.5 text-caption2 uppercase tnum ' +
-          (isLossless() ? 'border-accent text-accent' : 'border-border text-text-muted')
+          (isLossless() ? 'border-accent text-accent-text' : 'border-border text-text-muted')
         "
         title="Source sample rate / bit depth"
       >

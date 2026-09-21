@@ -289,4 +289,98 @@ describe('MenuBarComponent', () => {
     // cover the toolbar strip instead of the viewport.
     expect(catcher?.closest('nav')).toBeNull();
   });
+
+  describe('keyboard model and ARIA', () => {
+    it('triggers advertise the popup and its state', () => {
+      const { fixture, cmp } = setup();
+      const el = fixture.nativeElement as HTMLElement;
+      const file = el.querySelector<HTMLButtonElement>('[data-menu-trigger="file"]')!;
+      expect(file.getAttribute('aria-haspopup')).toBe('menu');
+      expect(file.getAttribute('aria-expanded')).toBe('false');
+
+      cmp.toggle('file');
+      fixture.detectChanges();
+      expect(file.getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('gives every dropdown item a menuitem role', () => {
+      const { fixture, cmp } = setup();
+      cmp.toggle('file');
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      const items = el.querySelectorAll('[data-menu-dropdown="file"] [role="menuitem"]');
+      expect(items.length).toBeGreaterThan(0);
+    });
+
+    it('moves focus to the first item when a dropdown opens', async () => {
+      const { fixture, cmp } = setup();
+      document.body.append(fixture.nativeElement as HTMLElement);
+      try {
+        cmp.toggle('settings');
+        fixture.detectChanges();
+        await new Promise((r) => setTimeout(r));
+        const el = fixture.nativeElement as HTMLElement;
+        const first = el.querySelector<HTMLElement>(
+          '[data-menu-dropdown="settings"] [role="menuitem"]',
+        )!;
+        expect(document.activeElement).toBe(first);
+      } finally {
+        document.body.replaceChildren();
+      }
+    });
+
+    it('ArrowRight/ArrowLeft cycle between the top-level menus, wrapping', () => {
+      const { fixture, cmp } = setup();
+      const el = fixture.nativeElement as HTMLElement;
+      cmp.toggle('file');
+      fixture.detectChanges();
+      const menu = el.querySelector<HTMLElement>('[data-menu-dropdown="file"]')!;
+
+      menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      expect(cmp.openMenu()).toBe('settings');
+
+      fixture.detectChanges();
+      const settings = el.querySelector<HTMLElement>('[data-menu-dropdown="settings"]')!;
+      settings.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+      expect(cmp.openMenu()).toBe('file');
+
+      // Wraps: ArrowLeft from File lands on Settings, ArrowRight back.
+      fixture.detectChanges();
+      const file = el.querySelector<HTMLElement>('[data-menu-dropdown="file"]')!;
+      file.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+      expect(cmp.openMenu()).toBe('settings');
+    });
+
+    it('mirrors the open dropdown into ui.menubarOpen for the shared shortcut guard', () => {
+      const { fixture, cmp, ui } = setup();
+      expect(ui.menubarOpen()).toBe(false);
+      cmp.toggle('file');
+      fixture.detectChanges();
+      expect(ui.menubarOpen()).toBe(true);
+      cmp.close();
+      fixture.detectChanges();
+      expect(ui.menubarOpen()).toBe(false);
+    });
+
+    it('Escape closes and returns focus to the trigger', async () => {
+      const { fixture, cmp } = setup();
+      document.body.append(fixture.nativeElement as HTMLElement);
+      try {
+        const el = fixture.nativeElement as HTMLElement;
+        const trigger = el.querySelector<HTMLButtonElement>('[data-menu-trigger="file"]')!;
+        cmp.toggle('file');
+        fixture.detectChanges();
+        // Dispatch through the open dropdown so the document-level
+        // `keydown.escape` binding — not just `close()` — is exercised.
+        const menu = el.querySelector<HTMLElement>('[data-menu-dropdown="file"]')!;
+        menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        fixture.detectChanges();
+        await Promise.resolve();
+        expect(cmp.openMenu()).toBeNull();
+        expect(document.activeElement).toBe(trigger);
+      } finally {
+        document.body.replaceChildren();
+      }
+    });
+  });
 });

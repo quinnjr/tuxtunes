@@ -35,6 +35,9 @@
   <div class="relative z-40">
     <button
       type="button"
+      data-menu-trigger="file"
+      aria-haspopup="menu"
+      [attr.aria-expanded]="openMenu() === 'file'"
       (click)="toggle('file')"
       [class]="
         (openMenu() === 'file' ? 'bg-bg-elevated text-text-primary ' : '') +
@@ -46,11 +49,16 @@
     @if (openMenu() === 'file') {
       <div
         data-tauri-drag-region="false"
-        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
+        data-menu-dropdown="file"
+        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl outline-none"
         role="menu"
+        tabindex="-1"
+        appRovingFocus
+        (keydown)="onMenuKeydown($event)"
       >
         <button
           type="button"
+          role="menuitem"
           (click)="addFile()"
           class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
@@ -59,6 +67,7 @@
         </button>
         <button
           type="button"
+          role="menuitem"
           (click)="addFolder()"
           class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
@@ -67,6 +76,7 @@
         </button>
         <button
           type="button"
+          role="menuitem"
           (click)="newSmartPlaylist()"
           class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
@@ -75,6 +85,7 @@
         </button>
         <button
           type="button"
+          role="menuitem"
           (click)="importItunes()"
           class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >
@@ -85,6 +96,7 @@
           <div class="my-1 h-px bg-border" role="separator"></div>
           <button
             type="button"
+            role="menuitem"
             (click)="exit()"
             class="mac-btn flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-text-primary"
           >
@@ -102,6 +114,9 @@
   <div class="relative z-40">
     <button
       type="button"
+      data-menu-trigger="settings"
+      aria-haspopup="menu"
+      [attr.aria-expanded]="openMenu() === 'settings'"
       (click)="toggle('settings')"
       [class]="
         (openMenu() === 'settings' ? 'bg-bg-elevated text-text-primary ' : '') +
@@ -113,11 +128,25 @@
     @if (openMenu() === 'settings') {
       <div
         data-tauri-drag-region="false"
-        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl"
+        data-menu-dropdown="settings"
+        class="absolute left-0 top-full z-40 mt-0.5 min-w-[200px] rounded-lg border border-border-strong bg-bg-surface p-1 shadow-xl outline-none"
         role="menu"
+        tabindex="-1"
+        appRovingFocus
+        (keydown)="onMenuKeydown($event)"
       >
         <button
           type="button"
+          role="menuitem"
+          (click)="openSettings()"
+          class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
+        >
+          <fa-icon [icon]="faSliders" />
+          Settings…
+        </button>
+        <button
+          type="button"
+          role="menuitem"
           (click)="openPreferences()"
           class="mac-btn flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-primary"
         >

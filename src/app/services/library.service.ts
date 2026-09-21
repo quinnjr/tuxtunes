@@ -295,6 +295,18 @@ export class LibraryService implements OnDestroy {
   /** Active column-browser + search filters. Drives refreshTracks(). */
   readonly filters = signal<TrackFilters>({ ...EMPTY_FILTERS });
 
+  /**
+   * Whether anything is narrowing the list (search box or column
+   * browser). The track list uses this to pick the right empty state:
+   * "nothing matched your filters" vs "your library is empty".
+   */
+  readonly hasActiveFilters = computed(this.#computeHasActiveFilters.bind(this));
+
+  #computeHasActiveFilters(): boolean {
+    const f = this.filters();
+    return f.search !== null || f.genres.length > 0 || f.artists.length > 0 || f.albums.length > 0;
+  }
+
   /** Active sort spec. Header clicks in the track list mutate this. */
   readonly sort = signal<TrackSort>({ ...DEFAULT_SORT });
 
@@ -333,19 +345,53 @@ export class LibraryService implements OnDestroy {
     this.filters.update((f) => ({ ...f, search: trimmed === '' ? null : trimmed }));
   }
 
+  /**
+   * Number of in-flight `refreshTracks()` loads. A counter, not a
+   * boolean: a search debounce, a column-browser click, and a playlist
+   * switch can overlap, and the first to finish must not clear the flag
+   * while the others are still loading.
+   */
+  readonly #pendingLoads = signal(0);
+
+  /**
+   * True while `refreshTracks()` is in flight. The track list uses it to
+   * tell "still fetching" apart from "this filter matched nothing", which
+   * otherwise both render as an empty list.
+   */
+  readonly loading = computed(this.#computeLoading.bind(this));
+
+  #computeLoading(): boolean {
+    return this.#pendingLoads() > 0;
+  }
+
+  #beginLoad(): void {
+    this.#pendingLoads.update((n) => n + 1);
+  }
+
+  #endLoad(): void {
+    this.#pendingLoads.update((n) => n - 1);
+  }
+
   async refreshTracks(limit = 500, offset = 0): Promise<void> {
     const playlistId = this.activePlaylistId();
     if (playlistId !== null) {
       await this.loadPlaylistTracks(playlistId);
       return;
     }
-    const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', {
-      limit,
-      offset,
-      filters: this.filters(),
-      sort: this.sort(),
-    });
-    this.tracks.set(this.#withIngestResults(raws.map((raw) => mapTrack(raw))));
+    this.#beginLoad();
+    try {
+      const raws = await this.tauri.invoke<TrackRowRaw[]>('list_tracks', {
+        limit,
+        offset,
+        filters: this.filters(),
+        sort: this.sort(),
+      });
+      // A playlist opened while this query was in flight owns the list now.
+      if (this.activePlaylistId() !== playlistId) return;
+      this.tracks.set(this.#withIngestResults(raws.map((raw) => mapTrack(raw))));
+    } finally {
+      this.#endLoad();
+    }
   }
 
   /**
@@ -367,25 +413,30 @@ export class LibraryService implements OnDestroy {
    * is closed while a playlist is shown.
    */
   private async loadPlaylistTracks(id: number): Promise<void> {
-    const raws = await this.tauri.invoke<TrackRowRaw[]>('open_playlist', { playlistId: id });
-    // The user may have switched playlists while the query was in flight.
-    if (this.activePlaylistId() !== id) return;
-    let rows = raws.map((raw) => mapTrack(raw));
-    const search = this.filters().search?.toLowerCase() ?? null;
-    if (search !== null) {
-      rows = rows.filter((t) =>
-        [t.title, t.artist ?? '', t.album ?? ''].some((s) => s.toLowerCase().includes(search)),
+    this.#beginLoad();
+    try {
+      const raws = await this.tauri.invoke<TrackRowRaw[]>('open_playlist', { playlistId: id });
+      // The user may have switched playlists while the query was in flight.
+      if (this.activePlaylistId() !== id) return;
+      let rows = raws.map((raw) => mapTrack(raw));
+      const search = this.filters().search?.toLowerCase() ?? null;
+      if (search !== null) {
+        rows = rows.filter((t) =>
+          [t.title, t.artist ?? '', t.album ?? ''].some((s) => s.toLowerCase().includes(search)),
+        );
+      }
+      const sort = this.sort();
+      if (sort.column !== DEFAULT_SORT.column || sort.descending !== DEFAULT_SORT.descending) {
+        rows = sortTracks(rows, sort);
+      }
+      this.tracks.set(this.#withIngestResults(rows));
+      const count = raws.length;
+      this.playlists.update((all) =>
+        all.map((p) => (p.id === id && p.trackCount !== count ? { ...p, trackCount: count } : p)),
       );
+    } finally {
+      this.#endLoad();
     }
-    const sort = this.sort();
-    if (sort.column !== DEFAULT_SORT.column || sort.descending !== DEFAULT_SORT.descending) {
-      rows = sortTracks(rows, sort);
-    }
-    this.tracks.set(this.#withIngestResults(rows));
-    const count = raws.length;
-    this.playlists.update((all) =>
-      all.map((p) => (p.id === id && p.trackCount !== count ? { ...p, trackCount: count } : p)),
-    );
   }
 
   // ----- Smart playlists -------------------------------------------------
@@ -560,7 +611,7 @@ export class LibraryService implements OnDestroy {
       return summary;
     }
 
-    const filtered = this.activePlaylistId() !== null || this.#hasActiveFilters();
+    const filtered = this.activePlaylistId() !== null || this.hasActiveFilters();
     if (filtered) {
       await Promise.all([this.refreshTracks(), this.refreshStats()]);
       return summary;
@@ -582,12 +633,6 @@ export class LibraryService implements OnDestroy {
     );
     await this.refreshStats();
     return summary;
-  }
-
-  /** Whether anything narrows the library view right now. */
-  #hasActiveFilters(): boolean {
-    const f = this.filters();
-    return f.search !== null || f.genres.length > 0 || f.artists.length > 0 || f.albums.length > 0;
   }
 
   /**

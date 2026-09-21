@@ -1,4 +1,13 @@
-import { Component, HostListener, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  ElementRef,
+  HostListener,
+  OnDestroy,
+  effect,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import {
   faFileImport,
@@ -6,9 +15,14 @@ import {
   faGear,
   faPlus,
   faRightFromBracket,
+  faSliders,
   faWandMagicSparkles,
 } from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
+import {
+  ROVING_FOCUS_ORIENTATION,
+  RovingFocusDirective,
+} from '../../directives/roving-focus.directive';
 import { UiService } from '../../services/ui.service';
 import { WindowService } from '../../services/window.service';
 import { WindowControlsComponent } from '../window-controls/window-controls.component';
@@ -24,13 +38,17 @@ type MenuId = 'file' | 'settings';
  */
 @Component({
   selector: 'app-menu-bar',
-  imports: [FaIconComponent, WindowControlsComponent],
+  imports: [FaIconComponent, WindowControlsComponent, RovingFocusDirective],
+  // Dropdowns are vertical; Left/Right are handled by onMenuKeydown to
+  // move between the top-level menus.
+  providers: [{ provide: ROVING_FOCUS_ORIENTATION, useValue: 'vertical' as const }],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './menu-bar.component.html',
 })
-export class MenuBarComponent {
+export class MenuBarComponent implements OnDestroy {
   private readonly library = inject(LibraryService);
   private readonly ui = inject(UiService);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   protected readonly win = inject(WindowService);
 
   protected readonly faPlus = faPlus;
@@ -38,17 +56,87 @@ export class MenuBarComponent {
   protected readonly faWand = faWandMagicSparkles;
   protected readonly faFileImport = faFileImport;
   protected readonly faGear = faGear;
+  protected readonly faSliders = faSliders;
   protected readonly faExit = faRightFromBracket;
 
   /** Which top-level menu is open, if any. Null closes every dropdown. */
   protected readonly openMenu = signal<MenuId | null>(null);
+
+  private focusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    // Mirror the open dropdown into UiService so the shared shortcut
+    // guard suppresses list shortcuts behind it.
+    effect(() => this.ui.menubarOpen.set(this.openMenu() !== null));
+    effect(() => {
+      const open = this.openMenu();
+      if (this.focusTimer !== null) {
+        clearTimeout(this.focusTimer);
+        this.focusTimer = null;
+      }
+      if (open === null) return;
+      // Move focus into the opened dropdown so its keys reach the items;
+      // scoped to this component's own subtree, not the document.
+      this.focusTimer = setTimeout(() => {
+        this.focusTimer = null;
+        this.host.nativeElement
+          .querySelector<HTMLElement>(`[data-menu-dropdown="${open}"] [role="menuitem"]`)
+          ?.focus();
+      });
+    });
+  }
+
+  ngOnDestroy(): void {
+    if (this.focusTimer !== null) clearTimeout(this.focusTimer);
+  }
+
+  /** The trigger button for a menu, so close can hand focus back. */
+  private trigger(menu: MenuId): HTMLElement | null {
+    return this.host.nativeElement.querySelector<HTMLElement>(`[data-menu-trigger="${menu}"]`);
+  }
 
   protected toggle(menu: MenuId): void {
     this.openMenu.update((m) => (m === menu ? null : menu));
   }
 
   protected close(): void {
+    const menu = this.openMenu();
     this.openMenu.set(null);
+    // Hand focus back to the trigger (APG: Escape returns focus to the
+    // top-level item). Deferred: the dropdown is removed after this.
+    // Conditional: a menu item action may open a modal in the same tick,
+    // which moves focus into itself — restoring here would pull focus
+    // back out from behind it.
+    if (menu !== null) {
+      const trigger = this.trigger(menu);
+      const doc = this.host.nativeElement.ownerDocument;
+      queueMicrotask(() => {
+        if (doc.activeElement !== doc.body) return;
+        if (trigger === null || !trigger.isConnected || trigger.closest('[inert]') !== null) {
+          return;
+        }
+        trigger.focus();
+      });
+    }
+  }
+
+  /**
+   * ArrowLeft/ArrowRight cycle between the top-level menus (the menu
+   * bar's horizontal axis, APG menubar pattern). The focus-in effect
+   * carries focus into the newly opened dropdown. Up/Down are the roving
+   * directive's job, scoped to `vertical` for the dropdowns so it does
+   * not also act on these keys.
+   */
+  protected onMenuKeydown(event: KeyboardEvent): void {
+    const order: MenuId[] = ['file', 'settings'];
+    const current = order.indexOf(this.openMenu() ?? 'file');
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      this.openMenu.set(order[(current + 1) % order.length]);
+    } else if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      this.openMenu.set(order[(current - 1 + order.length) % order.length]);
+    }
   }
 
   /**
@@ -127,5 +215,10 @@ export class MenuBarComponent {
   protected openPreferences(): void {
     this.close();
     this.ui.preferencesOpen.set(true);
+  }
+
+  protected openSettings(): void {
+    this.close();
+    this.ui.settingsOpen.set(true);
   }
 }

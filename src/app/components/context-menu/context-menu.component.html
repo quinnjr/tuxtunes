@@ -6,8 +6,13 @@
     role="presentation"
   >
     <ul
+      #menu
       data-context-menu
-      class="mac-sheet absolute min-w-[200px] rounded-lg py-1 text-body"
+      class="mac-sheet absolute min-w-[200px] rounded-lg py-1 text-body outline-none"
+      role="menu"
+      tabindex="-1"
+      appRovingFocus
+      (keydown)="onMenuKeydown($event)"
       [style.left.px]="state.x"
       [style.top.px]="state.y"
     >
@@ -15,50 +20,66 @@
         @if (isDivider(item)) {
           <li class="my-1 h-px bg-border" role="separator"></li>
         } @else {
-          <li class="relative px-1">
+          <li class="relative px-1" role="none">
             <button
               type="button"
-              [disabled]="item.disabled"
+              [attr.role]="item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'"
+              [attr.aria-checked]="item.checked === undefined ? null : item.checked"
+              [attr.aria-haspopup]="hasChildren(item) ? 'menu' : null"
+              [attr.aria-expanded]="hasChildren(item) ? submenuIndex() === i : null"
+              [attr.aria-disabled]="item.disabled ? 'true' : null"
+              [attr.data-item-index]="i"
               (click)="onItemClick(i, item); $event.stopPropagation()"
               (mouseenter)="onItemEnter(i, item)"
               [class]="
-                'flex w-full items-center rounded-md px-2 py-1 text-left hover:bg-accent hover:text-white disabled:opacity-50 ' +
-                (item.destructive ? 'text-accent' : 'text-text-primary')
+                'flex w-full items-center rounded-md px-2 py-1 text-left aria-disabled:opacity-50 ' +
+                (item.disabled
+                  ? 'cursor-default '
+                  : 'hover:bg-accent-strong hover:text-white cursor-default ') +
+                (item.destructive ? 'text-accent-text' : 'text-text-primary')
               "
             >
               @if (hasChecks(state.items)) {
-                <span class="w-4 shrink-0">{{ item.checked ? '✓' : '' }}</span>
+                <span aria-hidden="true" class="w-4 shrink-0">{{ item.checked ? '✓' : '' }}</span>
               }
               <span class="flex-1">{{ item.label }}</span>
               @if (hasChildren(item)) {
-                <span class="ml-2 shrink-0">▸</span>
+                <span aria-hidden="true" class="ml-2 shrink-0">▸</span>
               }
             </button>
             @if (hasChildren(item) && submenuIndex() === i) {
               <ul
                 data-submenu
+                role="menu"
                 (mouseenter)="onSubmenuEnter()"
                 [class]="
                   'mac-sheet absolute top-0 z-10 min-w-[180px] rounded-lg py-1 text-body ' +
                   (flyoutFlipped(state.x) ? 'right-full -mr-1' : 'left-full -ml-1')
                 "
               >
-                @for (child of item.children; track $index) {
+                @for (child of item.children; track $index; let ci = $index) {
                   @if (isDivider(child)) {
                     <li class="my-1 h-px bg-border" role="separator"></li>
                   } @else {
-                    <li class="px-1">
+                    <li class="px-1" role="none">
                       <button
                         type="button"
-                        [disabled]="child.disabled"
+                        [attr.role]="child.checked === undefined ? 'menuitem' : 'menuitemcheckbox'"
+                        [attr.aria-checked]="child.checked === undefined ? null : child.checked"
+                        [attr.aria-disabled]="child.disabled ? 'true' : null"
                         (click)="onChildClick(child); $event.stopPropagation()"
                         [class]="
-                          'flex w-full items-center rounded-md px-2 py-1 text-left hover:bg-accent hover:text-white disabled:opacity-50 ' +
-                          (child.destructive ? 'text-accent' : 'text-text-primary')
+                          'flex w-full items-center rounded-md px-2 py-1 text-left aria-disabled:opacity-50 ' +
+                          (child.disabled
+                            ? 'cursor-default '
+                            : 'hover:bg-accent-strong hover:text-white cursor-default ') +
+                          (child.destructive ? 'text-accent-text' : 'text-text-primary')
                         "
                       >
                         @if (hasChecks(item.children!)) {
-                          <span class="w-4 shrink-0">{{ child.checked ? '✓' : '' }}</span>
+                          <span aria-hidden="true" class="w-4 shrink-0">{{
+                            child.checked ? '✓' : ''
+                          }}</span>
                         }
                         <span class="flex-1 truncate">{{ child.label }}</span>
                       </button>

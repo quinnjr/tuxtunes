@@ -86,6 +86,12 @@ function setup(
 }
 
 describe('TrackListViewComponent', () => {
+  /** Let the mount-time refresh settle so `loading` has returned to 0. */
+  async function settle(fixture: { detectChanges(): void }): Promise<void> {
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+    fixture.detectChanges();
+  }
+
   it('refreshes tracks on init', () => {
     const { invoke } = setup();
     expect(invoke).toHaveBeenCalledWith(
@@ -569,6 +575,47 @@ describe('TrackListViewComponent', () => {
       expect(cmp.selection().size).toBe(0);
     });
 
+    it('is inert while a menu-bar dropdown or the column picker is open', () => {
+      const { cmp, library, ui } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+
+      ui.menubarOpen.set(true);
+      cmp.onKeydown(press('Delete'));
+      expect(ui.confirm()).toBeNull();
+      expect(cmp.selection().size).toBe(1);
+
+      ui.menubarOpen.set(false);
+      ui.columnPickerOpen.set(true);
+      cmp.onKeydown(press('Delete'));
+      expect(ui.confirm()).toBeNull();
+      expect(cmp.selection().size).toBe(1);
+
+      // Escape must not clear the selection behind an open dropdown either.
+      ui.columnPickerOpen.set(false);
+      ui.menubarOpen.set(true);
+      cmp.onKeydown(press('Escape'));
+      expect(cmp.selection().size).toBe(1);
+    });
+
+    it('is inert while a context menu is open', () => {
+      const { cmp, library, ui, ctx } = setup();
+      library.tracks.set([TRACK(1)]);
+      cmp.selection.set(new Set([1]));
+      ctx.show(
+        {
+          clientX: 0,
+          clientY: 0,
+          preventDefault: () => undefined,
+          stopPropagation: () => undefined,
+        } as unknown as MouseEvent,
+        [{ label: 'Play' }],
+      );
+      cmp.onKeydown(press('Delete'));
+      expect(ui.confirm()).toBeNull();
+      expect(cmp.selection().size).toBe(1);
+    });
+
     it('Delete asks before trashing every selected track', async () => {
       const { cmp, library, invoke, ui } = setup(async (cmd: string) =>
         cmd === 'trash_tracks' ? { removed: [1, 3], failed: [] } : [],
@@ -989,6 +1036,71 @@ describe('TrackListViewComponent', () => {
       await items.find((i) => i.label === 'Write Tags to File')!.action?.();
 
       expect(ui.lastError()).toBeNull();
+    });
+  });
+
+  describe('empty and loading states', () => {
+    it('shows a search-aware empty state when a filter matches nothing', async () => {
+      const { fixture, library } = setup();
+      await settle(fixture);
+      library.setSearch('zzz-no-match');
+      library.tracks.set([]);
+      fixture.detectChanges();
+      const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(text).toContain('Nothing matches');
+      expect(text).toContain('zzz-no-match');
+    });
+
+    it('names the column-browser filters when they, not search, hide everything', async () => {
+      const { fixture, library } = setup();
+      await settle(fixture);
+      library.setSearch('');
+      library.filters.update((f) => ({ ...f, genres: ['Polka'] }));
+      library.tracks.set([]);
+      fixture.detectChanges();
+      const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(text).toContain('Nothing matches the current filters.');
+      expect(text).not.toContain('This library is empty.');
+    });
+
+    it('shows the import prompt when the library itself is empty', async () => {
+      const { fixture, library } = setup();
+      await settle(fixture);
+      library.setSearch('');
+      library.tracks.set([]);
+      fixture.detectChanges();
+      const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+      expect(text).toContain('This library is empty.');
+      expect(text).toContain('File menu');
+    });
+
+    it('shows skeleton rows while a load is in flight', async () => {
+      let release: (rows: unknown[]) => void = () => {};
+      const gate = new Promise<unknown[]>((resolve) => {
+        release = resolve;
+      });
+      const { fixture, library } = setup(() => gate);
+      library.tracks.set([]);
+      const pending = library.refreshTracks();
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      expect(el.querySelector('[aria-busy="true"]')).not.toBeNull();
+      expect(el.textContent).toContain('Loading tracks');
+
+      release([]);
+      await pending;
+      fixture.detectChanges();
+      expect(el.querySelector('[aria-busy="true"]')).toBeNull();
+    });
+
+    it('renders the virtual list once tracks arrive', async () => {
+      const { fixture, library } = setup();
+      await settle(fixture);
+      library.tracks.set([TRACK(1)]);
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      expect(el.querySelector('cdk-virtual-scroll-viewport')).not.toBeNull();
+      expect(el.textContent).not.toContain('This library is empty.');
     });
   });
 });

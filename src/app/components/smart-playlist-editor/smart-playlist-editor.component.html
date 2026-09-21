@@ -1,8 +1,13 @@
 @if (open()) {
   <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
-    <div class="mac-sheet flex max-h-[90vh] w-[680px] flex-col gap-4 overflow-auto p-6">
+    <div
+      class="mac-sheet flex max-h-[90vh] w-[680px] flex-col gap-4 overflow-auto p-6"
+      appModalSheet
+      aria-labelledby="smart-editor-title"
+      (appModalSheetEscape)="close()"
+    >
       <header class="hairline-b flex items-center justify-between pb-3">
-        <h2 class="text-headline font-semibold text-text-primary">
+        <h2 id="smart-editor-title" class="text-headline font-semibold text-text-primary">
           {{ editingId() === null ? 'New Smart Playlist' : 'Edit Smart Playlist' }}
         </h2>
         <button type="button" class="mac-btn h-7 w-7" (click)="close()" aria-label="Close">
@@ -245,7 +250,7 @@
           <button type="button" class="mac-btn h-8 px-3" (click)="close()">Cancel</button>
           <button
             type="button"
-            class="mac-btn h-8 px-4 bg-accent text-white hover:bg-accent-hover"
+            class="mac-btn h-8 px-4 bg-accent-strong text-white hover:bg-accent-strong-hover"
             (click)="save()"
             [disabled]="!canSave()"
           >

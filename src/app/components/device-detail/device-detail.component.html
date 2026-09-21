@@ -30,7 +30,7 @@
         } @else {
           <button
             type="button"
-            class="rounded-md bg-accent px-3 py-1 text-body text-white disabled:opacity-50"
+            class="rounded-md bg-accent-strong px-3 py-1 text-body text-white disabled:opacity-50"
             data-testid="run-sync"
             [disabled]="selectedCount() === 0"
             (click)="sync()"
@@ -49,7 +49,10 @@
             <span class="tabular-nums text-text-muted">{{ percent() }}%</span>
           </div>
           <div class="h-1.5 overflow-hidden rounded-full bg-bg-surface">
-            <div class="h-full rounded-full bg-accent" [style.width.%]="percent()"></div>
+            <div
+              class="h-full w-full origin-left rounded-full bg-accent"
+              [style.transform]="'scaleX(' + percent() / 100 + ')'"
+            ></div>
           </div>
           <span class="truncate text-caption text-text-muted">
             {{ progress()?.message }}
@@ -74,7 +77,10 @@
                empty device (0%) as absent and hide the bar. -->
           @if (usedPercent() !== null) {
             <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-bg-primary">
-              <div class="h-full rounded-full bg-text-muted" [style.width.%]="usedPercent()"></div>
+              <div
+                class="h-full w-full origin-left rounded-full bg-text-muted"
+                [style.transform]="'scaleX(' + (usedPercent() ?? 0) / 100 + ')'"
+              ></div>
             </div>
           }
         </div>

@@ -9,6 +9,7 @@ import {
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
+import { ModalSheetDirective } from '../../directives/modal-sheet.directive';
 import { ConflictRules, PathMapping, Strategy } from '../../models/sync';
 import { SyncService } from '../../services/sync.service';
 import { UiService } from '../../services/ui.service';
@@ -21,7 +22,7 @@ interface PathRow {
 
 @Component({
   selector: 'app-import-wizard',
-  imports: [FormsModule],
+  imports: [FormsModule, ModalSheetDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './import-wizard.component.html',
 })

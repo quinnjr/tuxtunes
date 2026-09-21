@@ -281,4 +281,15 @@ describe('PreferencesPanelComponent', () => {
       expect(cmp.reorganizeSummary()).toBe('1 moved, 1 copied, 0 already in place, 1 failed');
     });
   });
+
+  it('Escape closes the sheet', () => {
+    const { fixture, ui } = setup();
+    ui.preferencesOpen.set(true);
+    fixture.detectChanges();
+    const sheet = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>(
+      '[appmodalsheet]',
+    )!;
+    sheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(ui.preferencesOpen()).toBe(false);
+  });
 });
