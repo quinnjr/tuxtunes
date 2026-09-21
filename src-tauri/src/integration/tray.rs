@@ -29,6 +29,12 @@ const ID_SHOW: &str = "tray:show";
 const ID_QUIT: &str = "tray:quit";
 const ID_NOW_PLAYING: &str = "tray:now-playing";
 
+/// Tray-sized app icon, embedded at compile time. The builder gets no
+/// image unless one is set explicitly (Tauri supplies no default), and
+/// an icon-less StatusNotifier item renders as a blank slot — so this
+/// asset is load-bearing for the tray entry.
+const TRAY_ICON_PNG: &[u8] = include_bytes!("../../icons/32x32.png");
+
 /// Event channel names emitted toward the frontend. The Angular
 /// PlaybackService listens on these and dispatches via its own
 /// state-aware code paths.
@@ -43,6 +49,14 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) {
     if let Err(e) = try_install(app) {
         log::warn!("tray install failed: {e}");
     }
+}
+
+/// Decode the tray icon. Separate function so tests can pin the
+/// asset (present, decodable, tray-sized) without standing up a
+/// tray. Hidden from rustdoc — not part of the public API.
+#[doc(hidden)]
+pub fn load_tray_icon() -> tauri::Result<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(TRAY_ICON_PNG).map(|img| img.to_owned())
 }
 
 fn try_install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -75,8 +89,15 @@ fn try_install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         let _ = item_for_closure.set_text(label);
     }));
 
-    let _tray = TrayIconBuilder::with_id("tuxtunes-main")
-        .tooltip("TuxTunes")
+    let mut builder = TrayIconBuilder::with_id("tuxtunes-main").tooltip("TuxTunes");
+    match load_tray_icon() {
+        Ok(icon) => builder = builder.icon(icon),
+        // The menu still mounts, so the app keeps its tray controls —
+        // but without an image the entry shows as a blank slot.
+        Err(e) => log::warn!("tray install: icon failed to load ({e})"),
+    }
+
+    let _tray = builder
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))
