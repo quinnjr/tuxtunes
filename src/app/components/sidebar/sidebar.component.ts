@@ -10,6 +10,7 @@ import {
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
 import { DeviceService } from '../../services/device.service';
 import { LibraryService, Playlist } from '../../services/library.service';
+import { PlaybackService } from '../../services/playback.service';
 import { SyncService } from '../../services/sync.service';
 import { LibraryView, UiService } from '../../services/ui.service';
 import { Device } from '../../models/device';
@@ -98,6 +99,7 @@ function isCycleMember(
 export class SidebarComponent implements OnInit {
   protected readonly ui = inject(UiService);
   protected readonly library = inject(LibraryService);
+  protected readonly playback = inject(PlaybackService);
   private readonly sync = inject(SyncService);
   private readonly ctx = inject(ContextMenuService);
   protected readonly deviceSvc = inject(DeviceService);
@@ -253,11 +255,13 @@ export class SidebarComponent implements OnInit {
       this.ui.libraryView.set('tracks');
       this.ui.columnBrowserOpen.set(true);
     } else {
-      this.ui.libraryView.set(view);
+      this.ui.setLibraryView(view);
     }
     // The track list only fetches on mount; when it stays mounted we
-    // must reload it ourselves to drop the playlist's rows.
-    if (hadPlaylist && this.ui.libraryView() === 'tracks') {
+    // must reload it ourselves to drop the playlist's rows. Refresh
+    // eagerly on playlist → queue too, so a later queue → tracks hop
+    // (where hadPlaylist is already false) lands on clean rows.
+    if (hadPlaylist && (this.ui.libraryView() === 'tracks' || view === 'queue')) {
       void this.ui.guard(this.library.refreshTracks());
     }
   }

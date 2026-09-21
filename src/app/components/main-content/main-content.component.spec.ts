@@ -43,6 +43,18 @@ describe('MainContentComponent', () => {
     expect(ui.libraryView()).toBe('albums');
   });
 
+  it('setMode("queue") closes the column browser and renders the queue view', () => {
+    const { fixture, cmp, ui } = setup();
+    ui.columnBrowserOpen.set(true);
+    cmp.setMode('queue');
+    expect(ui.libraryView()).toBe('queue');
+    expect(ui.columnBrowserOpen()).toBe(false);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('app-queue-view')).not.toBeNull();
+    expect(el.querySelector('app-track-list-view')).toBeNull();
+  });
+
   it('toggleBrowser flips columnBrowserOpen', () => {
     const { cmp, ui } = setup();
     expect(ui.columnBrowserOpen()).toBe(false);
@@ -50,6 +62,30 @@ describe('MainContentComponent', () => {
     expect(ui.columnBrowserOpen()).toBe(true);
     cmp.toggleBrowser();
     expect(ui.columnBrowserOpen()).toBe(false);
+  });
+
+  it('toggleBrowser is a no-op over the queue', () => {
+    const { cmp, ui } = setup();
+    cmp.setMode('queue');
+    cmp.toggleBrowser();
+    expect(ui.columnBrowserOpen()).toBe(false);
+  });
+
+  it('playlist → queue → tracks ends with a track refresh', () => {
+    const { cmp, library } = setup();
+    const refresh = vi.spyOn(library, 'refreshTracks').mockResolvedValue();
+    library.activePlaylistId.set(6);
+    cmp.setMode('queue');
+    expect(refresh).toHaveBeenCalledTimes(1);
+    cmp.setMode('tracks');
+    // Queue → tracks must not render the old playlist's rows; the
+    // eager refresh on playlist → queue already reloaded them.
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(ui_libraryView(cmp)).toBe('tracks');
+    function ui_libraryView(c: MainInternals): string {
+      void c;
+      return TestBed.inject(UiService).libraryView();
+    }
   });
 
   it('onSearchInput sets the search and debounces refreshTracks by 200ms', () => {

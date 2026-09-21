@@ -1,0 +1,101 @@
+@let q = playback.queue();
+<section class="flex h-full flex-col" data-testid="queue-view">
+  <header class="mac-toolbar flex items-center gap-2 px-4 py-2">
+    <h2 class="text-body font-medium text-text-primary">
+      Queue
+      <span class="text-caption text-text-muted">({{ q.length }})</span>
+    </h2>
+    <div class="ml-auto flex items-center gap-2">
+      <button
+        type="button"
+        data-testid="save-queue"
+        [disabled]="q.length === 0"
+        (click)="saveAsPlaylist()"
+        class="rounded-md bg-accent-strong px-3 py-1 text-body font-medium text-white hover:bg-accent-strong-hover disabled:opacity-50"
+      >
+        Save as Playlist…
+      </button>
+      @if (q.length > 0) {
+        <button
+          type="button"
+          data-testid="clear-queue"
+          (click)="clear()"
+          class="text-body text-text-muted hover:text-accent-text"
+        >
+          Clear
+        </button>
+      }
+    </div>
+  </header>
+  @if (q.length === 0) {
+    <div class="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center">
+      <p class="text-body text-text-secondary">Queue is empty.</p>
+      <p class="text-caption text-text-muted">
+        Right-click songs and choose “Add to queue” to load them here — this is the same list as Up
+        Next in Now Playing.
+      </p>
+    </div>
+  } @else {
+    <ul class="flex-1 overflow-y-auto">
+      @for (t of q; track $index; let i = $index) {
+        @let current = isCurrent(t);
+        <li
+          data-queue-row
+          role="row"
+          tabindex="0"
+          (dblclick)="onRowActivate($event, i)"
+          (keydown.enter)="onRowActivate($event, i)"
+          [attr.title]="rowTitle(t)"
+          [class]="rowClass(t)"
+        >
+          <span class="tnum w-6 shrink-0 text-caption text-text-muted">{{ i + 1 }}</span>
+          <span class="flex min-w-0 flex-1 items-center gap-1.5">
+            @if (t.missing) {
+              <!-- The icon is decorative; the name lives in an sr-only
+                   span because FontAwesome renders the SVG aria-hidden and
+                   drops a `title` passed to the host. -->
+              <fa-icon
+                [icon]="faTriangleExclamation"
+                aria-hidden="true"
+                class="text-caption2 leading-none text-accent-text"
+              />
+              <span class="sr-only">File not found</span>
+            } @else if (current) {
+              <span aria-hidden="true" class="text-caption2 leading-none text-accent-text">♫</span>
+            }
+            <span [class]="'truncate ' + (current ? 'text-accent-text' : 'text-text-primary')">{{
+              t.title
+            }}</span>
+          </span>
+          <span class="hidden w-48 truncate text-text-secondary md:block">{{
+            t.artist ?? ''
+          }}</span>
+          <span class="tnum w-16 shrink-0 text-right text-caption text-text-muted">{{
+            formatTime(t.durationMs)
+          }}</span>
+          <button
+            type="button"
+            (click)="move(i, -1)"
+            [disabled]="i === 0"
+            aria-label="Move up"
+            [class]="rowBtn + ' disabled:opacity-50'"
+          >
+            ▲
+          </button>
+          <button
+            type="button"
+            (click)="move(i, 1)"
+            [disabled]="i === q.length - 1"
+            aria-label="Move down"
+            [class]="rowBtn + ' disabled:opacity-50'"
+          >
+            ▼
+          </button>
+          <button type="button" (click)="remove(i)" aria-label="Remove from queue" [class]="rowBtn">
+            ✕
+          </button>
+        </li>
+      }
+    </ul>
+  }
+</section>

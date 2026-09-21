@@ -17,6 +17,7 @@ import { PlaybackService, TrackRow } from '../../services/playback.service';
 import { TauriService } from '../../services/tauri.service';
 import { UiService } from '../../services/ui.service';
 import { formatMmSs } from '../../utils/time';
+import { isCurrentTrack, trackRowTitle } from '../../utils/track-row';
 import { FaIconComponent } from '@fortawesome/angular-fontawesome';
 import { faTriangleExclamation } from '@fortawesome/free-solid-svg-icons';
 
@@ -162,11 +163,11 @@ export class TrackListViewComponent implements OnInit {
 
   /** Tooltip explaining a dimmed row; null for healthy rows. */
   protected rowTitle(t: TrackRow): string | null {
-    return t.missing ? `File not found: ${t.filePath}` : null;
+    return trackRowTitle(t);
   }
 
   protected isCurrent(t: TrackRow): boolean {
-    return this.playback.currentTrackId() === t.id;
+    return isCurrentTrack(this.playback, t);
   }
 
   protected isSelected(t: TrackRow): boolean {

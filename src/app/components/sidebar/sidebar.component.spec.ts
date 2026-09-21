@@ -416,9 +416,60 @@ describe('SidebarComponent', () => {
   it('renders the All Songs / Artists / Albums / Genres buttons', () => {
     const { fixture } = setup();
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    for (const label of ['All Songs', 'Artists', 'Albums', 'Genres']) {
+    for (const label of ['All Songs', 'Artists', 'Albums', 'Genres', 'Queue']) {
       expect(text).toContain(label);
     }
+  });
+
+  it('setView("queue") leaves the playlist, closes the browser and activates Queue', async () => {
+    const { fixture, cmp, ui, library, stub } = setup();
+    await settle(fixture);
+    library.activePlaylistId.set(6);
+    ui.columnBrowserOpen.set(true);
+    stub.invoke.mockClear();
+    cmp.setView('queue');
+    expect(library.activePlaylistId()).toBeNull();
+    expect(ui.libraryView()).toBe('queue');
+    expect(ui.columnBrowserOpen()).toBe(false);
+    expect(cmp.isActive('queue')).toBe(true);
+    expect(cmp.isActive('tracks')).toBe(false);
+    expect(stub.invoke).toHaveBeenCalledWith('list_tracks', expect.anything());
+  });
+
+  it('Queue badge shows the live count and hides when empty', async () => {
+    const { fixture } = setup();
+    await settle(fixture);
+    const { PlaybackService } = await import('../../services/playback.service');
+    const playback = TestBed.inject(PlaybackService);
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="sidebar-queue"]')!.textContent).not.toMatch(/\d/);
+    playback.enqueueAll([
+      {
+        id: 1,
+        title: 'A',
+        artist: null,
+        album: null,
+        albumArtist: null,
+        genre: null,
+        year: null,
+        trackNumber: null,
+        discNumber: null,
+        durationMs: 1000,
+        filePath: '/a',
+        sampleRate: null,
+        bitDepth: null,
+        kind: null,
+        playCount: 0,
+        skipCount: 0,
+        missing: false,
+        artworkPath: null,
+        rating: 0,
+        albumRating: 0,
+        dateAdded: null,
+      },
+    ]);
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="sidebar-queue"]')!.textContent).toContain('1');
   });
 });
 

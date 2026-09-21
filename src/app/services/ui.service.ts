@@ -2,7 +2,7 @@ import { Injectable, computed, signal } from '@angular/core';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { toErrorMessage } from '../utils/errors';
 
-export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'device';
+export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'queue' | 'device';
 
 /**
  * How an open playlist is presented: `albums` is the per-album picker
@@ -71,6 +71,16 @@ export class UiService {
 
   /** Top-level view selection. Drives main-content's active component. */
   readonly libraryView = signal<LibraryView>('tracks');
+
+  /**
+   * Single owner for the "queue implies browser closed" invariant: the
+   * column browser filters the library list, not the queue, so leaving
+   * it open over the queue would imply a filtering that is not applied.
+   */
+  setLibraryView(view: LibraryView): void {
+    this.libraryView.set(view);
+    if (view === 'queue') this.columnBrowserOpen.set(false);
+  }
 
   /** Presentation of the active playlist; sticky across playlists. */
   readonly playlistView = signal<PlaylistView>('albums');
