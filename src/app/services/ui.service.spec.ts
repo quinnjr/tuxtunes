@@ -6,6 +6,10 @@ describe('UiService', () => {
     const svc = new UiService();
     expect(svc.importWizardOpen()).toBe(false);
     expect(svc.preferencesOpen()).toBe(false);
+    expect(svc.settingsOpen()).toBe(false);
+    expect(svc.menubarOpen()).toBe(false);
+    expect(svc.columnPickerOpen()).toBe(false);
+    expect(svc.shortcutsBlocked()).toBe(false);
     expect(svc.libraryView()).toBe('tracks');
     expect(svc.columnBrowserOpen()).toBe(false);
     expect(svc.nowPlayingOpen()).toBe(false);
@@ -25,7 +29,7 @@ describe('UiService', () => {
 
   it('accepts every LibraryView variant', () => {
     const svc = new UiService();
-    for (const view of ['tracks', 'albums', 'artists', 'genres', 'settings'] as const) {
+    for (const view of ['tracks', 'albums', 'artists', 'genres', 'device'] as const) {
       svc.libraryView.set(view);
       expect(svc.libraryView()).toBe(view);
     }
@@ -72,6 +76,26 @@ describe('UiService', () => {
       const svc = new UiService();
       await expect(svc.guard(Promise.reject(new Error('bad')))).resolves.toBeNull();
       expect(svc.lastError()).toBe('bad');
+    });
+  });
+
+  describe('shortcutsBlocked', () => {
+    it('turns on for any modal, the menu bar, or the column picker', () => {
+      const svc = new UiService();
+      expect(svc.shortcutsBlocked()).toBe(false);
+
+      svc.menubarOpen.set(true);
+      expect(svc.shortcutsBlocked()).toBe(true);
+      svc.menubarOpen.set(false);
+      expect(svc.shortcutsBlocked()).toBe(false);
+
+      svc.columnPickerOpen.set(true);
+      expect(svc.shortcutsBlocked()).toBe(true);
+      svc.columnPickerOpen.set(false);
+      expect(svc.shortcutsBlocked()).toBe(false);
+
+      svc.importWizardOpen.set(true);
+      expect(svc.shortcutsBlocked()).toBe(true);
     });
   });
 });

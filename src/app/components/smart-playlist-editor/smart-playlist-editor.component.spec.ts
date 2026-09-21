@@ -386,4 +386,17 @@ describe('SmartPlaylistEditorComponent', () => {
     // The late result for 42 must not clobber 99's already-loaded rule.
     expect(leaves(cmp.rows())).toEqual([{ field: 'genre', op: 'is', value: 'Fast99' }]);
   });
+
+  it('Escape closes the sheet', async () => {
+    const { fixture, ui } = setup();
+    ui.smartEditor.set({ playlistId: null });
+    fixture.detectChanges();
+    await settle(fixture);
+    const sheet = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>(
+      '[appmodalsheet]',
+    )!;
+    sheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    fixture.detectChanges();
+    expect(ui.smartEditor()).toBe(null);
+  });
 });

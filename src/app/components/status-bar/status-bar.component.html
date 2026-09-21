@@ -13,7 +13,7 @@
   @if (ui.lastError(); as error) {
     <span
       role="alert"
-      class="absolute right-4 max-w-[50%] truncate font-medium text-accent"
+      class="absolute right-4 max-w-[50%] truncate font-medium text-accent-text"
       [title]="error"
       >{{ error }}</span
     >
@@ -27,7 +27,7 @@
          a partial failure; like "Sync error", this stays until the next
          run or the user opens Settings → Conversion for the details. -->
     <span
-      class="absolute right-4 max-w-[50%] truncate font-medium text-accent"
+      class="absolute right-4 max-w-[50%] truncate font-medium text-accent-text"
       [title]="convert.summary()"
       >{{ convert.summary() }}</span
     >

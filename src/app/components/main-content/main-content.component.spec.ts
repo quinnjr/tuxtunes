@@ -197,4 +197,24 @@ describe('MainContentComponent', () => {
       expect(el.querySelector('app-album-grid-view')).not.toBeNull();
     });
   });
+
+  describe('segmented control semantics', () => {
+    it('exposes the library switcher as a radio group with a checked option', () => {
+      const { fixture, cmp } = setup();
+      cmp.setMode('albums');
+      fixture.detectChanges();
+      const el = fixture.nativeElement as HTMLElement;
+      const group = el.querySelector('[data-testid="library-modes"]')!;
+      expect(group.getAttribute('role')).toBe('radiogroup');
+      expect(group.getAttribute('aria-label')).toBe('Library view');
+
+      const radios = [...group.querySelectorAll('[role="radio"]')];
+      expect(radios).toHaveLength(3);
+      const checked = radios.filter((r) => r.getAttribute('aria-checked') === 'true');
+      expect(checked).toHaveLength(1);
+      expect(checked[0].textContent?.trim()).toBe('albums');
+      // No stale aria-selected on role=radio.
+      expect(radios.every((r) => r.getAttribute('aria-selected') === null)).toBe(true);
+    });
+  });
 });

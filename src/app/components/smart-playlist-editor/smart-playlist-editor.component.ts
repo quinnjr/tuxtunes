@@ -28,6 +28,7 @@ import {
   isGroup,
   normalizeForEditor,
 } from '../../models/smart';
+import { ModalSheetDirective } from '../../directives/modal-sheet.directive';
 import { LibraryService } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
 
@@ -58,7 +59,7 @@ export type EditorRow = EditorLeafRow | EditorGroupRow;
  */
 @Component({
   selector: 'app-smart-playlist-editor',
-  imports: [],
+  imports: [ModalSheetDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './smart-playlist-editor.component.html',
 })

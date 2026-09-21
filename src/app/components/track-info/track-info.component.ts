@@ -7,6 +7,7 @@ import {
   signal,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { ModalSheetDirective } from '../../directives/modal-sheet.directive';
 import { LibraryService, TrackMetadataEdit } from '../../services/library.service';
 import { UiService } from '../../services/ui.service';
 
@@ -39,7 +40,7 @@ const EMPTY_FORM: FormState = {
  */
 @Component({
   selector: 'app-track-info',
-  imports: [],
+  imports: [ModalSheetDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './track-info.component.html',
 })

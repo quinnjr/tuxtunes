@@ -9,7 +9,7 @@ TuxTunes is a desktop music library manager and player for Linux, designed as an
 | Layer | Technology |
 |---|---|
 | Desktop shell | Tauri 2.x (system webview) |
-| Frontend | Angular 21+ (standalone components, signals, zoneless) |
+| Frontend | Angular 22 (standalone components, signals, zoneless) |
 | Styling | TailwindCSS 4+ |
 | Backend | Rust (Tauri commands) |
 | Database | SQLite via `rusqlite` |
@@ -364,21 +364,46 @@ mpv events (end-of-file, property changes) bridged to Angular via Tauri events:
 
 ### Theme
 
-Dark theme, music-player aesthetic:
+The palette below is what shipped: a macOS graphite re-skin (Apple Music
+HIG), replacing the navy/pink scheme this document originally proposed.
+Neutrals carry no hue; the single saturated color is Apple Music red, and
+it only appears where it means something (selection, playing state,
+primary actions, errors). Red has three cuts because the brand red does
+not clear WCAG AA at the app's 11–13px sizes: `accent` for fills, rings,
+and borders; `accent-text` for red-as-text or -icon; `accent-strong` for
+a red fill under white text.
+
 ```css
 @import "tailwindcss";
 
 @theme {
-  --color-bg-primary: #1a1a2e;
-  --color-bg-secondary: #16213e;
-  --color-bg-tertiary: #0f3460;
-  --color-accent: #e94560;
-  --color-accent-hover: #ff6b81;
-  --color-text-primary: #eaeaea;
-  --color-text-secondary: #a0a0b0;
-  --color-border: #2a2a4a;
+  /* dark is the default; :root[data-theme='light'] swaps the palette */
+  --color-bg-primary: #1e1e1e;      /* content */
+  --color-bg-surface: #28282a;      /* panels, cards */
+  --color-bg-transport: #262628;    /* toolbar base, seen through blur */
+  --color-bg-elevated: #323234;     /* inset / filled control */
+  --color-bg-tertiary: #3a3a3c;     /* art placeholders, chips */
+  --color-accent: #fa233b;          /* Apple Music red: fills, rings */
+  --color-accent-hover: #fb4d5c;
+  --color-accent-text: #ff6b77;     /* red as text/icon on dark: 6.05:1 */
+  --color-accent-strong: #e01f37;   /* red fill under white text: 4.75:1 */
+  --color-text-primary: #f5f5f7;
+  --color-text-secondary: #a1a1a6;
+  --color-text-muted: #9a9a9f;      /* 5.95:1 on content */
+  --color-border: #38383a;          /* hairline */
+  --color-border-strong: #48484a;
 }
 ```
+
+Light mode is not an inversion: content goes pure white so artwork sits
+on paper, while chrome goes slightly gray — the opposite of dark mode.
+`--color-accent-text` and `--color-accent-strong` both darken to
+`#c4121f` (6.08:1 on white) and `--color-text-muted` to `#6e6e73`
+(5.07:1 on white).
+
+Typography is a bundled Inter (the closest freely-licensed stand-in for
+SF) at a five-step HIG-named scale from 10px to 15px, with tabular
+figures for anything that ticks. There is no mono face.
 
 ### Layout
 

@@ -1,16 +1,29 @@
 @if (open()) {
   <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
-    <div class="mac-sheet flex max-h-[90vh] w-[560px] flex-col gap-4 overflow-auto p-6">
+    <div
+      class="mac-sheet flex max-h-[90vh] w-[560px] flex-col gap-4 overflow-auto p-6"
+      appModalSheet
+      aria-labelledby="preferences-title"
+      (appModalSheetEscape)="hide()"
+    >
       <header class="hairline-b flex items-center justify-between pb-3">
-        <h2 class="text-headline font-semibold text-text-primary">Preferences</h2>
-        <button type="button" class="mac-btn h-7 w-7" (click)="hide()">
+        <h2 id="preferences-title" class="text-headline font-semibold text-text-primary">
+          Preferences
+        </h2>
+        <button type="button" class="mac-btn h-7 w-7" (click)="hide()" aria-label="Close">
           <span class="text-body">✕</span>
         </button>
       </header>
 
       <div class="flex flex-col gap-1.5 text-body">
         <span class="text-text-secondary">Color mode</span>
-        <div class="mac-segmented w-fit" role="radiogroup" aria-label="Color mode">
+        <div
+          class="mac-segmented w-fit"
+          role="radiogroup"
+          aria-label="Color mode"
+          appRovingFocus
+          (appRovingFocusSelect)="theme.set(colorModes[$event])"
+        >
           @for (m of colorModes; track m) {
             <button
               type="button"
@@ -80,7 +93,7 @@
             <span class="text-footnote text-text-muted">{{ status }}</span>
           }
           @if (reorganizeSummary(); as summary) {
-            <span class="text-footnote text-accent">{{ summary }}</span>
+            <span class="text-footnote text-accent-text">{{ summary }}</span>
           }
         </div>
       </div>
@@ -107,7 +120,7 @@
             <span class="text-footnote text-text-muted">{{ status }}</span>
           }
           @if (reclaimSummary(); as summary) {
-            <span class="text-footnote text-accent">{{ summary }}</span>
+            <span class="text-footnote text-accent-text">{{ summary }}</span>
           }
         </div>
       </div>
@@ -119,7 +132,7 @@
         <button
           type="button"
           (click)="save()"
-          class="rounded-md bg-accent px-4 py-1.5 text-body font-medium text-white hover:bg-accent-hover"
+          class="rounded-md bg-accent-strong px-4 py-1.5 text-body font-medium text-white hover:bg-accent-strong-hover"
         >
           Save
         </button>

@@ -8,6 +8,7 @@ import {
   viewChild,
   ChangeDetectionStrategy,
 } from '@angular/core';
+import { ModalSheetDirective } from '../../directives/modal-sheet.directive';
 import { UiService } from '../../services/ui.service';
 
 /**
@@ -17,7 +18,7 @@ import { UiService } from '../../services/ui.service';
  */
 @Component({
   selector: 'app-name-prompt',
-  imports: [],
+  imports: [ModalSheetDirective],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './name-prompt.component.html',
 })

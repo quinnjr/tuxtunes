@@ -29,6 +29,13 @@ export class ContextMenuService {
   readonly open = signal<ContextMenuState | null>(null);
 
   /**
+   * What had focus when the menu opened, so Escape/selection can hand it
+   * back. Captured in `show()`, before the menu is inserted and takes
+   * focus itself.
+   */
+  private restoreFocusTo: HTMLElement | null = null;
+
+  /**
    * Show the menu at the event's screen position. The caller passes the
    * action items; the service handles geometry, dismissal, and ESC.
    *
@@ -49,11 +56,26 @@ export class ContextMenuService {
     const height = items.length * 30 + 10;
     const x = Math.max(0, Math.min(event.clientX, window.innerWidth - width));
     const y = Math.max(0, Math.min(event.clientY, window.innerHeight - height));
+    const active = document.activeElement;
+    this.restoreFocusTo = active instanceof HTMLElement && active !== document.body ? active : null;
     this.open.set({ x, y, items });
   }
 
   hide(): void {
     this.open.set(null);
+    const target = this.restoreFocusTo;
+    this.restoreFocusTo = null;
+    if (target === null) return;
+    // Deferred: the menu subtree is removed after this call, and tearing
+    // down the focused node would otherwise drop focus to <body>.
+    // Conditional: `run()` hides the menu and then the item action may
+    // open a modal, which moves focus into itself — restoring here would
+    // yank focus back out from behind it.
+    queueMicrotask(() => {
+      if (document.activeElement !== document.body) return;
+      if (!target.isConnected || target.closest('[inert]') !== null) return;
+      target.focus();
+    });
   }
 
   async run(item: ContextMenuItem): Promise<void> {

@@ -16,7 +16,7 @@
     @if (convert.available() === false) {
       <p
         role="alert"
-        class="rounded-lg border border-border bg-bg-surface p-3 text-footnote text-accent"
+        class="rounded-lg border border-border bg-bg-surface p-3 text-footnote text-accent-text"
       >
         <code>ffmpeg</code> was not found on your PATH. Install it to convert files — TuxTunes uses
         it as the encoder.
@@ -140,6 +140,7 @@
           type="text"
           class="mac-btn h-8 flex-1 bg-bg-elevated px-2 text-body"
           placeholder="Beside the original file"
+          aria-label="Conversion output directory"
           [value]="draft().output_dir ?? ''"
           (change)="patch({ output_dir: $any($event.target).value || null })"
         />
@@ -187,7 +188,7 @@
   </fieldset>
 
   @if (convert.failures().length > 0) {
-    <ul class="flex flex-col gap-1 text-footnote text-accent">
+    <ul class="flex flex-col gap-1 text-footnote text-accent-text">
       @for (f of convert.failures(); track $index) {
         <li>{{ f.title }}: {{ f.error }}</li>
       }

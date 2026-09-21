@@ -5,11 +5,19 @@
            library's tracks/albums/artists split only applies to all songs.
            Keyed on the id, like the body below, so header and content
            never disagree while the playlist row is still loading. -->
-      <div class="mac-segmented" data-testid="playlist-modes">
+      <div
+        class="mac-segmented"
+        data-testid="playlist-modes"
+        role="radiogroup"
+        aria-label="Playlist view"
+        appRovingFocus
+        (appRovingFocusSelect)="setPlaylistMode(playlistModes[$event])"
+      >
         @for (mode of playlistModes; track mode) {
           <button
             type="button"
-            [attr.aria-selected]="ui.playlistView() === mode"
+            role="radio"
+            [attr.aria-checked]="ui.playlistView() === mode"
             [class.selected]="ui.playlistView() === mode"
             class="mac-segment capitalize"
             (click)="setPlaylistMode(mode)"
@@ -57,11 +65,19 @@
         </div>
       }
     } @else {
-      <div class="mac-segmented" data-testid="library-modes">
+      <div
+        class="mac-segmented"
+        data-testid="library-modes"
+        role="radiogroup"
+        aria-label="Library view"
+        appRovingFocus
+        (appRovingFocusSelect)="setMode(modes[$event])"
+      >
         @for (mode of modes; track mode) {
           <button
             type="button"
-            [attr.aria-selected]="viewMode() === mode"
+            role="radio"
+            [attr.aria-checked]="viewMode() === mode"
             [class.selected]="viewMode() === mode"
             class="mac-segment capitalize"
             (click)="setMode(mode)"
@@ -78,6 +94,7 @@
         <input
           type="search"
           placeholder="Search title, artist, album…"
+          aria-label="Search title, artist, or album"
           [value]="library.search()"
           (input)="onSearchInput($event)"
           class="w-56 bg-transparent text-text-primary outline-none placeholder:text-text-muted"
@@ -99,8 +116,8 @@
         [class]="
           'rounded-md px-3 py-1 text-body ' +
           (ui.columnBrowserOpen()
-            ? 'bg-accent text-white'
-            : 'border border-border text-text-secondary hover:text-accent')
+            ? 'bg-accent-strong text-white'
+            : 'border border-border text-text-secondary hover:text-accent-text')
         "
         title="Toggle Column Browser"
       >

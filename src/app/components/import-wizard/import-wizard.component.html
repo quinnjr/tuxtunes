@@ -1,8 +1,15 @@
 @if (open()) {
   <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
-    <div class="mac-sheet flex max-h-[90vh] w-[640px] flex-col gap-4 overflow-auto p-6">
+    <div
+      class="mac-sheet flex max-h-[90vh] w-[640px] flex-col gap-4 overflow-auto p-6"
+      appModalSheet
+      aria-labelledby="import-wizard-title"
+      (appModalSheetEscape)="hide()"
+    >
       <header class="hairline-b flex items-center justify-between pb-3">
-        <h2 class="text-headline font-semibold text-text-primary">Import iTunes library</h2>
+        <h2 id="import-wizard-title" class="text-headline font-semibold text-text-primary">
+          Import iTunes library
+        </h2>
         <button type="button" class="mac-btn h-7 w-7 text-body" (click)="hide()">Close</button>
       </header>
 
@@ -37,7 +44,7 @@
                 [class]="
                   'rounded-md px-4 py-1 text-body ' +
                   (filePath()
-                    ? 'bg-accent font-medium text-white hover:bg-accent-hover'
+                    ? 'bg-accent-strong font-medium text-white hover:bg-accent-strong-hover'
                     : 'bg-bg-elevated text-text-muted')
                 "
               >
@@ -60,6 +67,7 @@
                   [ngModel]="row.from"
                   (ngModelChange)="updatePathRow($index, 'from', $event)"
                   placeholder="D:/"
+                  aria-label="Source path prefix"
                 />
                 <span class="text-text-muted">→</span>
                 <input
@@ -67,11 +75,12 @@
                   [ngModel]="row.to"
                   (ngModelChange)="updatePathRow($index, 'to', $event)"
                   placeholder="/mnt/d/"
+                  aria-label="Linux path prefix"
                 />
                 <button
                   type="button"
                   (click)="removePathRow($index)"
-                  class="mac-btn h-6 w-6 text-text-muted hover:text-accent"
+                  class="mac-btn h-6 w-6 text-text-muted hover:text-accent-text"
                 >
                   ×
                 </button>
@@ -80,7 +89,7 @@
             <button
               type="button"
               (click)="addPathRow()"
-              class="self-start text-body text-accent hover:text-accent-hover"
+              class="self-start text-body text-accent-text hover:text-accent-text-hover"
             >
               + add mapping
             </button>
@@ -92,7 +101,7 @@
               <button
                 type="button"
                 (click)="submitMap()"
-                class="rounded-md bg-accent px-4 py-1 text-body font-medium text-white hover:bg-accent-hover"
+                class="rounded-md bg-accent-strong px-4 py-1 text-body font-medium text-white hover:bg-accent-strong-hover"
               >
                 Next
               </button>
@@ -123,7 +132,7 @@
               <button
                 type="button"
                 (click)="submitConflict()"
-                class="rounded-md bg-accent px-4 py-1 text-body font-medium text-white hover:bg-accent-hover"
+                class="rounded-md bg-accent-strong px-4 py-1 text-body font-medium text-white hover:bg-accent-strong-hover"
               >
                 Sync now
               </button>
@@ -140,8 +149,8 @@
               @if (p.total > 0) {
                 <div class="h-1.5 overflow-hidden rounded-full bg-bg-tertiary">
                   <div
-                    class="h-full rounded-full bg-accent transition-all"
-                    [style.width.%]="(p.current / p.total) * 100"
+                    class="h-full w-full origin-left rounded-full bg-accent transition-transform duration-200"
+                    [style.transform]="'scaleX(' + p.current / p.total + ')'"
                   ></div>
                 </div>
               }
@@ -165,7 +174,7 @@
 
             @if (sync.lastError(); as e) {
               <div
-                class="mt-4 rounded-md border border-accent/40 bg-accent/10 p-3 text-body text-accent"
+                class="mt-4 rounded-md border border-accent/40 bg-accent/10 p-3 text-body text-accent-text"
               >
                 Sync failed: {{ e.error }}
               </div>

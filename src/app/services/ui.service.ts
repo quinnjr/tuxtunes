@@ -2,7 +2,7 @@ import { Injectable, computed, signal } from '@angular/core';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { toErrorMessage } from '../utils/errors';
 
-export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'settings' | 'device';
+export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'device';
 
 /**
  * How an open playlist is presented: `albums` is the per-album picker
@@ -63,6 +63,12 @@ export class UiService {
   readonly importWizardOpen = signal(false);
   readonly preferencesOpen = signal(false);
 
+  /**
+   * Full-screen Settings sheet (playback / conversion / sync /
+   * maintenance / about). Opened from the menu bar's Settings menu.
+   */
+  readonly settingsOpen = signal(false);
+
   /** Top-level view selection. Drives main-content's active component. */
   readonly libraryView = signal<LibraryView>('tracks');
 
@@ -112,8 +118,8 @@ export class UiService {
 
   /**
    * Whether any modal owns the screen. Keyboard shortcuts bound on
-   * document check this so a list-level key (Delete, ⌘A) does not fire
-   * behind an open dialog.
+   * document check this so a list-level key (Delete) does not fire
+   * behind an open dialog. Drives `[inert]` on the app shell.
    */
   readonly anyModalOpen = computed(this.#computeAnyModalOpen.bind(this));
 
@@ -121,12 +127,37 @@ export class UiService {
     return (
       this.importWizardOpen() ||
       this.preferencesOpen() ||
+      this.settingsOpen() ||
       this.smartEditor() !== null ||
       this.namePrompt() !== null ||
       this.confirm() !== null ||
       this.trackInfo() !== null
     );
   }
+
+  /**
+   * Whether a menu-bar dropdown is open. Written by `MenuBarComponent`.
+   * A dropdown must not make the shell inert, but document-level list
+   * shortcuts (Delete) must not fire behind it either.
+   */
+  readonly menubarOpen = signal(false);
+
+  /**
+   * Anything that should suppress document-level single-key shortcuts:
+   * modals, an open menu-bar dropdown, or the column picker. The context
+   * menu is not a modal but is checked separately by its consumer.
+   */
+  readonly shortcutsBlocked = computed(this.#computeShortcutsBlocked.bind(this));
+
+  #computeShortcutsBlocked(): boolean {
+    return this.anyModalOpen() || this.menubarOpen() || this.columnPickerOpen();
+  }
+
+  /**
+   * The track list's column-picker popover. Owned by the track list, but
+   * surfaced here so the shared shortcut guard can see it.
+   */
+  readonly columnPickerOpen = signal(false);
 
   /**
    * Most recent user-facing failure (a backend command rejected, a

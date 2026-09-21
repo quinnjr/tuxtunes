@@ -1,5 +1,13 @@
 import { CdkDrag, CdkDragDrop, CdkDropList } from '@angular/cdk/drag-drop';
-import { Component, HostListener, computed, inject, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  HostListener,
+  computed,
+  effect,
+  inject,
+  signal,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { LibraryService } from '../../services/library.service';
 import { PlaybackService, TrackRow } from '../../services/playback.service';
@@ -18,6 +26,21 @@ export class NowPlayingPanelComponent {
   protected readonly ui = inject(UiService);
 
   protected readonly currentTrack = computed(this.#computeCurrentTrack.bind(this));
+
+  /**
+   * Set when the current track's cover fails to load, so the `<img>` hides
+   * without being removed. Reset whenever the track changes — otherwise the
+   * reused `<img>` element would stay hidden for the next cover.
+   */
+  protected readonly coverFailed = signal(false);
+
+  constructor() {
+    // A new track gets a fresh chance at its cover.
+    effect(() => {
+      this.coverUrl(this.currentTrack());
+      this.coverFailed.set(false);
+    });
+  }
 
   #computeCurrentTrack(): TrackRow | null {
     const id = this.playback.currentTrackId();
@@ -48,6 +71,14 @@ export class NowPlayingPanelComponent {
   protected coverUrl(track: TrackRow | null): string | null {
     if (!track?.artworkPath) return null;
     return convertFileSrc(track.artworkPath);
+  }
+
+  /**
+   * Mark the current cover as failed; the template hides the `<img>` and
+   * the placeholder tile behind it shows through.
+   */
+  protected onCoverError(): void {
+    this.coverFailed.set(true);
   }
 
   protected formatTime(ms: number): string {

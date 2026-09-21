@@ -13,7 +13,7 @@
           (col.numeric ? 'text-right' : 'text-left') +
           ' ' +
           (isSortColumn(col.id) ? 'text-text-primary' : '') +
-          ' truncate transition hover:text-accent'
+          ' truncate transition hover:text-accent-text'
         "
       >
         {{ col.label }}
@@ -34,15 +34,23 @@
         role="presentation"
         (click)="closePicker()"
         (contextmenu)="onPickerBackdropContextMenu($event)"
-        (keydown.escape)="closePicker()"
       >
         <div
           (click)="$event.stopPropagation()"
           (keydown)="$event.stopPropagation()"
           class="absolute right-4 top-7 z-40 min-w-[180px] rounded-lg border border-border-strong bg-bg-surface p-2 shadow-2xl"
-          role="dialog"
+          tabindex="-1"
+          appModalSheet
+          [appModalSheetModal]="false"
+          aria-labelledby="column-picker-title"
+          (appModalSheetEscape)="closePicker()"
         >
-          <div class="mb-1 text-caption2 uppercase tracking-wide text-text-muted">Columns</div>
+          <div
+            id="column-picker-title"
+            class="mb-1 text-caption2 uppercase tracking-wide text-text-muted"
+          >
+            Columns
+          </div>
           @for (col of allColumns; track col.id) {
             <label
               class="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 text-body normal-case tracking-normal text-text-primary hover:bg-bg-elevated"
@@ -59,43 +67,90 @@
       </div>
     }
   </header>
-  <cdk-virtual-scroll-viewport itemSize="30" class="flex-1">
-    <div
-      *cdkVirtualFor="let track of library.tracks(); let i = index; trackBy: trackById"
-      (click)="onRowClick(i, track, $event)"
-      (keydown.enter)="play(track)"
-      (dblclick)="play(track)"
-      (contextmenu)="onRowContextMenu(track, $event)"
-      [class]="rowClass(track)"
-      [attr.title]="rowTitle(track)"
-      [attr.data-missing]="track.missing ? '' : null"
-      role="row"
-      tabindex="0"
-    >
-      @for (col of visibleColumns(); track col.id) {
-        <span
-          [class]="
-            (col.widthClass ?? 'flex-1') +
-            ' ' +
-            (col.numeric ? 'text-right tnum' : '') +
-            ' truncate flex items-center gap-1.5 ' +
-            (col.id === 'title'
-              ? isCurrent(track)
-                ? 'text-accent'
-                : 'text-text-primary'
-              : 'text-text-secondary')
-          "
-        >
-          @if (col.id === 'title' && track.missing) {
-            <span aria-label="File not found" class="text-caption2 leading-none text-accent"
-              >⚠</span
-            >
-          } @else if (col.id === 'title' && isCurrent(track)) {
-            <span aria-hidden="true" class="text-caption2 leading-none text-accent">♫</span>
+  @if (library.tracks().length === 0 && library.loading()) {
+    <!-- Skeleton rows matching the real row height so the list does not
+         jump when data lands. -->
+    <div class="flex-1 overflow-hidden" aria-busy="true" aria-live="polite">
+      @for (n of skeletonRows; track n) {
+        <div class="flex h-[30px] items-center gap-3 px-4">
+          <span class="h-2.5 w-1/4 rounded bg-bg-elevated"></span>
+          <span class="h-2.5 w-1/6 rounded bg-bg-elevated"></span>
+          <span class="h-2.5 w-1/5 rounded bg-bg-elevated"></span>
+        </div>
+      }
+      <span class="sr-only">Loading tracks…</span>
+    </div>
+  } @else if (library.tracks().length === 0) {
+    <div class="flex flex-1 flex-col items-center justify-center gap-2 text-center">
+      @if (library.hasActiveFilters()) {
+        <p class="text-body text-text-secondary">
+          @if (library.search().length > 0) {
+            Nothing matches “<span class="text-text-primary">{{ library.search() }}</span
+            >”.
+          } @else {
+            Nothing matches the current filters.
           }
-          <span class="truncate">{{ col.format(track) }}</span>
-        </span>
+        </p>
+        <p class="text-caption text-text-muted">
+          Try a different title, artist, or album — or clear the search and column browser.
+        </p>
+      } @else if (library.activePlaylistId() !== null) {
+        <p class="text-body text-text-secondary">This playlist is empty.</p>
+        <p class="text-caption text-text-muted">
+          Add songs from the library, or edit its rules if it is a smart playlist.
+        </p>
+      } @else {
+        <p class="text-body text-text-secondary">This library is empty.</p>
+        <p class="text-caption text-text-muted">
+          Add files or import an iTunes library from the File menu.
+        </p>
       }
     </div>
-  </cdk-virtual-scroll-viewport>
+  } @else {
+    <cdk-virtual-scroll-viewport itemSize="30" class="flex-1" aria-busy="false">
+      <div
+        *cdkVirtualFor="let track of library.tracks(); let i = index; trackBy: trackById"
+        (click)="onRowClick(i, track, $event)"
+        (keydown.enter)="play(track)"
+        (dblclick)="play(track)"
+        (contextmenu)="onRowContextMenu(track, $event)"
+        [class]="rowClass(track)"
+        [attr.title]="rowTitle(track)"
+        [attr.data-missing]="track.missing ? '' : null"
+        role="row"
+        tabindex="0"
+      >
+        @for (col of visibleColumns(); track col.id) {
+          <span
+            [class]="
+              (col.widthClass ?? 'flex-1') +
+              ' ' +
+              (col.numeric ? 'text-right tnum' : '') +
+              ' truncate flex items-center gap-1.5 ' +
+              (col.id === 'title'
+                ? isCurrent(track)
+                  ? 'text-accent-text'
+                  : 'text-text-primary'
+                : 'text-text-secondary')
+            "
+          >
+            @if (col.id === 'title' && track.missing) {
+              <!-- The icon is decorative; the name lives in an sr-only
+                   span because FontAwesome renders the SVG aria-hidden and
+                   drops a `title` passed to the host. -->
+              <fa-icon
+                [icon]="faTriangleExclamation"
+                aria-hidden="true"
+                class="text-caption2 leading-none text-accent-text"
+              />
+              <span class="sr-only">File not found</span>
+            } @else if (col.id === 'title' && isCurrent(track)) {
+              <span aria-hidden="true" class="text-caption2 leading-none text-accent-text">♫</span>
+            }
+            <span class="truncate">{{ col.format(track) }}</span>
+          </span>
+        }
+      </div>
+    </cdk-virtual-scroll-viewport>
+  }
 </div>

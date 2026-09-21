@@ -1,4 +1,11 @@
-<div class="flex h-screen flex-col" [class.frameless]="win.hairline()">
+<!-- While a modal owns the screen, the shell is inert so screen readers and
+     Tab cannot reach the sidebar/list behind it. The sheets and the context
+     menu are siblings, so they stay live. -->
+<div
+  class="flex h-[100dvh] flex-col"
+  [class.frameless]="win.hairline()"
+  [inert]="ui.anyModalOpen()"
+>
   <app-menu-bar />
   <app-transport-bar />
   <div class="flex flex-1 overflow-hidden">
@@ -11,6 +18,10 @@
   </div>
   <app-status-bar />
 </div>
+<!-- Overlay order: the Settings sheet sits lowest, so a wizard or dialog
+     it opens (Sync Sources -> Add iTunes library) paints above it. Equal
+     z-50 means later DOM wins. -->
+<app-settings-route />
 <app-import-wizard />
 <app-preferences-panel />
 <app-smart-playlist-editor />

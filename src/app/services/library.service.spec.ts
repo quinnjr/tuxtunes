@@ -86,6 +86,50 @@ describe('LibraryService', () => {
     expect(svc.tracks()[0].durationMs).toBe(180_000);
   });
 
+  it('refreshTracks() raises then clears the loading flag', async () => {
+    let release: (rows: unknown[]) => void = () => {};
+    const gate = new Promise<unknown[]>((resolve) => {
+      release = resolve;
+    });
+    const { svc } = build(() => gate);
+
+    const pending = svc.refreshTracks();
+    expect(svc.loading()).toBe(true);
+
+    release([RAW_TRACK]);
+    await pending;
+    expect(svc.loading()).toBe(false);
+  });
+
+  it('refreshTracks() clears the loading flag even when the query rejects', async () => {
+    const { svc } = build(() => Promise.reject(new Error('boom')));
+    await expect(svc.refreshTracks()).rejects.toThrow('boom');
+    expect(svc.loading()).toBe(false);
+  });
+
+  it('keeps loading true until every overlapping refresh has settled', async () => {
+    const gates: ((rows: unknown[]) => void)[] = [];
+    const { svc } = build(
+      () =>
+        new Promise<unknown[]>((resolve) => {
+          gates.push(resolve);
+        }),
+    );
+
+    const first = svc.refreshTracks();
+    const second = svc.refreshTracks();
+    expect(svc.loading()).toBe(true);
+
+    gates[0]([]);
+    await first;
+    // The second is still in flight — the flag must not have cleared yet.
+    expect(svc.loading()).toBe(true);
+
+    gates[1]([]);
+    await second;
+    expect(svc.loading()).toBe(false);
+  });
+
   it('setSearch() trims input and writes to filters.search', () => {
     const { svc } = build(async () => {});
     svc.setSearch('  hello  ');

@@ -424,15 +424,15 @@ describe('PlaylistAlbumPickerComponent', () => {
     playback.currentTrackId.set(2);
     fixture.detectChanges();
     const rows = el.querySelectorAll('[data-tracks-for] li');
-    expect(rows[0].classList.contains('text-accent')).toBe(false);
+    expect(rows[0].classList.contains('text-accent-text')).toBe(false);
     expect(rows[0].getAttribute('aria-current')).toBeNull();
-    expect(rows[1].classList.contains('text-accent')).toBe(true);
+    expect(rows[1].classList.contains('text-accent-text')).toBe(true);
     expect(rows[1].getAttribute('aria-current')).toBe('true');
     expect(rows[1].textContent).toContain('♫');
     expect(rows[1].textContent).not.toMatch(/\b2\b/);
     playback.currentTrackId.set(null);
     fixture.detectChanges();
-    expect(el.querySelectorAll('[data-tracks-for] li.text-accent')).toHaveLength(0);
+    expect(el.querySelectorAll('[data-tracks-for] li.text-accent-text')).toHaveLength(0);
   });
 
   it('marks only the first copy of a duplicated track as current', () => {
@@ -441,7 +441,7 @@ describe('PlaylistAlbumPickerComponent', () => {
     playback.currentTrackId.set(7);
     fixture.detectChanges();
     expect(el.querySelectorAll('[data-tracks-for] li[aria-current="true"]')).toHaveLength(1);
-    expect(el.querySelectorAll('[data-tracks-for] li.text-accent')).toHaveLength(1);
+    expect(el.querySelectorAll('[data-tracks-for] li.text-accent-text')).toHaveLength(1);
   });
 
   it('dims a missing row with opacity so the current colour still shows', () => {
@@ -451,7 +451,7 @@ describe('PlaylistAlbumPickerComponent', () => {
     fixture.detectChanges();
     const row = el.querySelector('[data-tracks-for] li')!;
     expect(row.classList.contains('opacity-50')).toBe(true);
-    expect(row.classList.contains('text-accent')).toBe(true);
+    expect(row.classList.contains('text-accent-text')).toBe(true);
     expect(row.classList.contains('text-text-muted')).toBe(false);
   });
 

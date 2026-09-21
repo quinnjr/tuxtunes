@@ -17,6 +17,8 @@ interface NowPlayingInternals {
   onKeydown(e: KeyboardEvent): void;
   close(): void;
   coverUrl(t: TrackRow | null): string | null;
+  onCoverError(): void;
+  coverFailed: { (): boolean };
   formatTime(ms: number): string;
   drop(event: CdkDragDrop<TrackRow[]>): void;
   playFromQueue(index: number): Promise<void>;
@@ -95,6 +97,21 @@ describe('NowPlayingPanelComponent', () => {
     ui.nowPlayingOpen.set(true);
     cmp.close();
     expect(ui.nowPlayingOpen()).toBe(false);
+  });
+
+  it('clears the cover-failed flag when the track changes', () => {
+    const { fixture, cmp, library, playback } = setup();
+    library.tracks.set([TRACK(1, { artworkPath: '/a.jpg' }), TRACK(2, { artworkPath: '/b.jpg' })]);
+    playback.currentTrackId.set(1);
+    fixture.detectChanges();
+
+    cmp.onCoverError();
+    expect(cmp.coverFailed()).toBe(true);
+
+    // Switching tracks must give the new cover a chance to render.
+    playback.currentTrackId.set(2);
+    fixture.detectChanges();
+    expect(cmp.coverFailed()).toBe(false);
   });
 
   it('Q toggles the panel; modifier keys are ignored', () => {

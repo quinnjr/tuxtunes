@@ -13,6 +13,7 @@ import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view
 import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
 import { PlaylistAlbumPickerComponent } from '../playlist-album-picker/playlist-album-picker.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
+import { RovingFocusDirective } from '../../directives/roving-focus.directive';
 
 @Component({
   selector: 'app-main-content',
@@ -22,6 +23,7 @@ import { TrackListViewComponent } from '../track-list-view/track-list-view.compo
     ColumnBrowserComponent,
     PlaylistAlbumPickerComponent,
     TrackListViewComponent,
+    RovingFocusDirective,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './main-content.component.html',

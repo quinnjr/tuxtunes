@@ -169,4 +169,15 @@ describe('ImportWizardComponent', () => {
     expect(cmp.filePath()).toBe('/before');
     expect(ui.lastError()).toContain('dialog closed');
   });
+
+  it('Escape closes the sheet and resets the step', () => {
+    const { fixture, ui } = setup();
+    ui.importWizardOpen.set(true);
+    fixture.detectChanges();
+    const sheet = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>(
+      '[appmodalsheet]',
+    )!;
+    sheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(ui.importWizardOpen()).toBe(false);
+  });
 });

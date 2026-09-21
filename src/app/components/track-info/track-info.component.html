@@ -2,11 +2,16 @@
   <div class="mac-sheet-backdrop fixed inset-0 z-50 flex items-center justify-center">
     <form
       class="mac-sheet flex max-h-[90vh] w-[440px] flex-col gap-3 overflow-auto p-5"
+      appModalSheet
+      aria-labelledby="track-info-title"
+      (appModalSheetEscape)="cancel()"
       (submit)="save($event)"
       (keydown)="onKeydown($event)"
     >
       <header class="hairline-b flex items-baseline justify-between pb-2">
-        <h2 class="text-headline font-semibold text-text-primary">Track Info</h2>
+        <h2 id="track-info-title" class="text-headline font-semibold text-text-primary">
+          Track Info
+        </h2>
         <span class="max-w-[240px] truncate text-caption text-text-muted">{{
           track.filePath
         }}</span>

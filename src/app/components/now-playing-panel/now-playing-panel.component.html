@@ -16,7 +16,8 @@
               [src]="src"
               alt=""
               class="h-full w-full object-cover"
-              onerror="this.style.display = 'none'"
+              [style.display]="coverFailed() ? 'none' : null"
+              (error)="onCoverError()"
             />
           }
         </div>
@@ -43,14 +44,14 @@
           <button
             type="button"
             (click)="advance()"
-            class="text-body text-accent hover:text-accent-hover"
+            class="text-body text-accent-text hover:text-accent-text-hover"
           >
             Play next
           </button>
           <button
             type="button"
             (click)="clear()"
-            class="text-body text-text-muted hover:text-accent"
+            class="text-body text-text-muted hover:text-accent-text"
           >
             Clear
           </button>
@@ -83,7 +84,7 @@
               type="button"
               (click)="remove(i)"
               aria-label="Remove from queue"
-              class="mac-btn h-6 w-6 text-text-muted hover:text-accent"
+              class="mac-btn h-6 w-6 text-text-muted hover:text-accent-text"
             >
               ✕
             </button>
