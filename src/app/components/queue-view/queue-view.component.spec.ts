@@ -1,0 +1,141 @@
+import { TestBed } from '@angular/core/testing';
+import { describe, expect, it } from 'vitest';
+import { LibraryService } from '../../services/library.service';
+import { PlaybackService, TrackRow } from '../../services/playback.service';
+import { UiService } from '../../services/ui.service';
+import { appProviders, tauriStub } from '../../test-helpers';
+import { QueueViewComponent } from './queue-view.component';
+
+function track(over: Partial<TrackRow> = {}): TrackRow {
+  return {
+    id: 1,
+    title: 'Song',
+    artist: 'Artist',
+    album: 'Album',
+    albumArtist: null,
+    genre: null,
+    year: null,
+    trackNumber: null,
+    discNumber: null,
+    durationMs: 180_000,
+    filePath: '/music/song.flac',
+    sampleRate: null,
+    bitDepth: null,
+    kind: null,
+    playCount: 0,
+    skipCount: 0,
+    missing: false,
+    artworkPath: null,
+    rating: 0,
+    albumRating: 0,
+    dateAdded: null,
+    ...over,
+  };
+}
+
+function setup() {
+  const stub = tauriStub();
+  TestBed.configureTestingModule({
+    imports: [QueueViewComponent],
+    providers: appProviders(stub),
+  });
+  const fixture = TestBed.createComponent(QueueViewComponent);
+  fixture.detectChanges();
+  return {
+    fixture,
+    playback: TestBed.inject(PlaybackService),
+    library: TestBed.inject(LibraryService),
+    ui: TestBed.inject(UiService),
+    stub,
+  };
+}
+
+describe('QueueViewComponent', () => {
+  it('shows an empty state explaining how to load songs', () => {
+    const { fixture } = setup();
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Queue is empty');
+  });
+
+  it('renders queued tracks from the live playback queue', () => {
+    const { fixture, playback } = setup();
+    playback.enqueueAll([track({ id: 1, title: 'A' }), track({ id: 2, title: 'B' })]);
+    fixture.detectChanges();
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('A');
+    expect(text).toContain('B');
+  });
+
+  it('Save as Playlist prompts for a name and creates a playlist from queue ids', async () => {
+    const { fixture, playback, ui, stub } = setup();
+    playback.enqueueAll([track({ id: 7, title: 'A' }), track({ id: 9, title: 'B' })]);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('[data-testid="save-queue"]')!.click();
+    expect(ui.namePrompt()?.title).toBe('Save Queue as Playlist');
+    stub.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === 'create_playlist') return 42;
+      if (cmd === 'list_playlists') return [];
+      const { defaultInvoke } = await import('../../test-helpers');
+      return defaultInvoke(cmd);
+    });
+    await ui.namePrompt()!.onSubmit('Roadtrip');
+    expect(stub.invoke).toHaveBeenCalledWith('create_playlist', {
+      name: 'Roadtrip',
+      parentId: null,
+    });
+    expect(stub.invoke).toHaveBeenCalledWith('add_tracks_to_playlist', {
+      playlistId: 42,
+      trackIds: [7, 9],
+    });
+  });
+
+  it('Clear empties the live queue', () => {
+    const { fixture, playback } = setup();
+    playback.enqueueAll([track({ id: 1 })]);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('[data-testid="clear-queue"]')!.click();
+    expect(playback.queue()).toHaveLength(0);
+  });
+
+  it('removing a row drops only that track from the live queue', () => {
+    const { fixture, playback } = setup();
+    playback.enqueueAll([track({ id: 1, title: 'A' }), track({ id: 2, title: 'B' })]);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('[aria-label="Remove from queue"]')!.click();
+    expect(playback.queue().map((t) => t.id)).toEqual([2]);
+  });
+
+  it('move down reorders the live queue', () => {
+    const { fixture, playback } = setup();
+    playback.enqueueAll([track({ id: 1, title: 'A' }), track({ id: 2, title: 'B' })]);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('[aria-label="Move down"]')!.click();
+    expect(playback.queue().map((t) => t.id)).toEqual([2, 1]);
+  });
+
+  it('Enter on a row plays that track', async () => {
+    const { fixture, playback, stub } = setup();
+    playback.enqueueAll([track({ id: 4, title: 'A' })]);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLElement>('[data-queue-row]')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await Promise.resolve();
+    expect(stub.invoke).toHaveBeenCalledWith('play_track', { trackId: 4 });
+  });
+
+  it('missing rows are dimmed with a tooltip, not color alone', () => {
+    const { fixture, playback } = setup();
+    playback.enqueueAll([track({ id: 1, title: 'Gone', missing: true })]);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const row = el.querySelector('[data-queue-row]')!;
+    expect(row.className).toContain('opacity-50');
+    expect(row.getAttribute('title')).toContain('File not found');
+  });
+});

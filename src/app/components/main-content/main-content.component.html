@@ -137,6 +137,8 @@
            list mounted instead of destroying and re-fetching it. -->
       @if (showPicker()) {
         <app-playlist-album-picker class="block h-full" />
+      } @else if (showQueue()) {
+        <app-queue-view class="block h-full" />
       } @else if (showTrackList()) {
         <app-track-list-view class="block h-full" />
       } @else {

@@ -416,9 +416,22 @@ describe('SidebarComponent', () => {
   it('renders the All Songs / Artists / Albums / Genres buttons', () => {
     const { fixture } = setup();
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    for (const label of ['All Songs', 'Artists', 'Albums', 'Genres']) {
+    for (const label of ['All Songs', 'Artists', 'Albums', 'Genres', 'Queue']) {
       expect(text).toContain(label);
     }
+  });
+
+  it('setView("queue") leaves the playlist, closes the browser and activates Queue', async () => {
+    const { fixture, cmp, ui, library } = setup();
+    await settle(fixture);
+    library.activePlaylistId.set(6);
+    ui.columnBrowserOpen.set(true);
+    cmp.setView('queue');
+    expect(library.activePlaylistId()).toBeNull();
+    expect(ui.libraryView()).toBe('queue');
+    expect(ui.columnBrowserOpen()).toBe(false);
+    expect(cmp.isActive('queue')).toBe(true);
+    expect(cmp.isActive('tracks')).toBe(false);
   });
 });
 

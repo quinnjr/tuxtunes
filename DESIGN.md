@@ -137,6 +137,16 @@ All custom; no shadcn/component library. Canonical classes in `styles.css`:
   album so it is never
   an empty well; track rows are focusable (`tabindex`, Enter plays) so the
   global `:focus-visible` ring reaches them.
+- Queue view (`app-queue-view`, sidebar Library → Queue) — the live
+  playback queue as a dense `h-[30px]` `divide-y`-style list (position,
+  title, artist, time), mirroring the track list: missing rows dim
+  (`opacity-50` + "File not found" tooltip, never color alone), the
+  current track gets `♫` + `text-accent-text`, rows are focusable
+  (`tabindex`, Enter/double-click plays). Reorder/remove controls stay
+  hidden until row hover or focus-within (transport-bar precedent);
+  Save as Playlist… is the `bg-accent-strong` primary. Empty state is
+  two-tier and names the entry point (right-click → Add to queue) and
+  the mirror (Up Next in Now Playing).
 - Icons: FontAwesome (`@fortawesome/*`) for semantic glyphs;
   typographic marks (`♫ ✓ ▲▼ → × ⤢ ⚙`) stay as type, not icons
 
@@ -196,3 +206,7 @@ selection now drives a 340px inspector while the grid stays put
 set). Track rows gained keyboard access (`tabindex` + Enter). Play and
 queue actions re-resolve the album and no-op if it regrouped away; the
 selection resets when a different playlist opens.
+2026-09-21 — added the sidebar Queue view over the live playback queue:
+dense 30px rows, hover/focus-within row controls, Enter-to-play and
+missing-row treatment mirrored from the track list, `bg-accent-strong`
+Save-as-Playlist primary.

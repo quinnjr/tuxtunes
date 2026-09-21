@@ -12,6 +12,7 @@ import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.compo
 import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
 import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
 import { PlaylistAlbumPickerComponent } from '../playlist-album-picker/playlist-album-picker.component';
+import { QueueViewComponent } from '../queue-view/queue-view.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
 import { RovingFocusDirective } from '../../directives/roving-focus.directive';
 
@@ -22,6 +23,7 @@ import { RovingFocusDirective } from '../../directives/roving-focus.directive';
     ArtistSplitViewComponent,
     ColumnBrowserComponent,
     PlaylistAlbumPickerComponent,
+    QueueViewComponent,
     TrackListViewComponent,
     RovingFocusDirective,
   ],
@@ -50,6 +52,9 @@ export class MainContentComponent implements OnDestroy {
   /** The flat list: a playlist's "songs" view or the library's "tracks" view. */
   protected readonly showTrackList = computed(this.#computeShowTrackList.bind(this));
 
+  /** The live playback queue, browsed from the sidebar's Queue row. */
+  protected readonly showQueue = computed(this.#computeShowQueue.bind(this));
+
   #computeShowPicker(): boolean {
     return this.library.activePlaylistId() !== null && this.ui.playlistView() === 'albums';
   }
@@ -57,6 +62,10 @@ export class MainContentComponent implements OnDestroy {
   #computeShowTrackList(): boolean {
     if (this.library.activePlaylistId() !== null) return this.ui.playlistView() === 'songs';
     return this.viewMode() === 'tracks';
+  }
+
+  #computeShowQueue(): boolean {
+    return this.library.activePlaylistId() === null && this.viewMode() === 'queue';
   }
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -82,6 +91,7 @@ export class MainContentComponent implements OnDestroy {
     const hadPlaylist = this.library.activePlaylistId() !== null;
     this.library.activePlaylistId.set(null);
     this.ui.libraryView.set(mode);
+    if (mode === 'queue') this.ui.columnBrowserOpen.set(false);
     if (hadPlaylist && mode === 'tracks') void this.ui.guard(this.library.refreshTracks());
   }
 

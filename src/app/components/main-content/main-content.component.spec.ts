@@ -43,6 +43,18 @@ describe('MainContentComponent', () => {
     expect(ui.libraryView()).toBe('albums');
   });
 
+  it('setMode("queue") closes the column browser and renders the queue view', () => {
+    const { fixture, cmp, ui } = setup();
+    ui.columnBrowserOpen.set(true);
+    cmp.setMode('queue');
+    expect(ui.libraryView()).toBe('queue');
+    expect(ui.columnBrowserOpen()).toBe(false);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('app-queue-view')).not.toBeNull();
+    expect(el.querySelector('app-track-list-view')).toBeNull();
+  });
+
   it('toggleBrowser flips columnBrowserOpen', () => {
     const { cmp, ui } = setup();
     expect(ui.columnBrowserOpen()).toBe(false);

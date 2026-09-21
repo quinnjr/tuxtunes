@@ -2,7 +2,7 @@ import { Injectable, computed, signal } from '@angular/core';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { toErrorMessage } from '../utils/errors';
 
-export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'device';
+export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'queue' | 'device';
 
 /**
  * How an open playlist is presented: `albums` is the per-album picker
