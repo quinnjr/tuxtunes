@@ -1,4 +1,11 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  effect,
+  inject,
+  signal,
+} from '@angular/core';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { InViewDirective } from '../../directives/in-view.directive';
 import { ContextMenuItem, ContextMenuService } from '../../services/context-menu.service';
@@ -157,10 +164,12 @@ function sortByDiscAndTrack(tracks: TrackRow[]): TrackRow[] {
 }
 
 /**
- * The per-album presentation of an open playlist: artwork cards that
- * drop down into the album's tracks, so a long playlist is browsed by
- * record rather than as one flat list. Several cards may be open at
- * once — the point is picking songs across albums.
+ * The per-album presentation of an open playlist: a stable artwork grid
+ * beside an inspector showing the selected album's tracks, so a long
+ * playlist is browsed by record rather than as one flat list. The grid
+ * never reflows on selection — single-click selects (double-click
+ * plays) — and the inspector falls back to the first album, so the
+ * track list is never an empty well.
  */
 @Component({
   selector: 'app-playlist-album-picker',
@@ -177,7 +186,29 @@ export class PlaylistAlbumPickerComponent {
 
   protected readonly albums = computed(this.#computeAlbums.bind(this));
 
-  protected readonly expanded = signal<ReadonlySet<string>>(new Set());
+  /** Explicit selection; null until the first click. */
+  protected readonly selectedKey = signal<string | null>(null);
+
+  constructor() {
+    // A newly opened playlist starts on its first album: without this,
+    // a shared `artist\nalbum` key would keep the previous playlist's
+    // selection instead. Re-sorts and searches keep theirs — they leave
+    // the playlist id untouched and the fallback covers removed albums.
+    effect(() => {
+      this.library.activePlaylistId();
+      this.selectedKey.set(null);
+    });
+  }
+
+  /**
+   * The album in the inspector. Falls back to the first card so opening
+   * a playlist shows tracks immediately; a stale key (after a search or
+   * re-sort removes the album) resolves the same way instead of
+   * blanking the pane.
+   */
+  protected readonly selectedAlbum = computed<PlaylistAlbum | null>(
+    this.#computeSelectedAlbum.bind(this),
+  );
 
   /** Albums whose artwork was probed this session; misses are remembered. */
   private readonly artworkAttempted = new Set<string>();
@@ -190,6 +221,12 @@ export class PlaylistAlbumPickerComponent {
     return sortAlbums(groupByAlbum(this.library.tracks()), this.ui.playlistAlbumSort());
   }
 
+  #computeSelectedAlbum(): PlaylistAlbum | null {
+    const all = this.albums();
+    if (all.length === 0) return null;
+    return all.find((a) => a.key === this.selectedKey()) ?? all[0];
+  }
+
   protected rating(a: PlaylistAlbum): string {
     return formatRating(a.rating);
   }
@@ -198,17 +235,13 @@ export class PlaylistAlbumPickerComponent {
     return a.key;
   }
 
-  protected isExpanded(a: PlaylistAlbum): boolean {
-    return this.expanded().has(a.key);
+  protected isSelected(a: PlaylistAlbum): boolean {
+    return this.selectedAlbum()?.key === a.key;
   }
 
-  protected toggle(a: PlaylistAlbum): void {
-    this.expanded.update((set) => {
-      const next = new Set(set);
-      if (next.has(a.key)) next.delete(a.key);
-      else next.add(a.key);
-      return next;
-    });
+  /** Single-click selects; double-click (in the template) plays. */
+  protected select(a: PlaylistAlbum): void {
+    this.selectedKey.set(a.key);
   }
 
   /**
@@ -280,8 +313,11 @@ export class PlaylistAlbumPickerComponent {
    */
   protected async playFrom(a: PlaylistAlbum, t: TrackRow): Promise<void> {
     // The menu closure may hold a snapshot; the card can have been
-    // regrouped since it opened.
-    const album = this.albums().find((x) => x.key === a.key) ?? a;
+    // regrouped since it opened. A miss (the album regrouped away
+    // entirely, e.g. a narrowing search while its menu stood open)
+    // no-ops — playing a removed row is never what the click meant.
+    const album = this.#freshAlbum(a);
+    if (album === null) return;
     let start = album.tracks.indexOf(t);
     if (start === -1) start = album.tracks.findIndex((x) => x.id === t.id);
     if (start === -1) return;
@@ -297,11 +333,34 @@ export class PlaylistAlbumPickerComponent {
     await this.playFrom(a, a.tracks[0]);
   }
 
+  /**
+   * Re-read the card so an action opened before a refresh never queues
+   * removed rows. A miss (the album regrouped away entirely, e.g. a
+   * search narrowing the list while its menu stood open) resolves to
+   * null and the caller no-ops — queuing the stale snapshot would put
+   * rows the user just removed back into the queue.
+   */
+  #freshAlbum(a: PlaylistAlbum): PlaylistAlbum | null {
+    return this.albums().find((x) => x.key === a.key) ?? null;
+  }
+
+  protected queueAlbum(a: PlaylistAlbum): void {
+    const album = this.#freshAlbum(a);
+    if (album === null) return;
+    this.playback.enqueueAll(album.tracks);
+  }
+
+  protected playNextAlbum(a: PlaylistAlbum): void {
+    const album = this.#freshAlbum(a);
+    if (album === null) return;
+    this.playback.playNextAll(album.tracks);
+  }
+
   protected onAlbumContextMenu(a: PlaylistAlbum, event: MouseEvent): void {
     this.ctx.show(event, [
       { label: `Play album (${a.tracks.length})`, action: () => this.playAlbum(a) },
-      { label: 'Add album to queue', action: () => this.playback.enqueueAll(a.tracks) },
-      { label: 'Play album next', action: () => this.playback.playNextAll(a.tracks) },
+      { label: 'Add album to queue', action: () => this.queueAlbum(a) },
+      { label: 'Play album next', action: () => this.playNextAlbum(a) },
     ]);
   }
 
