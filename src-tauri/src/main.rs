@@ -1,6 +1,15 @@
+// Note: with `windows_subsystem` the release Windows process has no
+// console, so `--help` / `--version` output has nowhere visible to go
+// there. Linux, macOS, and dev builds are unaffected.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use clap::Parser;
+
 fn main() {
+    // Contract documented on `gui_args::GuiArgs`: --help/--version exit
+    // here via clap; positionals are accepted for `%U` and ignored.
+    let _ = tuxtunes::gui_args::GuiArgs::parse();
+
     // WebKitGTK's DMA-BUF renderer crashes the whole app with a Wayland
     // "Error 71 (Protocol error)" on NVIDIA proprietary drivers. Disable
     // it before the webview initializes unless the user has already made
