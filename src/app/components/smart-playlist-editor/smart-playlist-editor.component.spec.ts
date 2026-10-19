@@ -399,4 +399,15 @@ describe('SmartPlaylistEditorComponent', () => {
     fixture.detectChanges();
     expect(ui.smartEditor()).toBe(null);
   });
+
+  it('suppresses selection on the sheet chrome but not its fields', async () => {
+    const { fixture, ui } = setup();
+    ui.smartEditor.set({ playlistId: null });
+    fixture.detectChanges();
+    await settle(fixture);
+    const sheet = (fixture.nativeElement as HTMLElement).querySelector('.mac-sheet');
+    expect(sheet).not.toBeNull();
+    expect(sheet?.classList.contains('mac-select-none')).toBe(true);
+    expect(sheet?.querySelector('input')).not.toBeNull();
+  });
 });

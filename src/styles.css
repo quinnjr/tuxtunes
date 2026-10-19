@@ -148,6 +148,23 @@ input[type='range'] {
     border-right: 1px solid var(--color-border);
   }
 
+  /* Playlist and queue surfaces suppress text selection so a double-click
+     that activates an album, track, or playlist does not leave a
+     highlighted smear behind. Tailwind's `select-none` can't express this
+     because the editable fields nested inside must opt back in, so
+     double-clicking a word in a field still selects it. */
+  .mac-select-none {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .mac-select-none input,
+  .mac-select-none textarea,
+  .mac-select-none [contenteditable]:read-write {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
   /* Toolbar chrome. The material is translucent so content scrolling
      underneath tints it; the gradient is a top-light so faint it reads
      as a bevel rather than a gradient. Anything stronger and the app

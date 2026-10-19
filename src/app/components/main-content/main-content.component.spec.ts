@@ -152,6 +152,19 @@ describe('MainContentComponent', () => {
       expect(labels).toEqual(['albums', 'songs']);
     });
 
+    it('suppresses selection on the playlist header without blocking its search field', () => {
+      const { fixture, library } = setup();
+      const el = fixture.nativeElement as HTMLElement;
+      const header = el.querySelector('[data-testid="main-header"]');
+      expect(header).not.toBeNull();
+      expect(header?.classList.contains('mac-select-none')).toBe(false);
+
+      openPlaylist(library);
+      fixture.detectChanges();
+      expect(header?.classList.contains('mac-select-none')).toBe(true);
+      expect(header?.querySelector('input[type="search"]')).not.toBeNull();
+    });
+
     it('shows the album picker by default and the flat list on "songs"', () => {
       const { fixture, library, cmp, ui } = setup();
       openPlaylist(library);

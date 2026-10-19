@@ -1104,3 +1104,15 @@ describe('TrackListViewComponent', () => {
     });
   });
 });
+
+describe('TrackListViewComponent text selection', () => {
+  it('suppresses selection only while a playlist is open', () => {
+    const { fixture, library } = setup();
+    const root = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="track-list"]');
+    expect(root?.classList.contains('mac-select-none')).toBe(false);
+
+    library.activePlaylistId.set(9);
+    fixture.detectChanges();
+    expect(root?.classList.contains('mac-select-none')).toBe(true);
+  });
+});

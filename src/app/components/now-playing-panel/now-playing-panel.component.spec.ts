@@ -1,16 +1,14 @@
 import type { CdkDragDrop } from '@angular/cdk/drag-drop';
 import { TestBed } from '@angular/core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LibraryService } from '../../services/library.service';
 import { PlaybackService, type TrackRow } from '../../services/playback.service';
 import { UiService } from '../../services/ui.service';
-import { appProviders, tauriStub } from '../../test-helpers';
+import { appProviders, installTauriBridge, removeTauriBridge, tauriStub } from '../../test-helpers';
 import { NowPlayingPanelComponent } from './now-playing-panel.component';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  convertFileSrc: (p: string) => `asset://${p}`,
-  invoke: vi.fn(async () => undefined),
-}));
+beforeEach(() => installTauriBridge());
+afterEach(removeTauriBridge);
 
 interface NowPlayingInternals {
   currentTrack: { (): TrackRow | null };
@@ -192,5 +190,16 @@ describe('NowPlayingPanelComponent', () => {
     expect(adv).toHaveBeenCalled();
     expect(rem).toHaveBeenCalledWith(2);
     expect(clr).toHaveBeenCalled();
+  });
+
+  it('suppresses text selection on the up-next queue', () => {
+    const { fixture, playback, ui } = setup();
+    ui.nowPlayingOpen.set(true);
+    playback.queue.set([TRACK(1), TRACK(2)]);
+    fixture.detectChanges();
+    const list = (fixture.nativeElement as HTMLElement).querySelector('ul.mac-select-none');
+    expect(list).not.toBeNull();
+    expect(list?.textContent).toContain('T1');
+    expect(list?.textContent).toContain('T2');
   });
 });

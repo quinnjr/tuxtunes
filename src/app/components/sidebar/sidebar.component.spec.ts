@@ -607,3 +607,19 @@ describe('SidebarComponent devices section', () => {
     expect(stub.invoke).toHaveBeenCalledWith('refresh_devices');
   });
 });
+
+describe('SidebarComponent text selection', () => {
+  it('suppresses selection in the playlists area but not the library nav', async () => {
+    const { fixture } = setup([pl({ id: 1, name: 'Mix' })]);
+    await settle(fixture);
+    const el = fixture.nativeElement as HTMLElement;
+
+    const tree = el.querySelector('[role="tree"]');
+    expect(tree).not.toBeNull();
+    expect(tree?.closest('.mac-select-none')).not.toBeNull();
+
+    const queue = el.querySelector('[data-testid="sidebar-queue"]');
+    expect(queue).not.toBeNull();
+    expect(queue?.closest('.mac-select-none')).toBeNull();
+  });
+});

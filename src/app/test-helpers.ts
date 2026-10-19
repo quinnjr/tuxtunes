@@ -58,6 +58,37 @@ export const defaultInvoke = async (cmd: string): Promise<unknown> => {
   return undefined;
 };
 
+export interface TauriBridge {
+  convertFileSrc: (path: string, protocol?: string) => string;
+  invoke: ReturnType<typeof vi.fn>;
+  transformCallback: ReturnType<typeof vi.fn>;
+}
+
+/**
+ * Install the webview bridge `@tauri-apps/api` reads at call time.
+ *
+ * Specs that render a component importing `convertFileSrc` directly used
+ * `vi.mock('@tauri-apps/api/core')` for this, but module mocks share a
+ * registry and can leak into `tauri.service.spec`, which deliberately drives
+ * the real service and installs its own bridge. Stubbing the bridge keeps
+ * those two approaches from racing.
+ */
+export function installTauriBridge(
+  convertFileSrc: (path: string) => string = (path) => `asset://${path}`,
+): TauriBridge {
+  const bridge: TauriBridge = {
+    convertFileSrc: (path) => convertFileSrc(path),
+    invoke: vi.fn(async () => undefined),
+    transformCallback: vi.fn(() => 0),
+  };
+  (globalThis as { __TAURI_INTERNALS__?: TauriBridge }).__TAURI_INTERNALS__ = bridge;
+  return bridge;
+}
+
+export function removeTauriBridge(): void {
+  delete (globalThis as { __TAURI_INTERNALS__?: TauriBridge }).__TAURI_INTERNALS__;
+}
+
 export function tauriStub(
   invokeImpl: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> = defaultInvoke,
 ): TauriStub {
