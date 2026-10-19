@@ -193,4 +193,15 @@ describe('NowPlayingPanelComponent', () => {
     expect(rem).toHaveBeenCalledWith(2);
     expect(clr).toHaveBeenCalled();
   });
+
+  it('suppresses text selection on the up-next queue', () => {
+    const { fixture, playback, ui } = setup();
+    ui.nowPlayingOpen.set(true);
+    playback.queue.set([TRACK(1), TRACK(2)]);
+    fixture.detectChanges();
+    const list = (fixture.nativeElement as HTMLElement).querySelector('ul.mac-select-none');
+    expect(list).not.toBeNull();
+    expect(list?.textContent).toContain('T1');
+    expect(list?.textContent).toContain('T2');
+  });
 });

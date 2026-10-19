@@ -1,4 +1,7 @@
-<div class="flex h-full flex-col overflow-hidden bg-bg-primary lg:flex-row">
+<div
+  class="mac-select-none flex h-full flex-col overflow-hidden bg-bg-primary lg:flex-row"
+  data-testid="playlist-picker"
+>
   @if (albums().length === 0) {
     <div class="flex h-full flex-1 items-center justify-center text-text-muted">
       @if (library.search().trim() !== '') {

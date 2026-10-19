@@ -854,3 +854,11 @@ describe('PlaylistAlbumPickerComponent', () => {
     expect(remove).toHaveBeenCalledWith(3, [9]);
   });
 });
+
+describe('PlaylistAlbumPickerComponent text selection', () => {
+  it('suppresses selection on the picker chrome', () => {
+    const { el } = setup([TRACK(1)]);
+    const root = el.querySelector('[data-testid="playlist-picker"]');
+    expect(root?.classList.contains('mac-select-none')).toBe(true);
+  });
+});

@@ -249,7 +249,7 @@ export class SidebarComponent implements OnInit {
    * library view leaves the active playlist.
    */
   protected setView(view: LibraryView): void {
-    const hadPlaylist = this.library.activePlaylistId() !== null;
+    const hadPlaylist = this.library.hasActivePlaylist();
     this.library.activePlaylistId.set(null);
     if (view === 'genres') {
       this.ui.libraryView.set('tracks');
@@ -267,7 +267,7 @@ export class SidebarComponent implements OnInit {
   }
 
   protected isActive(view: LibraryView): boolean {
-    if (this.library.activePlaylistId() !== null) return false;
+    if (this.library.hasActivePlaylist()) return false;
     if (view === 'genres') {
       return this.ui.libraryView() === 'tracks' && this.ui.columnBrowserOpen();
     }

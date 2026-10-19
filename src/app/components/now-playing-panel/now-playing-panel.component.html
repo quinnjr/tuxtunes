@@ -58,7 +58,11 @@
         }
       </div>
     </div>
-    <ul cdkDropList (cdkDropListDropped)="drop($event)" class="flex-1 overflow-y-auto">
+    <ul
+      cdkDropList
+      (cdkDropListDropped)="drop($event)"
+      class="mac-select-none flex-1 overflow-y-auto"
+    >
       @if (playback.queue().length === 0) {
         <li class="px-4 py-3 text-body italic text-text-muted">Queue is empty</li>
       } @else {

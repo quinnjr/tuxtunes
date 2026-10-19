@@ -270,4 +270,12 @@ describe('QueueViewComponent', () => {
     expect(row.className).toContain('opacity-50');
     expect(row.getAttribute('title')).toContain('File not found');
   });
+
+  it('suppresses text selection on the queue chrome', () => {
+    const { fixture, playback } = setup();
+    playback.enqueueAll([track({ id: 1, title: 'A' })]);
+    fixture.detectChanges();
+    const root = (fixture.nativeElement as HTMLElement).querySelector('[data-testid="queue-view"]');
+    expect(root?.classList.contains('mac-select-none')).toBe(true);
+  });
 });

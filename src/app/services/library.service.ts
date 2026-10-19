@@ -292,6 +292,13 @@ export class LibraryService implements OnDestroy {
     return this.playlists().find((p) => p.id === id) ?? null;
   }
 
+  /** Whether a playlist (rather than the library or queue) is open. */
+  readonly hasActivePlaylist = computed(this.#computeHasActivePlaylist.bind(this));
+
+  #computeHasActivePlaylist(): boolean {
+    return this.activePlaylistId() !== null;
+  }
+
   /** Active column-browser + search filters. Drives refreshTracks(). */
   readonly filters = signal<TrackFilters>({ ...EMPTY_FILTERS });
 
@@ -611,7 +618,7 @@ export class LibraryService implements OnDestroy {
       return summary;
     }
 
-    const filtered = this.activePlaylistId() !== null || this.hasActiveFilters();
+    const filtered = this.hasActivePlaylist() || this.hasActiveFilters();
     if (filtered) {
       await Promise.all([this.refreshTracks(), this.refreshStats()]);
       return summary;

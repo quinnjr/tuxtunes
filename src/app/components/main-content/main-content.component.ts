@@ -56,16 +56,16 @@ export class MainContentComponent implements OnDestroy {
   protected readonly showQueue = computed(this.#computeShowQueue.bind(this));
 
   #computeShowPicker(): boolean {
-    return this.library.activePlaylistId() !== null && this.ui.playlistView() === 'albums';
+    return this.library.hasActivePlaylist() && this.ui.playlistView() === 'albums';
   }
 
   #computeShowTrackList(): boolean {
-    if (this.library.activePlaylistId() !== null) return this.ui.playlistView() === 'songs';
+    if (this.library.hasActivePlaylist()) return this.ui.playlistView() === 'songs';
     return this.viewMode() === 'tracks';
   }
 
   #computeShowQueue(): boolean {
-    return this.library.activePlaylistId() === null && this.viewMode() === 'queue';
+    return !this.library.hasActivePlaylist() && this.viewMode() === 'queue';
   }
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -88,7 +88,7 @@ export class MainContentComponent implements OnDestroy {
    * mount and the view may already be 'tracks'.
    */
   protected setMode(mode: LibraryView): void {
-    const hadPlaylist = this.library.activePlaylistId() !== null;
+    const hadPlaylist = this.library.hasActivePlaylist();
     this.library.activePlaylistId.set(null);
     this.ui.setLibraryView(mode);
     if (hadPlaylist && (mode === 'tracks' || mode === 'queue')) {

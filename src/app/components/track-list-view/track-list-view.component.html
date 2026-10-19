@@ -1,4 +1,8 @@
-<div class="flex h-full flex-col">
+<div
+  class="flex h-full flex-col"
+  data-testid="track-list"
+  [class.mac-select-none]="library.hasActivePlaylist()"
+>
   <header
     class="hairline-b sticky top-0 z-10 flex h-7 shrink-0 items-center bg-bg-surface px-4 text-caption uppercase tracking-wide text-text-secondary"
     (contextmenu)="onHeaderContextMenu($event)"
@@ -94,7 +98,7 @@
         <p class="text-caption text-text-muted">
           Try a different title, artist, or album — or clear the search and column browser.
         </p>
-      } @else if (library.activePlaylistId() !== null) {
+      } @else if (library.hasActivePlaylist()) {
         <p class="text-body text-text-secondary">This playlist is empty.</p>
         <p class="text-caption text-text-muted">
           Add songs from the library, or edit its rules if it is a smart playlist.

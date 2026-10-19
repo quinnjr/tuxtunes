@@ -1,6 +1,10 @@
 <section class="flex h-full flex-1 flex-col bg-bg-primary">
-  <header class="mac-toolbar flex items-center gap-2 px-4 py-2">
-    @if (library.activePlaylistId() !== null) {
+  <header
+    class="mac-toolbar flex items-center gap-2 px-4 py-2"
+    data-testid="main-header"
+    [class.mac-select-none]="library.hasActivePlaylist()"
+  >
+    @if (library.hasActivePlaylist()) {
       <!-- A playlist is browsed by album or as a flat list; the
            library's tracks/albums/artists split only applies to all songs.
            Keyed on the id, like the body below, so header and content

@@ -125,6 +125,9 @@ All custom; no shadcn/component library. Canonical classes in `styles.css`:
 - `mac-btn` | `mac-sidebar-item` | `mac-segment` | `mac-segmented`
 - `mac-card` (album art) | `mac-pill-lcd` (Now Playing readout)
 - `hairline-b` / `hairline-t` / `hairline-r` | `.tnum`
+- `mac-select-none` — suppresses text selection on playlist/queue chrome
+  (double-click must not leave a highlighted smear) while nested
+  `input`/`textarea`/`[contenteditable]` stay selectable
 - `win-control` — frameless caption buttons (Linux/Windows)
 - `appModalSheet` — dialog semantics + focus trap for every sheet
 - `appRovingFocus` — the shared keyboard model for `radiogroup`/`listbox`/`menu`
