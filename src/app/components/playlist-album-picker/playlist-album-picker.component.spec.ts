@@ -1,10 +1,10 @@
 import { TestBed } from '@angular/core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ContextMenuService, type ContextMenuItem } from '../../services/context-menu.service';
 import { LibraryService, type Playlist } from '../../services/library.service';
 import { PlaybackService, type TrackRow } from '../../services/playback.service';
 import { UiService } from '../../services/ui.service';
-import { appProviders, tauriStub } from '../../test-helpers';
+import { appProviders, installTauriBridge, removeTauriBridge, tauriStub } from '../../test-helpers';
 import {
   PlaylistAlbumPickerComponent,
   UNKNOWN_ALBUM,
@@ -15,10 +15,8 @@ import {
   type PlaylistAlbum,
 } from './playlist-album-picker.component';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  convertFileSrc: (p: string) => `asset://${p}`,
-  invoke: vi.fn(async () => undefined),
-}));
+beforeEach(() => installTauriBridge());
+afterEach(removeTauriBridge);
 
 const TRACK = (id: number, overrides: Partial<TrackRow> = {}): TrackRow => ({
   id,

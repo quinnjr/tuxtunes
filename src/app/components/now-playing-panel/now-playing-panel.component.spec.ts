@@ -1,16 +1,14 @@
 import type { CdkDragDrop } from '@angular/cdk/drag-drop';
 import { TestBed } from '@angular/core/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LibraryService } from '../../services/library.service';
 import { PlaybackService, type TrackRow } from '../../services/playback.service';
 import { UiService } from '../../services/ui.service';
-import { appProviders, tauriStub } from '../../test-helpers';
+import { appProviders, installTauriBridge, removeTauriBridge, tauriStub } from '../../test-helpers';
 import { NowPlayingPanelComponent } from './now-playing-panel.component';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  convertFileSrc: (p: string) => `asset://${p}`,
-  invoke: vi.fn(async () => undefined),
-}));
+beforeEach(() => installTauriBridge());
+afterEach(removeTauriBridge);
 
 interface NowPlayingInternals {
   currentTrack: { (): TrackRow | null };
