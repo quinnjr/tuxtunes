@@ -1,0 +1,48 @@
+<section class="flex h-full flex-col gap-6 bg-bg-primary p-6">
+  <fieldset class="contents" [disabled]="!loaded()">
+    <div>
+      <h2 class="mb-1 text-body font-semibold uppercase tracking-wide text-text-muted">
+        New From Your Artists
+      </h2>
+      <p class="text-footnote text-text-muted">
+        The New Releases view lists recent albums, EPs and singles by the artists in your library.
+        Release data comes from MusicBrainz and covers from the Cover Art Archive. Each card opens
+        the release on Qobuz.
+      </p>
+    </div>
+
+    <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
+      <h3 class="text-body font-medium text-text-primary">Feed</h3>
+      <app-choice-select
+        label="Show releases from"
+        [choices]="windows"
+        [value]="draft().window_days"
+        (changed)="setWindow($event)"
+      />
+    </div>
+
+    <div class="flex flex-col gap-3 rounded-lg border border-border bg-bg-surface p-4">
+      <h3 class="text-body font-medium text-text-primary">Qobuz</h3>
+      <p class="text-footnote text-text-muted">
+        Without an app ID, a card opens a Qobuz search for the artist and title. With one, TuxTunes
+        matches each release to its Qobuz album, so the card opens the album page and shows Qobuz's
+        cover. Qobuz does not hand out app IDs to the public, so use one you are entitled to.
+      </p>
+      <label class="flex items-center gap-3 text-body text-text-primary">
+        <span class="w-40 shrink-0">App ID</span>
+        <!-- Committed on change (blur / Enter), not per keystroke: a new
+             app ID re-checks the feed. -->
+        <input
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="Not set"
+          data-testid="qobuz-app-id"
+          class="mac-btn h-8 flex-1 bg-bg-elevated px-2 text-left font-mono"
+          [value]="draft().qobuz_app_id ?? ''"
+          (change)="setAppId($event)"
+        />
+      </label>
+    </div>
+  </fieldset>
+</section>

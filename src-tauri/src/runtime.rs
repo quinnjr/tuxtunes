@@ -3,6 +3,7 @@
 use crate::db::{Db, DbError};
 use crate::device::coordinator::DeviceCoordinator;
 use crate::fs::coordinator::FsCoordinator;
+use crate::library::releases::service::ReleaseFeedService;
 use crate::playback::{EngineError, PlaybackEngine};
 use crate::sync::coordinator::SyncCoordinator;
 use std::path::Path;
@@ -16,6 +17,8 @@ pub struct AppState {
     pub fs: Arc<FsCoordinator>,
     /// Outbound sync to MTP devices and mounted storage.
     pub devices: Arc<DeviceCoordinator>,
+    /// The "New From Your Artists" feed.
+    pub releases: Arc<ReleaseFeedService>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +62,7 @@ impl AppState {
             sync,
             fs,
             devices,
+            releases: Arc::new(ReleaseFeedService::new(db_path)),
         })
     }
 }

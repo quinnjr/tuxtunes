@@ -89,6 +89,19 @@ library that keeps working after iTunes is gone.
   Portable Devices on Windows) and lossless transcoding for codecs Android cannot decode
   are the next phases; see `docs/mtp-windows-verification.md` for the Windows status.
 
+**New From Your Artists**
+
+- A **New Releases** view in the sidebar: a cover grid of the albums, EPs and singles your
+  library's artists put out in the last 90 days (30 days to a year, in Settings → New
+  Releases). Compilations and DJ mixes are left out; albums you already own are badged.
+- Release data comes from [MusicBrainz](https://musicbrainz.org/) and covers from the
+  Cover Art Archive. Artists are looked up once and cached, reusing any MBIDs the genre
+  resolver already found, and one query covers 25 artists, so later checks are quick.
+- Each card opens the release on **Qobuz**. With a Qobuz app ID set, it opens the exact album
+  page and shows Qobuz's cover. Without one, it opens a Qobuz search.
+- Nothing is sent anywhere until you press **Check for New Releases** the first time;
+  after that the feed refreshes itself once a day.
+
 **Desktop integration**
 
 - **MPRIS2** — play/pause/next/previous and metadata from your DE, media keys, and

@@ -12,20 +12,20 @@ import { faXmark } from '@fortawesome/free-solid-svg-icons';
 import { LibraryService } from '../../services/library.service';
 import { SyncService } from '../../services/sync.service';
 import { TauriService } from '../../services/tauri.service';
-import { UiService } from '../../services/ui.service';
+import { SettingsTab, UiService } from '../../services/ui.service';
 import { toErrorMessage } from '../../utils/errors';
 import { ModalSheetDirective } from '../../directives/modal-sheet.directive';
 import { RovingFocusDirective } from '../../directives/roving-focus.directive';
 import { SettingsAudioComponent } from '../settings-audio/settings-audio.component';
 import { SettingsConvertComponent } from '../settings-convert/settings-convert.component';
-
-type SettingsTab = 'playback' | 'convert' | 'sync' | 'maintenance' | 'about';
+import { SettingsReleasesComponent } from '../settings-releases/settings-releases.component';
 
 @Component({
   selector: 'app-settings-route',
   imports: [
     SettingsAudioComponent,
     SettingsConvertComponent,
+    SettingsReleasesComponent,
     ModalSheetDirective,
     FaIconComponent,
     RovingFocusDirective,
@@ -44,6 +44,7 @@ export class SettingsRouteComponent implements OnDestroy {
   protected readonly tabs: readonly { id: SettingsTab; label: string }[] = [
     { id: 'playback', label: 'Playback' },
     { id: 'convert', label: 'Conversion' },
+    { id: 'releases', label: 'New Releases' },
     { id: 'sync', label: 'Sync Sources' },
     { id: 'maintenance', label: 'Library Maintenance' },
     { id: 'about', label: 'About' },
@@ -69,6 +70,14 @@ export class SettingsRouteComponent implements OnDestroy {
     // Sync sources are only needed once the sheet is actually shown.
     effect(() => {
       if (this.ui.settingsOpen()) void this.ui.guard(this.sync.refreshSources());
+    });
+    // A caller that opened the sheet for one section (the New Releases
+    // view's "Settings…") lands on it.
+    effect(() => {
+      const requested = this.ui.settingsTabRequest();
+      if (requested === null || !this.ui.settingsOpen()) return;
+      this.tab.set(requested);
+      this.ui.settingsTabRequest.set(null);
     });
   }
 

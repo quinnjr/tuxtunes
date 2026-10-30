@@ -97,11 +97,14 @@
       >
         <input
           type="search"
-          placeholder="Search title, artist, album…"
+          [placeholder]="
+            searchApplies() ? 'Search title, artist, album…' : 'Search is for the library'
+          "
           aria-label="Search title, artist, or album"
+          [disabled]="!searchApplies()"
           [value]="library.search()"
           (input)="onSearchInput($event)"
-          class="w-56 bg-transparent text-text-primary outline-none placeholder:text-text-muted"
+          class="w-56 bg-transparent text-text-primary outline-none placeholder:text-text-muted disabled:cursor-not-allowed"
         />
         @if (library.search().length > 0) {
           <button
@@ -143,6 +146,8 @@
         <app-playlist-album-picker class="block h-full" />
       } @else if (showQueue()) {
         <app-queue-view class="block h-full" />
+      } @else if (showReleases()) {
+        <app-new-releases-view class="block h-full" />
       } @else if (showTrackList()) {
         <app-track-list-view class="block h-full" />
       } @else {

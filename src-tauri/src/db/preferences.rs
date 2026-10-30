@@ -30,6 +30,7 @@ pub const KEY_AUDIO_DEVICE: &str = "audio_device";
 pub const KEY_AUDIO_EXCLUSIVE: &str = "audio_exclusive";
 pub const KEY_REPLAYGAIN_MODE: &str = "replaygain_mode";
 pub const KEY_CONVERT_PREFS: &str = "convert_prefs";
+pub const KEY_RELEASE_PREFS: &str = "release_prefs";
 
 const DEFAULT_LIBRARY_ROOT_SUFFIX: &str = "Music/TuxTunes";
 pub const DEFAULT_ORGANIZE_SCHEME: &str =

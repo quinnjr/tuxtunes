@@ -55,6 +55,23 @@ describe('MainContentComponent', () => {
     expect(el.querySelector('app-track-list-view')).toBeNull();
   });
 
+  it('the releases view closes the browser and disables the library search', () => {
+    const { fixture, cmp, ui } = setup();
+    ui.columnBrowserOpen.set(true);
+    cmp.setMode('releases');
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(ui.columnBrowserOpen()).toBe(false);
+    expect(el.querySelector('app-new-releases-view')).not.toBeNull();
+    expect(el.querySelector<HTMLInputElement>('input[type="search"]')!.disabled).toBe(true);
+    cmp.toggleBrowser();
+    expect(ui.columnBrowserOpen()).toBe(false);
+
+    cmp.setMode('tracks');
+    fixture.detectChanges();
+    expect(el.querySelector<HTMLInputElement>('input[type="search"]')!.disabled).toBe(false);
+  });
+
   it('toggleBrowser flips columnBrowserOpen', () => {
     const { cmp, ui } = setup();
     expect(ui.columnBrowserOpen()).toBe(false);

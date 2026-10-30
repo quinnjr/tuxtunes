@@ -1,0 +1,149 @@
+@let feed = releases.feed();
+@let running = releases.running();
+<section class="mac-select-none flex h-full flex-col" data-testid="new-releases-view">
+  <header class="mac-toolbar flex items-center gap-3 px-4 py-2">
+    <div class="flex min-w-0 flex-col">
+      <h2 class="text-body font-medium text-text-primary">New From Your Artists</h2>
+      <span class="truncate text-caption text-text-muted" data-testid="releases-status">
+        @if (running) {
+          @if (releases.progress(); as p) {
+            Checking {{ p.done }} of {{ p.total }} artists…
+          } @else {
+            Checking your artists…
+          }
+        } @else if (feed.checkedAt; as at) {
+          Last {{ feed.windowDays }} days · checked {{ checkedAgo(at) }}
+        } @else {
+          Releases from the last {{ feed.windowDays }} days
+        }
+      </span>
+    </div>
+    <div class="ml-auto flex items-center gap-2">
+      <button
+        type="button"
+        class="text-body text-text-muted hover:text-accent-text"
+        (click)="openSettings()"
+      >
+        Settings…
+      </button>
+      <button
+        type="button"
+        data-testid="check-releases"
+        [disabled]="running"
+        (click)="checkNow()"
+        class="rounded-md bg-accent-strong px-3 py-1 text-body font-medium text-white hover:bg-accent-strong-hover disabled:opacity-50"
+      >
+        {{ running ? 'Checking…' : 'Check Now' }}
+      </button>
+    </div>
+  </header>
+
+  @if (feed.lastError ?? releases.runError(); as e) {
+    <p
+      role="alert"
+      class="hairline-b bg-bg-surface px-4 py-2 text-footnote text-accent-text"
+      data-testid="releases-error"
+    >
+      The last check ran into a problem: {{ e }}
+    </p>
+  }
+  @if (feed.qobuzError; as e) {
+    <p class="hairline-b bg-bg-surface px-4 py-2 text-footnote text-text-secondary">
+      Qobuz matching is off for now ({{ e }}). Cards link to a Qobuz search instead.
+    </p>
+  }
+
+  @if (!feed.started && !running) {
+    <div
+      class="flex flex-1 flex-col items-center justify-center gap-2 px-8 text-center"
+      data-testid="releases-intro"
+    >
+      <p class="text-body text-text-secondary">See what your artists have released lately.</p>
+      <p class="max-w-md text-caption text-text-muted">
+        TuxTunes looks up the artists in your library on MusicBrainz and lists their albums, EPs and
+        singles from the last {{ feed.windowDays }} days, each linked to Qobuz. Your artist names
+        are sent to MusicBrainz; after the first check the feed refreshes itself once a day.
+      </p>
+      <button
+        type="button"
+        (click)="checkNow()"
+        class="mt-2 rounded-md bg-accent-strong px-3 py-1.5 text-body font-medium text-white hover:bg-accent-strong-hover"
+      >
+        Check for New Releases
+      </button>
+    </div>
+  } @else if (feed.releases.length === 0) {
+    <div class="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center">
+      @if (running) {
+        <p class="text-body text-text-secondary">Looking for new releases…</p>
+        <p class="text-caption text-text-muted">
+          The first check looks up every artist once and can take a while for a large library.
+          Releases appear here as they are found.
+        </p>
+      } @else if (feed.checkedAt === null) {
+        <p class="text-body text-text-secondary">No check has finished yet.</p>
+        <p class="text-caption text-text-muted">Press Check Now to try again.</p>
+      } @else {
+        <p class="text-body text-text-secondary">
+          Nothing new from your artists in the last {{ feed.windowDays }} days.
+        </p>
+      }
+    </div>
+  } @else {
+    <div class="flex-1 overflow-y-auto p-6">
+      <ul
+        class="grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-6"
+        data-testid="releases-grid"
+      >
+        @for (r of feed.releases; track trackById($index, r)) {
+          <li (contextmenu)="onContextMenu(r, $event)">
+            <button
+              type="button"
+              class="group flex w-full flex-col gap-2 text-left"
+              [title]="(r.qobuzExact ? 'Open on Qobuz: ' : 'Search Qobuz for ') + r.title"
+              (click)="open(r)"
+            >
+              <div class="mac-card relative aspect-square bg-bg-tertiary">
+                @if (!brokenCovers().has(r.coverUrl)) {
+                  <img
+                    [src]="r.coverUrl"
+                    alt=""
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                    class="h-full w-full object-cover"
+                    (error)="onCoverError(r)"
+                  />
+                } @else {
+                  <div class="flex h-full w-full items-center justify-center text-text-muted">
+                    <span class="text-caption2 uppercase tracking-wider">No art</span>
+                  </div>
+                }
+                @if (r.inLibrary) {
+                  <span
+                    class="absolute left-2 top-2 rounded bg-bg-primary/85 px-1.5 py-0.5 text-caption2 font-medium text-text-secondary"
+                  >
+                    In Library
+                  </span>
+                }
+              </div>
+              <div class="flex flex-col">
+                <span
+                  class="truncate text-body font-medium text-text-primary group-hover:text-accent-text"
+                >
+                  {{ r.title }}
+                </span>
+                <span class="truncate text-caption text-text-secondary">{{ r.artist }}</span>
+                <span class="truncate text-caption text-text-muted">
+                  {{ formatDate(r.releaseDate) }}
+                  @if (kind(r); as k) {
+                    · {{ k }}
+                  }
+                </span>
+              </div>
+            </button>
+          </li>
+        }
+      </ul>
+    </div>
+  }
+</section>
