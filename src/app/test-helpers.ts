@@ -52,6 +52,21 @@ export const defaultInvoke = async (cmd: string): Promise<unknown> => {
   if (cmd === 'get_convert_prefs' || cmd === 'set_convert_prefs') {
     return DEFAULT_CONVERT_PREFS;
   }
+  if (cmd === 'get_new_releases') {
+    return {
+      checked_at: null,
+      running: false,
+      started: false,
+      window_days: 90,
+      fetched_window_days: null,
+      releases: [],
+      last_error: null,
+      qobuz_error: null,
+    };
+  }
+  if (cmd === 'get_release_prefs' || cmd === 'set_release_prefs') {
+    return { window_days: 90, qobuz_app_id: null };
+  }
   if (cmd === 'get_audio_prefs') {
     return { device_id: null, exclusive: false, replaygain_mode: 'off' };
   }

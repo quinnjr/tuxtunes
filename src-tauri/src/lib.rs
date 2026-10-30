@@ -116,6 +116,11 @@ pub fn run() {
             commands::preferences::consolidate_library,
             commands::preferences::reclaimable_originals,
             commands::preferences::reclaim_originals,
+            commands::releases::get_new_releases,
+            commands::releases::check_new_releases,
+            commands::releases::get_release_prefs,
+            commands::releases::set_release_prefs,
+            commands::releases::open_release_link,
         ])
         .setup(move |app| {
             let dir = data_dir(app);
@@ -174,6 +179,24 @@ pub fn run() {
                                 return;
                             }
                         }
+                    }
+                });
+            }
+
+            // Keep the new-releases feed fresh once the user has opted
+            // in by checking once (see `ReleaseFeedService::is_stale`).
+            // Waits a minute first so startup is not competing with it.
+            {
+                let releases = Arc::clone(&state_ref.releases);
+                let engine = Arc::clone(&state_ref.db.engine);
+                let app_for_releases = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    loop {
+                        if releases.is_stale().await {
+                            releases.start(app_for_releases.clone(), Arc::clone(&engine), false);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
                     }
                 });
             }

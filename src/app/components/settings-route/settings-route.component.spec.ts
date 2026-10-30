@@ -52,7 +52,7 @@ describe('SettingsRouteComponent', () => {
       expect(tablist.getAttribute('aria-label')).toBe('Settings sections');
 
       const tabs = [...tablist.querySelectorAll<HTMLElement>('[role="tab"]')];
-      expect(tabs).toHaveLength(5);
+      expect(tabs).toHaveLength(6);
       const selected = tabs.filter((t) => t.getAttribute('aria-selected') === 'true');
       expect(selected).toHaveLength(1);
       expect(selected[0].textContent?.trim()).toBe('Playback');
@@ -62,6 +62,19 @@ describe('SettingsRouteComponent', () => {
       expect(panel.id).toBe('settings-panel-playback');
       expect(panel.getAttribute('aria-labelledby')).toBe('settings-tab-playback');
       expect(selected[0].getAttribute('aria-controls')).toBe('settings-panel-playback');
+    });
+
+    it('opens on the tab a caller requested, once', () => {
+      const { fixture, ui, cmp } = setup();
+      ui.settingsTabRequest.set('releases');
+      ui.settingsOpen.set(true);
+      fixture.detectChanges();
+      TestBed.tick();
+      expect(cmp.tab()).toBe('releases');
+      expect(ui.settingsTabRequest()).toBeNull();
+      const el = fixture.nativeElement as HTMLElement;
+      fixture.detectChanges();
+      expect(el.querySelector('app-settings-releases')).not.toBeNull();
     });
 
     it('moves between tabs with the arrow keys', () => {

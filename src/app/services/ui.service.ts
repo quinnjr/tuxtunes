@@ -2,7 +2,8 @@ import { Injectable, computed, signal } from '@angular/core';
 import { open as dialogOpen } from '@tauri-apps/plugin-dialog';
 import { toErrorMessage } from '../utils/errors';
 
-export type LibraryView = 'tracks' | 'albums' | 'artists' | 'genres' | 'queue' | 'device';
+export type LibraryView =
+  'tracks' | 'albums' | 'artists' | 'genres' | 'queue' | 'releases' | 'device';
 
 /**
  * How an open playlist is presented: `albums` is the per-album picker
@@ -58,6 +59,14 @@ export function defaultDescending(key: PlaylistAlbumSortKey): boolean {
   return key === 'year' || key === 'rating' || key === 'dateAdded';
 }
 
+/** The sections of the Settings sheet. */
+export type SettingsTab = 'playback' | 'convert' | 'releases' | 'sync' | 'maintenance' | 'about';
+
+/** Whether the column browser and search box apply to `view`. */
+export function filtersLibrary(view: LibraryView): boolean {
+  return view !== 'queue' && view !== 'releases';
+}
+
 @Injectable({ providedIn: 'root' })
 export class UiService {
   readonly importWizardOpen = signal(false);
@@ -69,17 +78,24 @@ export class UiService {
    */
   readonly settingsOpen = signal(false);
 
+  /**
+   * Settings tab to show the next time the sheet opens, set by callers
+   * that open it for a specific section. The sheet consumes it.
+   */
+  readonly settingsTabRequest = signal<SettingsTab | null>(null);
+
   /** Top-level view selection. Drives main-content's active component. */
   readonly libraryView = signal<LibraryView>('tracks');
 
   /**
    * Single owner for the "queue implies browser closed" invariant: the
-   * column browser filters the library list, not the queue, so leaving
-   * it open over the queue would imply a filtering that is not applied.
+   * column browser filters the library list, not the queue (or the new
+   * releases feed), so leaving it open over either would imply a
+   * filtering that is not applied.
    */
   setLibraryView(view: LibraryView): void {
     this.libraryView.set(view);
-    if (view === 'queue') this.columnBrowserOpen.set(false);
+    if (!filtersLibrary(view)) this.columnBrowserOpen.set(false);
   }
 
   /** Presentation of the active playlist; sticky across playlists. */

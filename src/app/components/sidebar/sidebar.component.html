@@ -93,6 +93,35 @@
         </span>
       }
     </button>
+    <button
+      type="button"
+      (click)="setView('releases')"
+      [class]="'mac-sidebar-item w-full ' + (isActive('releases') ? 'selected' : '')"
+      data-testid="sidebar-releases"
+    >
+      <svg
+        class="h-4 w-4 shrink-0"
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.5"
+      >
+        <path
+          d="M10 2.5l1.6 4.4 4.4 1.6-4.4 1.6L10 14.5l-1.6-4.4L4 8.5l4.4-1.6z"
+          stroke-linejoin="round"
+        />
+        <path
+          d="M15 13.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <span>New Releases</span>
+      @if (newReleaseCount() > 0) {
+        <span class="tnum ml-auto shrink-0 text-caption text-text-muted">
+          {{ newReleaseCount() }}
+        </span>
+      }
+    </button>
   </div>
 
   <div

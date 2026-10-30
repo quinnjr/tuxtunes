@@ -686,10 +686,8 @@ async fn track_label(state: &AppState, track_id: i64) -> String {
     }
 }
 
-/// Reveal the track's containing folder in the user's file manager
-/// via `xdg-open`. The crate is Linux-only (see CLAUDE.md / design doc
-/// non-goals), so xdg-open is the standard cross-DE entry point —
-/// `tauri-plugin-shell::Shell::open` is deprecated.
+/// Reveal the track's containing folder in the user's file manager;
+/// see [`super::xdg_open`].
 #[tauri::command]
 pub async fn show_in_files(state: tauri::State<'_, AppState>, track_id: i64) -> Result<(), String> {
     let row = tracks::get(&state.db.engine, track_id)
@@ -699,17 +697,7 @@ pub async fn show_in_files(state: tauri::State<'_, AppState>, track_id: i64) -> 
         .parent()
         .map(std::path::Path::to_path_buf)
         .ok_or_else(|| "no parent directory".to_string())?;
-    // Tests exercise this command against temp paths; popping a file
-    // manager window on the developer's desktop is never wanted there.
-    if std::env::var_os("TUXTUNES_NO_XDG_OPEN").is_some() {
-        log::info!("TUXTUNES_NO_XDG_OPEN set; not opening {}", parent.display());
-        return Ok(());
-    }
-    std::process::Command::new("xdg-open")
-        .arg(parent)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    super::xdg_open(parent.as_os_str())
 }
 
 #[tauri::command]

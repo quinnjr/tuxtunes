@@ -3,13 +3,12 @@
 //! own genre list. Behind [`GenreLookup`] so `resolve` is testable
 //! without a network.
 
+use crate::library::pacer::Pacer;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tokio::time::Instant;
 
 pub const API_ROOT: &str = "https://musicbrainz.org/ws/2";
 /// MusicBrainz asks for at most one request per second per client.
@@ -166,7 +165,7 @@ pub fn lucene_phrase(s: &str) -> String {
 pub struct MusicBrainz {
     http: reqwest::Client,
     genres: HashSet<String>,
-    last_request: Mutex<Option<Instant>>,
+    pacer: Pacer,
 }
 
 impl MusicBrainz {
@@ -178,7 +177,7 @@ impl MusicBrainz {
         Ok(Self {
             http,
             genres,
-            last_request: Mutex::new(None),
+            pacer: Pacer::new(MIN_SPACING),
         })
     }
 
@@ -208,24 +207,37 @@ impl MusicBrainz {
         Ok(set)
     }
 
-    async fn pace(&self) {
-        let mut last = self.last_request.lock().await;
-        if let Some(t) = *last {
-            let elapsed = t.elapsed();
-            if elapsed < MIN_SPACING {
-                tokio::time::sleep(MIN_SPACING - elapsed).await;
-            }
-        }
-        *last = Some(Instant::now());
-    }
-
     async fn search(&self, artist: &str) -> anyhow::Result<serde_json::Value> {
         let query = format!("artist:{}", lucene_phrase(artist));
-        let url = format!("{API_ROOT}/artist/");
+        self.get(
+            "artist/",
+            &[("query", query.as_str()), ("fmt", "json"), ("limit", "5")],
+            artist,
+        )
+        .await
+    }
+
+    /// The artist search hit for `artist`, genres or not. The release
+    /// feed only needs the MBID, so an artist with no genre tags still
+    /// counts as found here.
+    pub async fn find_artist(&self, artist: &str) -> anyhow::Result<Option<MbHit>> {
+        let body = self.search(artist).await?;
+        Ok(pick_hit(artist, &body, &self.genres))
+    }
+
+    /// GET `{API_ROOT}/{path}` with `query`, paced and retried through
+    /// MusicBrainz's load shedding. `what` names the request in logs.
+    pub async fn get(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        what: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        let url = format!("{API_ROOT}/{path}");
         // MusicBrainz sheds load with a cheap "busy" reply that, under
         // load, hits about half of all requests regardless of pacing.
         // Retry at the normal request pace for a while (a 503 costs
-        // half a second and `pace` already spaces the retry), and only
+        // half a second and the pacer already spaces the retry), and only
         // back off (5s, 10s, … 60s) once a run of them suggests a real
         // outage.
         const ATTEMPTS: u32 = 24;
@@ -237,54 +249,103 @@ impl MusicBrainz {
             }
         };
         for attempt in 1..=ATTEMPTS {
-            self.pace().await;
-            let resp = match self
-                .http
-                .get(&url)
-                .query(&[("query", query.as_str()), ("fmt", "json"), ("limit", "5")])
-                .send()
-                .await
-            {
+            self.pacer.wait().await;
+            let resp = match self.http.get(&url).query(query).send().await {
                 Ok(r) => r,
                 Err(e) if attempt < ATTEMPTS => {
                     // Timeouts and connection resets are as transient as
                     // a "busy" reply over a run this long.
-                    log::warn!("musicbrainz: request failed for {artist:?}: {e}");
+                    log::warn!("musicbrainz: request failed for {what:?}: {e}");
                     tokio::time::sleep(backoff(attempt).max(Duration::from_secs(2))).await;
                     continue;
                 }
                 Err(e) => return Err(e.into()),
             };
             let status = resp.status();
+            // A rejected request (a query too long, a bad parameter)
+            // fails the same way every time; retrying it would only
+            // spend the whole budget before failing anyway.
+            if is_rejection(status) {
+                let text = resp.text().await.unwrap_or_default();
+                let detail = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|b| b.get("error")?.as_str().map(str::to_string))
+                    .unwrap_or_else(|| text.chars().take(200).collect());
+                return Err(Rejected(format!(
+                    "musicbrainz rejected the request for {what:?} ({status}): {detail}"
+                ))
+                .into());
+            }
             let body: serde_json::Value = match resp.json().await {
                 Ok(v) => v,
                 Err(e) if attempt < ATTEMPTS => {
-                    log::warn!("musicbrainz: unreadable body for {artist:?}: {e}");
+                    log::warn!("musicbrainz: unreadable body for {what:?}: {e}");
                     tokio::time::sleep(backoff(attempt)).await;
                     continue;
                 }
                 Err(e) => return Err(e.into()),
             };
-            // MusicBrainz reports overload as `{"error": "... busy ..."}`,
-            // sometimes with a 200 and sometimes with a 503.
-            let busy = body.get("error").and_then(|e| e.as_str());
-            if status == reqwest::StatusCode::SERVICE_UNAVAILABLE || busy.is_some() {
+            let error = body.get("error").and_then(|e| e.as_str());
+            if is_busy(status, error) {
                 if attempt < ATTEMPTS {
                     tokio::time::sleep(backoff(attempt)).await;
                     continue;
                 }
                 anyhow::bail!(
                     "musicbrainz unavailable after {ATTEMPTS} attempts: {}",
-                    busy.unwrap_or(status.as_str())
+                    error.unwrap_or(status.as_str())
                 );
             }
+            if let Some(error) = error {
+                return Err(Rejected(format!(
+                    "musicbrainz returned an error for {what:?}: {error}"
+                ))
+                .into());
+            }
             if !status.is_success() {
-                anyhow::bail!("musicbrainz returned {status} for {artist:?}");
+                anyhow::bail!("musicbrainz returned {status} for {what:?}");
             }
             return Ok(body);
         }
         unreachable!("every attempt either returns or continues")
     }
+}
+
+/// MusicBrainz refused the request itself (a 4xx, or an error body
+/// that is not load shedding). Asking again will get the same answer, so
+/// callers can treat it as a settled miss instead of a transient
+/// failure. Recover it with `anyhow::Error::downcast_ref`.
+#[derive(Debug)]
+pub struct Rejected(pub String);
+
+impl std::fmt::Display for Rejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Rejected {}
+
+/// A 4xx other than 429: the request itself is wrong, so it is not
+/// retried.
+fn is_rejection(status: reqwest::StatusCode) -> bool {
+    status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
+/// Worth retrying: MusicBrainz sheds load as `{"error": "... busy ..."}`,
+/// sometimes with a 200 and sometimes with a 503 (or a 429 when rate
+/// limiting), and any other 5xx is a server fault that passes. An error
+/// body that reads like load shedding ("rate limit", "try again") is
+/// retried whatever its status; only any other error on a 2xx is a real
+/// refusal.
+fn is_busy(status: reqwest::StatusCode, error: Option<&str>) -> bool {
+    const SHEDDING: &[&str] = &["busy", "rate limit", "try again", "too many"];
+    status.is_server_error()
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || error.is_some_and(|e| {
+            let e = e.to_lowercase();
+            SHEDDING.iter().any(|w| e.contains(w))
+        })
 }
 
 pub fn parse_genre_list(text: &str) -> HashSet<String> {
@@ -296,8 +357,7 @@ pub fn parse_genre_list(text: &str) -> HashSet<String> {
 
 impl GenreLookup for MusicBrainz {
     async fn lookup(&self, artist: &str) -> anyhow::Result<Option<MbHit>> {
-        let body = self.search(artist).await?;
-        Ok(pick_hit(artist, &body, &self.genres))
+        self.find_artist(artist).await
     }
 }
 
@@ -305,6 +365,33 @@ impl GenreLookup for MusicBrainz {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_overload_replies_are_retried() {
+        use reqwest::StatusCode as S;
+        assert!(is_busy(S::SERVICE_UNAVAILABLE, None));
+        assert!(is_busy(S::TOO_MANY_REQUESTS, None));
+        assert!(is_busy(
+            S::OK,
+            Some("The MusicBrainz web server is currently busy.")
+        ));
+        assert!(!is_busy(S::OK, Some("Invalid query")));
+        assert!(is_busy(
+            S::OK,
+            Some("Your requests are exceeding the allowable rate limit.")
+        ));
+        assert!(is_busy(S::OK, Some("Please try again later")));
+        assert!(!is_busy(S::BAD_REQUEST, Some("Invalid query")));
+        assert!(is_busy(
+            S::INTERNAL_SERVER_ERROR,
+            Some("Internal Server Error")
+        ));
+        assert!(is_busy(S::BAD_GATEWAY, None));
+        assert!(is_rejection(S::BAD_REQUEST));
+        assert!(is_rejection(S::NOT_FOUND));
+        assert!(!is_rejection(S::TOO_MANY_REQUESTS));
+        assert!(!is_rejection(S::SERVICE_UNAVAILABLE));
+    }
 
     fn genres() -> HashSet<String> {
         ["metal", "thrash metal", "heavy metal", "rock"]

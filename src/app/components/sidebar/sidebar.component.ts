@@ -11,8 +11,9 @@ import { ContextMenuItem, ContextMenuService } from '../../services/context-menu
 import { DeviceService } from '../../services/device.service';
 import { LibraryService, Playlist } from '../../services/library.service';
 import { PlaybackService } from '../../services/playback.service';
+import { ReleasesService } from '../../services/releases.service';
 import { SyncService } from '../../services/sync.service';
-import { LibraryView, UiService } from '../../services/ui.service';
+import { LibraryView, UiService, filtersLibrary } from '../../services/ui.service';
 import { Device } from '../../models/device';
 
 /** A playlist plus its (already-sorted) children, for the sidebar tree. */
@@ -103,6 +104,14 @@ export class SidebarComponent implements OnInit {
   private readonly sync = inject(SyncService);
   private readonly ctx = inject(ContextMenuService);
   protected readonly deviceSvc = inject(DeviceService);
+  private readonly releases = inject(ReleasesService);
+
+  /** Feed releases the library does not hold yet. */
+  protected readonly newReleaseCount = computed(this.#computeNewReleaseCount.bind(this));
+
+  #computeNewReleaseCount(): number {
+    return this.releases.releases().filter((r) => !r.inLibrary).length;
+  }
 
   protected readonly devices = this.deviceSvc.devices;
 
@@ -122,6 +131,8 @@ export class SidebarComponent implements OnInit {
   ngOnInit(): void {
     void this.ui.guard(this.library.refreshPlaylists());
     void this.ui.guard(this.deviceSvc.refresh());
+    // A file read, not a network call; fills the row's count.
+    void this.releases.refresh().catch(() => null);
   }
 
   // ---------------------------------------------------------------- //
@@ -259,9 +270,10 @@ export class SidebarComponent implements OnInit {
     }
     // The track list only fetches on mount; when it stays mounted we
     // must reload it ourselves to drop the playlist's rows. Refresh
-    // eagerly on playlist → queue too, so a later queue → tracks hop
-    // (where hadPlaylist is already false) lands on clean rows.
-    if (hadPlaylist && (this.ui.libraryView() === 'tracks' || view === 'queue')) {
+    // eagerly on playlist → queue (or the releases feed) too, so a
+    // later hop back to a library view (where hadPlaylist is already
+    // false) lands on clean rows.
+    if (hadPlaylist && (this.ui.libraryView() === 'tracks' || !filtersLibrary(view))) {
       void this.ui.guard(this.library.refreshTracks());
     }
   }

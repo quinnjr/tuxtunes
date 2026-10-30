@@ -171,9 +171,7 @@ impl GenreMap {
             source,
         };
         let text = serde_json::to_string_pretty(self).expect("GenreMap serializes");
-        let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, text).map_err(write_err)?;
-        std::fs::rename(&tmp, path).map_err(write_err)
+        crate::library::atomic::write_atomic(path, text.as_bytes()).map_err(write_err)
     }
 }
 

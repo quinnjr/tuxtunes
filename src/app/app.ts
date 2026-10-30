@@ -221,6 +221,7 @@ const LIBRARY_VIEWS: ReadonlySet<LibraryView> = new Set<LibraryView>([
   'artists',
   'genres',
   'queue',
+  'releases',
   'device',
 ]);
 

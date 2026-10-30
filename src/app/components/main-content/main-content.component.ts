@@ -7,10 +7,12 @@ import {
   PlaylistView,
   UiService,
   defaultDescending,
+  filtersLibrary,
 } from '../../services/ui.service';
 import { AlbumGridViewComponent } from '../album-grid-view/album-grid-view.component';
 import { ArtistSplitViewComponent } from '../artist-split-view/artist-split-view.component';
 import { ColumnBrowserComponent } from '../column-browser/column-browser.component';
+import { NewReleasesViewComponent } from '../new-releases-view/new-releases-view.component';
 import { PlaylistAlbumPickerComponent } from '../playlist-album-picker/playlist-album-picker.component';
 import { QueueViewComponent } from '../queue-view/queue-view.component';
 import { TrackListViewComponent } from '../track-list-view/track-list-view.component';
@@ -22,6 +24,7 @@ import { RovingFocusDirective } from '../../directives/roving-focus.directive';
     AlbumGridViewComponent,
     ArtistSplitViewComponent,
     ColumnBrowserComponent,
+    NewReleasesViewComponent,
     PlaylistAlbumPickerComponent,
     QueueViewComponent,
     TrackListViewComponent,
@@ -55,6 +58,20 @@ export class MainContentComponent implements OnDestroy {
   /** The live playback queue, browsed from the sidebar's Queue row. */
   protected readonly showQueue = computed(this.#computeShowQueue.bind(this));
 
+  /**
+   * Whether the search box filters what is shown. It searches the
+   * library, so in the queue and the releases feed it would only refilter
+   * a hidden list.
+   */
+  protected readonly searchApplies = computed(this.#computeSearchApplies.bind(this));
+
+  #computeSearchApplies(): boolean {
+    return this.library.hasActivePlaylist() || filtersLibrary(this.viewMode());
+  }
+
+  /** The "New From Your Artists" feed, from the sidebar's New Releases row. */
+  protected readonly showReleases = computed(this.#computeShowReleases.bind(this));
+
   #computeShowPicker(): boolean {
     return this.library.hasActivePlaylist() && this.ui.playlistView() === 'albums';
   }
@@ -66,6 +83,10 @@ export class MainContentComponent implements OnDestroy {
 
   #computeShowQueue(): boolean {
     return !this.library.hasActivePlaylist() && this.viewMode() === 'queue';
+  }
+
+  #computeShowReleases(): boolean {
+    return !this.library.hasActivePlaylist() && this.viewMode() === 'releases';
   }
 
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -113,8 +134,8 @@ export class MainContentComponent implements OnDestroy {
   }
 
   protected toggleBrowser(): void {
-    // The browser filters the library list, not the queue.
-    if (this.viewMode() === 'queue') return;
+    // The browser filters the library list, not the queue or the feed.
+    if (!filtersLibrary(this.viewMode())) return;
     this.ui.columnBrowserOpen.update((v) => !v);
   }
 
